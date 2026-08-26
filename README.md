@@ -1,6 +1,6 @@
 # AI Gateway
 
-Reusable Docker Compose stack for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [Sub2API](https://github.com/Wei-Shaw/sub2api), [Apache APISIX](https://apisix.apache.org/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
+Reusable Docker Compose stack for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [Sub2API](https://github.com/Wei-Shaw/sub2api), ZCode Proxy, [Apache APISIX](https://apisix.apache.org/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
 
 It separates provider credentials, client API-key authority, public routing, and Internet ingress:
 
@@ -13,6 +13,7 @@ flowchart LR
   Sub2API --> CPA[CLIProxyAPI]
   Sub2API --> PostgreSQL
   Sub2API --> Redis
+  CPA --> ZCode[ZCode Proxy]
   CPA --> Providers[AI providers]
 ```
 
@@ -28,24 +29,25 @@ flowchart LR
 
 ## Quick start
 
-Requirements: Linux, Docker Engine with Compose v2, OpenSSL, and a remotely managed Cloudflare Tunnel.
+Requirements: Linux, Docker Engine with Compose v2.17+, OpenSSL, and a remotely managed Cloudflare Tunnel.
 
 ```bash
-git clone https://github.com/xz-dev/AI-gateway.git
-cd AI-gateway
+git clone https://github.com/xz-dev/AI-gateway.git /root/AI-gateway
+cd /root/AI-gateway
 ./scripts/init.sh
 ```
 
-`init.sh` generates private values without printing them. It refuses to overwrite an existing `.env` or `cpa/config.yaml`.
+`init.sh` generates private values without printing them. It refuses to overwrite an existing `.env` or `data/cpa/conf/config.yaml`.
 
 1. Replace `ADMIN_EMAIL=admin@example.invalid` in `.env`.
-2. In Cloudflare Dashboard, create a remotely managed Tunnel and replace `CLOUDFLARED_TUNNEL_TOKEN` in `.env` using an editor that does not expose it in shell history. Keep `.env` mode `0600`.
-3. Validate and start:
+2. Put ZCode's `config.yaml` and OAuth credential files under ignored `data/zcode/`.
+3. In Cloudflare Dashboard, create a remotely managed Tunnel and replace `CLOUDFLARED_TUNNEL_TOKEN` in `.env` using an editor that does not expose it in shell history. Keep `.env` mode `0600`.
+4. Validate and start:
 
    ```bash
    ./scripts/validate.sh
    docker compose pull
-   docker compose up -d
+   docker compose up -d --wait
    docker compose ps
    ```
 
@@ -94,18 +96,27 @@ When upgrading Sub2API, re-audit that provider/upstream authentication failures 
 
 ## Operations
 
+Sub2API and CLIProxyAPI are one operational unit. Sub2API waits for CPA health, and Compose restarts Sub2API after an explicit Compose-managed CPA restart. Never use `docker restart cli-proxy-api` or recreate only CPA: runtime-level restarts do not cascade and isolated CPA replacement can leave Sub2API returning `503` for a long time.
+
 ```bash
 # Logs
-docker compose logs -f sub2api apisix cloudflared
+docker compose logs -f cli-proxy-api sub2api apisix cloudflared
+
+# Restart CPA and its coupled Sub2API dependency
+docker compose restart cli-proxy-api
+
+# Recreate the coupled pair together
+docker compose up -d --wait --force-recreate cli-proxy-api sub2api
 
 # Recreate only public boundary after APISIX config changes
-docker compose up -d --no-deps --force-recreate apisix
+docker compose up -d --wait --no-deps --force-recreate apisix
 
-# Stop without deleting data
+# Stop and restart the complete stack without deleting bind-mounted data
 docker compose down
+docker compose up -d --wait
 ```
 
-Persistent state lives under `data/` and is ignored by Git. Back it up before upgrades. Never commit `.env`, `cpa/config.yaml`, CPA auth files, or Sub2API database data.
+Persistent state lives under ignored `data/`, including CPA config/auth/logs/plugins/runtime SQLite, ZCode credentials, and Sub2API PostgreSQL/Redis/application data. Back it up before upgrades. Never commit `.env` or `data/`.
 
 ## Validation
 
@@ -114,7 +125,7 @@ Persistent state lives under `data/` and is ignored by Git. Back it up before up
 ./scripts/validate.sh .env.example # tracked template only
 ```
 
-Validation renders Compose, checks that private paths are untracked, runs APISIX's own config test with the selected image, and runs ShellCheck when available.
+Validation renders Compose, checks required private runtime files and tracking boundaries, runs APISIX's own config test with the selected image tag, and runs ShellCheck when available.
 
 ## Layout
 
@@ -122,9 +133,14 @@ Validation renders Compose, checks that private paths are untracked, runs APISIX
 .
 ├── apisix/
 │   ├── apisix.yaml       # standalone routes and public response policy
-│   └── config.yaml       # APISIX data-plane configuration
+│   ├── config.yaml       # APISIX data-plane configuration
+│   └── lua/              # production custom Lua modules
 ├── cpa/
 │   └── config.example.yaml
+├── data/                    # ignored persistent runtime state
+│   ├── cpa/
+│   ├── sub2api/
+│   └── zcode/
 ├── scripts/
 │   ├── init.sh
 │   └── validate.sh

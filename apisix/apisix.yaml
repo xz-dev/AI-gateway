@@ -1,12 +1,16 @@
 global_rules:
-  - id: public-boundary
+  - id: trusted-client-ip
     plugins:
+      real-ip:
+        source: http_cf_connecting_ip
+        trusted_addresses:
+          - 172.21.0.2/32
       proxy-rewrite:
         headers:
           set:
-            CF-Connecting-IP: $http_cf_connecting_ip
-            X-Forwarded-For: $http_cf_connecting_ip
-            X-Real-IP: $http_cf_connecting_ip
+            CF-Connecting-IP: $remote_addr
+            X-Forwarded-For: $remote_addr
+            X-Real-IP: $remote_addr
           remove:
             - CF-Connecting-IPv6
             - Forwarded
@@ -37,14 +41,14 @@ upstreams:
   - id: sub2api
     type: roundrobin
     nodes:
-      "sub2api:8080": 1
+      "sub2api-apisix:8080": 1
     timeout:
       connect: 10
       send: 600
       read: 600
 
 plugin_configs:
-  - id: strip-private-request-id
+  - id: apisix-native-upstream-404
     plugins:
       serverless-post-function:
         phase: header_filter
@@ -62,7 +66,7 @@ routes:
       - GET
     priority: 100
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
 
   - id: ai-api-v1-get
     uris:
@@ -83,7 +87,7 @@ routes:
       - [uri, "~~", '^/v1/(?:sub2api/billing|usage|live/[^/]+|responses|images/tasks/[^/]+|images/batches(?:/[^/]+(?:/items(?:/[^/]+/content)?|/download)?)?|videos/(?:[^/]+(?:/content)?|(?:generations|edits|extensions)/[^/]+(?:/content)?)|custom-voices(?:/[^/]+(?:/audio)?)?|realtime)$']
     enable_websocket: true
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -116,7 +120,7 @@ routes:
     vars:
       - [uri, "~~", '^/v1/(?:messages(?:/count_tokens)?|live|responses(?:/.*)?|alpha/search|chat/completions|embeddings|images/(?:generations(?:/async)?|edits(?:/async)?|batches(?:/[^/]+/cancel)?)|videos(?:/(?:generations|edits|extensions))?|tts|stt|custom-voices|web_search|x_search)$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -128,7 +132,7 @@ routes:
     vars:
       - [uri, "~~", '^/v1/custom-voices/[^/]+$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -142,7 +146,7 @@ routes:
     vars:
       - [uri, "~~", '^/v1/(?:images/batches/[^/]+(?:/outputs)?|custom-voices/[^/]+)$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -156,7 +160,7 @@ routes:
     vars:
       - [uri, "~~", '^/v1beta/models(?:/[^/]+)?$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -168,7 +172,7 @@ routes:
     vars:
       - [uri, "~~", '^/v1beta/models/.+$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -182,7 +186,7 @@ routes:
       - [uri, "~~", '^/backend-api/codex/[^/]+$']
     enable_websocket: true
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -195,7 +199,7 @@ routes:
     vars:
       - [uri, "~~", '^/backend-api/codex/(?:realtime/calls|responses(?:/.*)?|alpha/search)$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -212,7 +216,7 @@ routes:
     vars:
       - [uri, "~~", '^/antigravity/(?:models|v1/(?:models|usage)|v1beta/models(?:/[^/]+)?)$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -227,7 +231,7 @@ routes:
     vars:
       - [uri, "~~", '^/antigravity/(?:v1/messages(?:/count_tokens)?|v1beta/models/.+)$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -243,7 +247,7 @@ routes:
       - [uri, "~~", '^(?:/responses|/images/tasks/[^/]+|/videos/(?:[^/]+(?:/content)?|(?:generations|edits|extensions)/[^/]+(?:/content)?))$']
     enable_websocket: true
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
@@ -263,7 +267,7 @@ routes:
     vars:
       - [uri, "~~", '^(?:/responses(?:/.*)?|/alpha/search|/images/(?:generations(?:/async)?|edits(?:/async)?)|/videos/(?:generations|edits|extensions))$']
     upstream_id: sub2api
-    plugin_config_id: strip-private-request-id
+    plugin_config_id: apisix-native-upstream-404
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true

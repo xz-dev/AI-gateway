@@ -17,6 +17,9 @@ value_from_env() {
 if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
   ! grep -Eq '^[A-Z0-9_]+=replace-with-' "$env_file" || { echo '.env still contains placeholders' >&2; exit 1; }
   [ "$(value_from_env ADMIN_EMAIL)" != admin@example.invalid ] || { echo 'set ADMIN_EMAIL in .env' >&2; exit 1; }
+  for path in data/cpa/conf/config.yaml data/cpa/mgmt.key data/zcode/config.yaml; do
+    [ -f "$path" ] || { echo "missing runtime file: $path" >&2; exit 1; }
+  done
 fi
 
 for path in .env cpa/config.yaml secrets/cloudflare-tunnel-token data; do
@@ -28,11 +31,12 @@ done
 
 docker compose --env-file "$env_file" config --quiet
 apisix_image=$(value_from_env APISIX_IMAGE)
-[ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix@sha256:51bb7b7fcd4162bec53f276c5a9b7b93d5de55723586842becb3e5f165fc0281
+[ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.18.0-debian
 docker run --rm \
   -e APISIX_STAND_ALONE=true \
   -v "$root/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro" \
   -v "$root/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro" \
+  -v "$root/apisix/lua:/opt/apisix/custom:ro" \
   "$apisix_image" apisix test >/dev/null
 
 if command -v shellcheck >/dev/null; then shellcheck scripts/*.sh; fi

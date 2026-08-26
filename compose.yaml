@@ -1,9 +1,42 @@
+name: ai-gateway
+
 services:
-  cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:latest}
+  zcode-proxy:
+    image: ${ZCODE_PROXY_IMAGE:-ghcr.io/xz-dev/zcode-proxy:candidate-1d26630483fe}
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    environment:
+      ZCODE_PROXY_CREDENTIAL_SECRET: ${ZCODE_PROXY_CREDENTIAL_SECRET:?Set ZCODE_PROXY_CREDENTIAL_SECRET in .env}
+      ZCODE_PROXY_API_KEY: ${ZCODE_PROXY_API_KEY:?Set ZCODE_PROXY_API_KEY in .env}
+      ZCODE_PROXY_CONFIG: /home/bun/.zcode-proxy/config.yaml
+    volumes:
+      - ./data/zcode:/home/bun/.zcode-proxy:ro,Z
+    networks:
+      - providers
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - >-
+          fetch("http://127.0.0.1:8080/health",{headers:{"x-api-key":process.env.ZCODE_PROXY_API_KEY}})
+          .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status)})
+          .catch(e=>{console.error(e.message);process.exit(1)})
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  cli-proxy-api:
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api:candidate-model-channels-07cb171df083}
+    command: ["./CLIProxyAPI", "-config", "/CLIProxyAPI/conf/config.yaml"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      zcode-proxy:
+        condition: service_healthy
     environment:
       DEPLOY: docker-compose
     ports:
@@ -14,19 +47,38 @@ services:
       - "${CPA_BIND_ADDRESS:-127.0.0.1}:51121:51121"
       - "${CPA_BIND_ADDRESS:-127.0.0.1}:11451:11451"
     volumes:
-      - ${CPA_CONFIG_FILE:-./cpa/config.yaml}:/CLIProxyAPI/config.yaml:ro,Z
+      - ./data/cpa/conf:/CLIProxyAPI/conf:Z
       - ./data/cpa/auths:/root/.cli-proxy-api:Z
       - ./data/cpa/logs:/CLIProxyAPI/logs:Z
+      - ./data/cpa/plugins:/CLIProxyAPI/plugins:Z
+      - ./data/cpa/runtime:/CLIProxyAPI/data:Z
+      - ./data/cpa/mgmt.key:/CLIProxyAPI/mgmt.key:ro,Z
     networks:
       - providers
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8317;
+          printf 'HEAD /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3;
+          IFS= read -r line <&3;
+          [[ "$$line" == *" 200 "* ]]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:18-alpine}
+    command: ["postgres", "-c", "max_connections=50", "-c", "shared_buffers=64MB"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sub2api}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-sub2api}
+      PGDATA: /var/lib/postgresql/data
       TZ: ${TZ:-UTC}
     volumes:
       - ./data/sub2api/postgres:/var/lib/postgresql:Z
@@ -70,7 +122,8 @@ services:
       - no-new-privileges:true
     depends_on:
       cli-proxy-api:
-        condition: service_started
+        condition: service_healthy
+        restart: true
       postgres:
         condition: service_healthy
       redis:
@@ -85,7 +138,7 @@ services:
       SERVER_PORT: 8080
       SERVER_MODE: release
       RUN_MODE: ${SUB2API_RUN_MODE:-standard}
-      SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.16.0.0/12}
+      SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.22.0.3/32}
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
       DATABASE_USER: ${POSTGRES_USER:-sub2api}
@@ -105,16 +158,22 @@ services:
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Set TOTP_ENCRYPTION_KEY in .env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
-      SECURITY_URL_ALLOWLIST_ENABLED: "true"
+      SECURITY_URL_ALLOWLIST_ENABLED: ${SUB2API_URL_ALLOWLIST_ENABLED:-true}
       SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP: "true"
       SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS: "true"
       SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS: ${SUB2API_UPSTREAM_HOSTS:-cli-proxy-api}
       GATEWAY_MODELS_LIST_READ_MAX_BYTES: ${GATEWAY_MODELS_LIST_READ_MAX_BYTES:-16777216}
+      LOG_ROTATION_MAX_SIZE_MB: ${LOG_ROTATION_MAX_SIZE_MB:-20}
+      LOG_ROTATION_MAX_BACKUPS: ${LOG_ROTATION_MAX_BACKUPS:-5}
+      LOG_ROTATION_MAX_AGE_DAYS: ${LOG_ROTATION_MAX_AGE_DAYS:-7}
       TZ: ${TZ:-UTC}
     networks:
-      - providers
-      - data
-      - gateway
+      providers:
+      data:
+      gateway:
+        aliases:
+          - sub2api-apisix
+        ipv4_address: 172.22.0.2
     healthcheck:
       test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 30s
@@ -123,7 +182,7 @@ services:
       start_period: 30s
 
   apisix:
-    image: ${APISIX_IMAGE:-docker.io/apache/apisix@sha256:51bb7b7fcd4162bec53f276c5a9b7b93d5de55723586842becb3e5f165fc0281}
+    image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -137,24 +196,31 @@ services:
     volumes:
       - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro,Z
       - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro,Z
+      - ./apisix/lua:/opt/apisix/custom:ro,Z
     networks:
-      - gateway
-      - ingress
+      gateway:
+        ipv4_address: 172.22.0.3
+      ingress:
+        aliases:
+          - apisix-ingress
+        ipv4_address: 172.21.0.3
     healthcheck:
       test:
-        - CMD-SHELL
+        - CMD
+        - /bin/bash
+        - -ec
         - >-
           exec 3<>/dev/tcp/127.0.0.1/9080;
           printf 'GET /v1/models HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3;
           IFS= read -r line <&3;
           [[ "$$line" == *" 404 "* ]]
-      interval: 30s
-      timeout: 10s
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 20s
 
   cloudflared:
-    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.8.2}
     restart: unless-stopped
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
@@ -163,7 +229,8 @@ services:
       apisix:
         condition: service_healthy
     networks:
-      - ingress
+      ingress:
+        ipv4_address: 172.21.0.2
 
 networks:
   providers:
@@ -171,4 +238,10 @@ networks:
     internal: true
   gateway:
     internal: true
+    ipam:
+      config:
+        - subnet: 172.22.0.0/29
   ingress:
+    ipam:
+      config:
+        - subnet: 172.21.0.0/29

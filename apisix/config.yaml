@@ -4,11 +4,16 @@ apisix:
   enable_admin: false
   enable_control: false
   enable_ipv6: false
+  extra_lua_path: "/opt/apisix/custom/?.lua"
   dns_resolver:
     - 127.0.0.11
 
 nginx_config:
+  worker_processes: 1
   error_log_level: warn
+  http:
+    custom_lua_shared_dict:
+      model-list-intersection: 1m
 
 deployment:
   role: data_plane
