@@ -1,0 +1,6 @@
+.env
+cpa/config.yaml
+data/
+*.local
+.serena/
+.DS_Store

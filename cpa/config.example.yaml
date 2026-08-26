@@ -1,0 +1,27 @@
+host: ""
+port: 8317
+
+tls:
+  enable: false
+  cert: ""
+  key: ""
+
+remote-management:
+  # Docker bridge traffic is non-local to the container; host publication stays loopback-only.
+  allow-remote: true
+  secret-key: "replace-with-generated-cpa-management-key"
+  disable-control-panel: false
+
+auth-dir: "/root/.cli-proxy-api"
+
+api-keys:
+  - "replace-with-generated-cpa-api-key"
+
+debug: false
+
+pprof:
+  enable: false
+  addr: "127.0.0.1:8316"
+
+logging-to-file: true
+logs-max-total-size-mb: 100

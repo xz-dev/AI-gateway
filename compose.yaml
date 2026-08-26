@@ -1,0 +1,174 @@
+services:
+  cli-proxy-api:
+    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:latest}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DEPLOY: docker-compose
+    ports:
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:${CPA_PORT:-8317}:8317"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:8085:8085"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:1455:1455"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:54545:54545"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:51121:51121"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:11451:11451"
+    volumes:
+      - ${CPA_CONFIG_FILE:-./cpa/config.yaml}:/CLIProxyAPI/config.yaml:ro,Z
+      - ./data/cpa/auths:/root/.cli-proxy-api:Z
+      - ./data/cpa/logs:/CLIProxyAPI/logs:Z
+    networks:
+      - providers
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:18-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sub2api}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-sub2api}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./data/sub2api/postgres:/var/lib/postgresql:Z
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sub2api} -d ${POSTGRES_DB:-sub2api}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:8-alpine}
+    restart: unless-stopped
+    command: >-
+      sh -c 'exec redis-server
+      --save 60 1
+      --appendonly yes
+      --appendfsync everysec
+      $${REDIS_PASSWORD:+--requirepass "$${REDIS_PASSWORD}"}'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./data/sub2api/redis:/data:Z
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  sub2api:
+    image: ${SUB2API_IMAGE:-ghcr.io/wei-shaw/sub2api:0.1.181}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      cli-proxy-api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${SUB2API_BIND_ADDRESS:-127.0.0.1}:${SUB2API_PORT:-8086}:8080"
+    volumes:
+      - ./data/sub2api/app:/app/data:Z
+    environment:
+      AUTO_SETUP: "true"
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      SERVER_MODE: release
+      RUN_MODE: ${SUB2API_RUN_MODE:-standard}
+      SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.16.0.0/12}
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${POSTGRES_USER:-sub2api}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      DATABASE_DBNAME: ${POSTGRES_DB:-sub2api}
+      DATABASE_SSLMODE: disable
+      DATABASE_MAX_OPEN_CONNS: ${DATABASE_MAX_OPEN_CONNS:-50}
+      DATABASE_MAX_IDLE_CONNS: ${DATABASE_MAX_IDLE_CONNS:-10}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_POOL_SIZE: ${REDIS_POOL_SIZE:-1024}
+      REDIS_MIN_IDLE_CONNS: ${REDIS_MIN_IDLE_CONNS:-10}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_EXPIRE_HOUR: ${JWT_EXPIRE_HOUR:-24}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Set TOTP_ENCRYPTION_KEY in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      SECURITY_URL_ALLOWLIST_ENABLED: "true"
+      SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP: "true"
+      SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS: "true"
+      SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS: ${SUB2API_UPSTREAM_HOSTS:-cli-proxy-api}
+      GATEWAY_MODELS_LIST_READ_MAX_BYTES: ${GATEWAY_MODELS_LIST_READ_MAX_BYTES:-16777216}
+      TZ: ${TZ:-UTC}
+    networks:
+      - providers
+      - data
+      - gateway
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  apisix:
+    image: ${APISIX_IMAGE:-docker.io/apache/apisix@sha256:51bb7b7fcd4162bec53f276c5a9b7b93d5de55723586842becb3e5f165fc0281}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      APISIX_STAND_ALONE: "true"
+    depends_on:
+      sub2api:
+        condition: service_healthy
+    ports:
+      - "${APISIX_BIND_ADDRESS:-127.0.0.1}:${APISIX_PORT:-9080}:9080"
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro,Z
+      - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro,Z
+    networks:
+      - gateway
+      - ingress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9080;
+          printf 'GET /v1/models HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3;
+          IFS= read -r line <&3;
+          [[ "$$line" == *" 404 "* ]]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN:?Set CLOUDFLARED_TUNNEL_TOKEN in .env}
+    depends_on:
+      apisix:
+        condition: service_healthy
+    networks:
+      - ingress
+
+networks:
+  providers:
+  data:
+    internal: true
+  gateway:
+    internal: true
+  ingress:

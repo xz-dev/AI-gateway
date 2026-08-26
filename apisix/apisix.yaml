@@ -1,0 +1,270 @@
+global_rules:
+  - id: public-boundary
+    plugins:
+      proxy-rewrite:
+        headers:
+          set:
+            CF-Connecting-IP: $http_cf_connecting_ip
+            X-Forwarded-For: $http_cf_connecting_ip
+            X-Real-IP: $http_cf_connecting_ip
+          remove:
+            - CF-Connecting-IPv6
+            - Forwarded
+            - True-Client-IP
+            - X-Client-IP
+            - X-Original-Forwarded-For
+      response-rewrite:
+        vars:
+          - ["or", [status, "==", 401], [status, "==", 404]]
+        status_code: 404
+        body: ""
+      serverless-post-function:
+        phase: header_filter
+        functions:
+          - |
+            return function(conf, ctx)
+              if ngx.status ~= 404 then
+                return
+              end
+              for name in pairs(ngx.resp.get_headers(0, true)) do
+                ngx.header[name] = nil
+              end
+              ngx.header["Date"] = nil
+              ngx.header["Server"] = nil
+            end
+
+upstreams:
+  - id: sub2api
+    type: roundrobin
+    nodes:
+      "sub2api:8080": 1
+    timeout:
+      connect: 10
+      send: 600
+      read: 600
+
+plugin_configs:
+  - id: strip-private-request-id
+    plugins:
+      serverless-post-function:
+        phase: header_filter
+        functions:
+          - |
+            return function(conf, ctx)
+              ngx.header["X-Client-Request-ID"] = nil
+            end
+routes:
+  - id: ai-api-models-get
+    uris:
+      - /v1/models
+      - /models
+    methods:
+      - GET
+    priority: 100
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+
+  - id: ai-api-v1-get
+    uris:
+      - /v1/sub2api/billing
+      - /v1/usage
+      - /v1/live/*
+      - /v1/responses
+      - /v1/images/tasks/*
+      - /v1/images/batches
+      - /v1/images/batches/*
+      - /v1/videos/*
+      - /v1/custom-voices
+      - /v1/custom-voices/*
+      - /v1/realtime
+    methods:
+      - GET
+    vars:
+      - [uri, "~~", '^/v1/(?:sub2api/billing|usage|live/[^/]+|responses|images/tasks/[^/]+|images/batches(?:/[^/]+(?:/items(?:/[^/]+/content)?|/download)?)?|videos/(?:[^/]+(?:/content)?|(?:generations|edits|extensions)/[^/]+(?:/content)?)|custom-voices(?:/[^/]+(?:/audio)?)?|realtime)$']
+    enable_websocket: true
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-v1-post
+    uris:
+      - /v1/messages
+      - /v1/messages/count_tokens
+      - /v1/live
+      - /v1/responses
+      - /v1/responses/*
+      - /v1/alpha/search
+      - /v1/chat/completions
+      - /v1/embeddings
+      - /v1/images/generations
+      - /v1/images/edits
+      - /v1/images/generations/async
+      - /v1/images/edits/async
+      - /v1/images/batches
+      - /v1/images/batches/*
+      - /v1/videos
+      - /v1/videos/*
+      - /v1/tts
+      - /v1/stt
+      - /v1/custom-voices
+      - /v1/web_search
+      - /v1/x_search
+    methods:
+      - POST
+    vars:
+      - [uri, "~~", '^/v1/(?:messages(?:/count_tokens)?|live|responses(?:/.*)?|alpha/search|chat/completions|embeddings|images/(?:generations(?:/async)?|edits(?:/async)?|batches(?:/[^/]+/cancel)?)|videos(?:/(?:generations|edits|extensions))?|tts|stt|custom-voices|web_search|x_search)$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-v1-patch
+    uri: /v1/custom-voices/*
+    methods:
+      - PATCH
+    vars:
+      - [uri, "~~", '^/v1/custom-voices/[^/]+$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-v1-delete
+    uris:
+      - /v1/images/batches/*
+      - /v1/custom-voices/*
+    methods:
+      - DELETE
+    vars:
+      - [uri, "~~", '^/v1/(?:images/batches/[^/]+(?:/outputs)?|custom-voices/[^/]+)$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-gemini-get
+    uris:
+      - /v1beta/models
+      - /v1beta/models/*
+    methods:
+      - GET
+    vars:
+      - [uri, "~~", '^/v1beta/models(?:/[^/]+)?$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-gemini-post
+    uri: /v1beta/models/*
+    methods:
+      - POST
+    vars:
+      - [uri, "~~", '^/v1beta/models/.+$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-codex-get
+    uris:
+      - /backend-api/codex/*
+    methods:
+      - GET
+    vars:
+      - [uri, "~~", '^/backend-api/codex/[^/]+$']
+    enable_websocket: true
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-codex-post
+    uris:
+      - /backend-api/codex/*
+    methods:
+      - POST
+    vars:
+      - [uri, "~~", '^/backend-api/codex/(?:realtime/calls|responses(?:/.*)?|alpha/search)$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-antigravity-get
+    uris:
+      - /antigravity/models
+      - /antigravity/v1/models
+      - /antigravity/v1/usage
+      - /antigravity/v1beta/models
+      - /antigravity/v1beta/models/*
+    methods:
+      - GET
+    vars:
+      - [uri, "~~", '^/antigravity/(?:models|v1/(?:models|usage)|v1beta/models(?:/[^/]+)?)$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-antigravity-post
+    uris:
+      - /antigravity/v1/messages
+      - /antigravity/v1/messages/count_tokens
+      - /antigravity/v1beta/models/*
+    methods:
+      - POST
+    vars:
+      - [uri, "~~", '^/antigravity/(?:v1/messages(?:/count_tokens)?|v1beta/models/.+)$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-root-compatible-get
+    uris:
+      - /responses
+      - /images/tasks/*
+      - /videos/*
+    methods:
+      - GET
+    vars:
+      - [uri, "~~", '^(?:/responses|/images/tasks/[^/]+|/videos/(?:[^/]+(?:/content)?|(?:generations|edits|extensions)/[^/]+(?:/content)?))$']
+    enable_websocket: true
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+
+  - id: ai-api-root-compatible-post
+    uris:
+      - /responses
+      - /responses/*
+      - /alpha/search
+      - /images/generations
+      - /images/edits
+      - /images/generations/async
+      - /images/edits/async
+      - /videos/*
+    methods:
+      - POST
+    vars:
+      - [uri, "~~", '^(?:/responses(?:/.*)?|/alpha/search|/images/(?:generations(?:/async)?|edits(?:/async)?)|/videos/(?:generations|edits|extensions))$']
+    upstream_id: sub2api
+    plugin_config_id: strip-private-request-id
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+#END
