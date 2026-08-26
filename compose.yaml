@@ -162,19 +162,17 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=64m
     command:
-      - redis-server
-      - --save
-      - "60"
-      - "1"
-      - --appendonly
-      - "yes"
-      - --appendfsync
-      - everysec
-      - --requirepass
-      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      - /bin/sh
+      - -ec
+      - |
+        set -- redis-server --save 60 1 --appendonly yes --appendfsync everysec
+        if [ -n "$${REDIS_PASSWORD:-}" ]; then
+          set -- "$$@" --requirepass "$$REDIS_PASSWORD"
+        fi
+        exec /usr/local/bin/docker-entrypoint.sh "$$@"
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
-      REDISCLI_AUTH: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
       TZ: ${TZ:-UTC}
     volumes:
       - ./data/sub2api/redis:/data:Z
