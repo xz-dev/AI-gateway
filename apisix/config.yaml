@@ -11,7 +11,15 @@ apisix:
 nginx_config:
   worker_processes: 1
   error_log_level: warn
+  http_server_configuration_snippet: |
+    error_page 413 = @payload_too_large;
+    location @payload_too_large {
+      default_type application/json;
+      more_clear_headers Server;
+      return 413 '{"error":{"message":"Payload too large","type":"invalid_request_error"}}';
+    }
   http:
+    client_max_body_size: 16m
     custom_lua_shared_dict:
       model-list-intersection: 1m
 

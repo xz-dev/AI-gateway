@@ -17,6 +17,22 @@ global_rules:
             - True-Client-IP
             - X-Client-IP
             - X-Original-Forwarded-For
+      limit-conn:
+        conn: 50
+        burst: 0
+        default_conn_delay: 0.1
+        key: remote_addr
+        key_type: var
+        rejected_code: 429
+        rejected_msg: Too many requests
+      limit-req:
+        rate: 10
+        burst: 40
+        key: remote_addr
+        key_type: var
+        nodelay: true
+        rejected_code: 429
+        rejected_msg: Too many requests
       response-rewrite:
         vars:
           - ["or", [status, "==", 401], [status, "==", 404]]
@@ -27,6 +43,10 @@ global_rules:
         functions:
           - |
             return function(conf, ctx)
+              if ngx.status == 429 then
+                ngx.header["Server"] = nil
+                return
+              end
               if ngx.status ~= 404 then
                 return
               end

@@ -26,6 +26,11 @@ if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
   }
 fi
 
+[ "$(value_from_env SUB2API_URL_ALLOWLIST_ENABLED)" = true ] || {
+  echo 'SUB2API_URL_ALLOWLIST_ENABLED must be true' >&2
+  exit 1
+}
+
 for path in .env cpa/config.yaml secrets/cloudflare-tunnel-token data; do
   if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
     echo "private runtime path is tracked: $path" >&2

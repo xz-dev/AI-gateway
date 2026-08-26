@@ -1,11 +1,27 @@
 name: ai-gateway
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   zcode-proxy:
     image: ${ZCODE_PROXY_IMAGE:-ghcr.io/xz-dev/zcode-proxy:candidate-1d26630483fe}
     restart: unless-stopped
+    pids_limit: 64
+    mem_limit: 48m
+    memswap_limit: 48m
+    cpus: 1.0
+    read_only: true
+    cap_drop:
+      - ALL
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
     environment:
       ZCODE_PROXY_CREDENTIAL_SECRET: ${ZCODE_PROXY_CREDENTIAL_SECRET:?Set ZCODE_PROXY_CREDENTIAL_SECRET in .env}
       ZCODE_PROXY_API_KEY: ${ZCODE_PROXY_API_KEY:?Set ZCODE_PROXY_API_KEY in .env}
@@ -14,6 +30,7 @@ services:
       - ./data/zcode:/home/bun/.zcode-proxy:ro,Z
     networks:
       - providers
+      - provider-egress
     healthcheck:
       test:
         - CMD
@@ -32,8 +49,20 @@ services:
     image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api:candidate-model-channels-07cb171df083}
     command: ["./CLIProxyAPI", "-config", "/CLIProxyAPI/conf/config.yaml"]
     restart: unless-stopped
+    pids_limit: 256
+    mem_limit: 480m
+    memswap_limit: 480m
+    cpus: 1.75
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
     depends_on:
       zcode-proxy:
         condition: service_healthy
@@ -55,6 +84,7 @@ services:
       - ./data/cpa/mgmt.key:/CLIProxyAPI/mgmt.key:ro,Z
     networks:
       - providers
+      - provider-egress
     healthcheck:
       test:
         - CMD
@@ -74,6 +104,25 @@ services:
     image: ${POSTGRES_IMAGE:-postgres:18-alpine}
     command: ["postgres", "-c", "max_connections=50", "-c", "shared_buffers=64MB"]
     restart: unless-stopped
+    pids_limit: 128
+    mem_limit: 400m
+    memswap_limit: 400m
+    cpus: 1.0
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /run/postgresql:rw,nosuid,nodev,size=16m,mode=3777
+      - /tmp:rw,nosuid,nodev,size=64m
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sub2api}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -94,15 +143,38 @@ services:
   redis:
     image: ${REDIS_IMAGE:-redis:8-alpine}
     restart: unless-stopped
-    command: >-
-      sh -c 'exec redis-server
-      --save 60 1
-      --appendonly yes
-      --appendfsync everysec
-      $${REDIS_PASSWORD:+--requirepass "$${REDIS_PASSWORD}"}'
+    pids_limit: 64
+    mem_limit: 80m
+    memswap_limit: 80m
+    cpus: 0.5
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --requirepass
+      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
       TZ: ${TZ:-UTC}
     volumes:
       - ./data/sub2api/redis:/data:Z
@@ -118,6 +190,18 @@ services:
   sub2api:
     image: ${SUB2API_IMAGE:-ghcr.io/wei-shaw/sub2api:0.1.181}
     restart: unless-stopped
+    pids_limit: 128
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1.5
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
     depends_on:
@@ -139,6 +223,7 @@ services:
       SERVER_MODE: release
       RUN_MODE: ${SUB2API_RUN_MODE:-standard}
       SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.22.0.3/32}
+      SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL: "false"
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
       DATABASE_USER: ${POSTGRES_USER:-sub2api}
@@ -169,6 +254,7 @@ services:
       TZ: ${TZ:-UTC}
     networks:
       providers:
+      sub2api-egress:
       data:
       gateway:
         aliases:
@@ -184,6 +270,13 @@ services:
   apisix:
     image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}
     restart: unless-stopped
+    pids_limit: 128
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 1.0
+    cap_drop:
+      - ALL
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
     environment:
@@ -222,6 +315,18 @@ services:
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.8.2}
     restart: unless-stopped
+    pids_limit: 64
+    mem_limit: 48m
+    memswap_limit: 48m
+    cpus: 0.5
+    read_only: true
+    cap_drop:
+      - ALL
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN:?Set CLOUDFLARED_TUNNEL_TOKEN in .env}
@@ -231,9 +336,14 @@ services:
     networks:
       ingress:
         ipv4_address: 172.21.0.2
+      cloudflare-egress:
 
 networks:
   providers:
+    internal: true
+  provider-egress:
+  sub2api-egress:
+  cloudflare-egress:
   data:
     internal: true
   gateway:
@@ -242,6 +352,7 @@ networks:
       config:
         - subnet: 172.22.0.0/29
   ingress:
+    internal: true
     ipam:
       config:
         - subnet: 172.21.0.0/29
