@@ -21,10 +21,14 @@ flowchart LR
 
 - **Sub2API is the only client API-key authority.** APISIX never validates client keys.
 - APISIX exposes an AI-method/path allowlist. Management, login, health, and unknown routes are not public.
+- APISIX admits 10 requests/second per client with a 40-request burst and at most 50 concurrent requests; excess traffic receives an immediate neutral `429` without delay.
+- Request bodies are capped at 16 MiB and rejected with a neutral `413` before reaching Sub2API.
 - Public final `401` and all final `404` responses become the same zero-byte `404`; other statuses and successful, SSE, and WebSocket responses remain transparent.
 - APISIX strips Sub2API's private `X-Client-Request-ID` and preserves standard `X-Request-ID` on non-opaque responses.
+- Sub2API accepts forwarded client IPs only from APISIX and requires its exact upstream URL allowlist; validation rejects deployments that disable it.
 - CPA, Sub2API admin access, and APISIX bind to loopback by default.
-- PostgreSQL, Redis, and Sub2API-to-APISIX traffic use internal Docker networks.
+- Provider, data, gateway, and ingress traffic are separated; only dedicated egress networks can reach the Internet.
+- Every container has PID, memory, CPU, capability, and log-size bounds. Root filesystems are read-only where runtime evidence showed no required overlay writes; APISIX and Sub2API retain writable roots for generated configuration and request handling.
 - Cloudflare Tunnel receives its token from the ignored mode-`0600` `.env`, never from tracked Compose or config files.
 
 ## Quick start
@@ -125,7 +129,7 @@ Persistent state lives under ignored `data/`, including CPA config/auth/logs/plu
 ./scripts/validate.sh .env.example # tracked template only
 ```
 
-Validation renders Compose, checks required private runtime files and tracking boundaries, runs APISIX's own config test with the selected image tag, and runs ShellCheck when available.
+Validation renders Compose, requires the Sub2API URL allowlist, checks private runtime files and tracking boundaries, runs APISIX's own config test with the selected image tag, and runs ShellCheck when available.
 
 ## Layout
 
