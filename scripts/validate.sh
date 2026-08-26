@@ -20,6 +20,10 @@ if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
   for path in data/cpa/conf/config.yaml data/cpa/mgmt.key data/zcode/config.yaml; do
     [ -f "$path" ] || { echo "missing runtime file: $path" >&2; exit 1; }
   done
+  [ "$(stat -c %a data/sub2api/postgres 2>/dev/null)" = 1777 ] || {
+    echo 'data/sub2api/postgres must have mode 1777 for PostgreSQL 18' >&2
+    exit 1
+  }
 fi
 
 for path in .env cpa/config.yaml secrets/cloudflare-tunnel-token data; do

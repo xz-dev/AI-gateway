@@ -55,6 +55,9 @@ done <cpa/config.example.yaml >"$cpa_tmp"
 install -d -m 700 data data/cpa data/cpa/conf data/cpa/auths data/cpa/logs \
   data/cpa/plugins data/cpa/runtime data/zcode data/sub2api data/sub2api/app \
   data/sub2api/postgres data/sub2api/redis
+# PostgreSQL 18 mounts this parent at /var/lib/postgresql; its postgres user
+# must be able to traverse it before the entrypoint creates/chowns PGDATA.
+chmod 1777 data/sub2api/postgres
 install -m 600 "$env_tmp" .env
 install -m 600 "$cpa_tmp" data/cpa/conf/config.yaml
 install -m 600 "$mgmt_tmp" data/cpa/mgmt.key
