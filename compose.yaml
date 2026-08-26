@@ -335,6 +335,7 @@ services:
       ingress:
         ipv4_address: 172.21.0.2
       cloudflare-egress:
+        gw_priority: 1
 
 networks:
   providers:
@@ -350,7 +351,8 @@ networks:
       config:
         - subnet: 172.22.0.0/29
   ingress:
-    internal: true
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
     ipam:
       config:
         - subnet: 172.21.0.0/29
