@@ -1,0 +1,26 @@
+{
+  "services": {
+    "test-a": {
+      "listen": "172.30.0.3:3128",
+      "client": "172.30.0.2/32",
+      "destinations": [
+        {
+          "domain": "example.com",
+          "tls": "splice"
+        },
+        {
+          "domain": "httpbin.org",
+          "tls": "bump",
+          "methods": ["GET"],
+          "paths": ["^/get($|[?])"]
+        },
+        {
+          "domain": "httpbin.org",
+          "tls": "bump",
+          "methods": ["POST"],
+          "paths": ["^/post($|[?])"]
+        }
+      ]
+    }
+  }
+}

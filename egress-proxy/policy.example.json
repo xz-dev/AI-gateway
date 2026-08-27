@@ -1,0 +1,14 @@
+{
+  "services": {
+    "cpa": {
+      "listen": "172.23.0.3:3128",
+      "client": "172.23.0.2/32",
+      "destinations": []
+    },
+    "sub2api": {
+      "listen": "172.24.0.3:3128",
+      "client": "172.24.0.2/32",
+      "destinations": []
+    }
+  }
+}

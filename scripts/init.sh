@@ -35,8 +35,6 @@ cpa_api_key=$(openssl rand -hex 32)
 cpa_management_key=$(openssl rand -hex 32)
 rewrite_env CPA_API_KEY "$cpa_api_key"
 rewrite_env CPA_MANAGEMENT_KEY "$cpa_management_key"
-rewrite_env ZCODE_PROXY_CREDENTIAL_SECRET "$(openssl rand -hex 32)"
-rewrite_env ZCODE_PROXY_API_KEY "$(openssl rand -hex 32)"
 rewrite_env POSTGRES_PASSWORD "$(openssl rand -hex 32)"
 rewrite_env REDIS_PASSWORD "$(openssl rand -hex 32)"
 rewrite_env JWT_SECRET "$(openssl rand -hex 32)"
@@ -53,7 +51,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 done <cpa/config.example.yaml >"$cpa_tmp"
 
 install -d -m 700 data data/cpa data/cpa/conf data/cpa/auths data/cpa/logs \
-  data/cpa/plugins data/cpa/runtime data/zcode data/sub2api data/sub2api/app \
+  data/cpa/plugins data/cpa/runtime data/sub2api data/sub2api/app \
   data/sub2api/postgres data/sub2api/redis
 # PostgreSQL 18 mounts this parent at /var/lib/postgresql; its postgres user
 # must be able to traverse it before the entrypoint creates/chowns PGDATA.
@@ -61,6 +59,7 @@ chmod 1777 data/sub2api/postgres
 install -m 600 "$env_tmp" .env
 install -m 600 "$cpa_tmp" data/cpa/conf/config.yaml
 install -m 600 "$mgmt_tmp" data/cpa/mgmt.key
+./scripts/init-egress-proxy.sh >/dev/null
 trap - EXIT
 
 cat <<'EOF'
@@ -68,6 +67,7 @@ Private runtime files created without printing secrets.
 Next:
   1. Set ADMIN_EMAIL in .env.
   2. Set CLOUDFLARED_TUNNEL_TOKEN in .env using an editor that does not expose it in shell history.
-  3. Place ZCode config and OAuth files under data/zcode.
-  4. Run ./scripts/validate.sh, then docker compose pull && docker compose up -d --wait.
+  3. Add only required domains, methods, and paths to data/egress-proxy/policy.json.
+  4. Run ./scripts/init-egress-proxy.sh && ./scripts/validate.sh.
+  5. Pull the digest-pinned upstream images, then run docker compose up -d --build --wait.
 EOF

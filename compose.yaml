@@ -6,49 +6,116 @@ x-default-logging: &default-logging
     max-size: "20m"
     max-file: "5"
 
+x-netns-owner: &netns-owner
+  image: ${NETNS_GUARD_IMAGE:-docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1}
+  restart: unless-stopped
+  pids_limit: 16
+  mem_limit: 16m
+  memswap_limit: 16m
+  cpus: 0.1
+  read_only: true
+  cap_drop:
+    - ALL
+  cap_add:
+    - NET_ADMIN
+    - SETGID
+    - SETUID
+  logging: *default-logging
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=1m
+  command:
+    - /bin/sh
+    - -ec
+    - >-
+      while ip -4 route show default | grep -q .; do ip -4 route del default; done;
+      while ip -6 route show default | grep -q .; do ip -6 route del default; done;
+      test -z "$$(ip -4 route show default)";
+      test -z "$$(ip -6 route show default)";
+      exec su nobody -s /bin/sh -c 'exec sleep infinity'
+
 services:
-  zcode-proxy:
-    image: ${ZCODE_PROXY_IMAGE:-ghcr.io/xz-dev/zcode-proxy:candidate-1d26630483fe}
+  egress-proxy:
+    build:
+      context: ./egress-proxy
+    image: ${EGRESS_PROXY_IMAGE:-ai-gateway-squid:6.13-2-deb13u2}
     restart: unless-stopped
     pids_limit: 64
-    mem_limit: 48m
-    memswap_limit: 48m
-    cpus: 1.0
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
     read_only: true
     cap_drop:
       - ALL
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
     tmpfs:
-      - /tmp:rw,nosuid,nodev,size=64m
-    environment:
-      ZCODE_PROXY_CREDENTIAL_SECRET: ${ZCODE_PROXY_CREDENTIAL_SECRET:?Set ZCODE_PROXY_CREDENTIAL_SECRET in .env}
-      ZCODE_PROXY_API_KEY: ${ZCODE_PROXY_API_KEY:?Set ZCODE_PROXY_API_KEY in .env}
-      ZCODE_PROXY_CONFIG: /home/bun/.zcode-proxy/config.yaml
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+      - /var/lib/squid/ssl_db:rw,noexec,nosuid,nodev,size=32m,mode=1777
     volumes:
-      - ./data/zcode:/home/bun/.zcode-proxy:ro,Z
+      - ./data/egress-proxy/generated:/etc/squid/generated:ro,Z
+      - ./data/egress-proxy/ca.crt:/etc/squid/ca.crt:ro,z
+      - ./data/egress-proxy/ca.key:/etc/squid/ca.key:ro,Z
     networks:
-      - providers
-      - provider-egress
+      cpa-egress:
+        ipv4_address: 172.23.0.3
+      sub2api-egress:
+        ipv4_address: 172.24.0.3
+      proxy-egress:
+        gw_priority: 1
     healthcheck:
       test:
-        - CMD
-        - bun
-        - -e
+        - CMD-SHELL
         - >-
-          fetch("http://127.0.0.1:8080/health",{headers:{"x-api-key":process.env.ZCODE_PROXY_API_KEY}})
-          .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status)})
-          .catch(e=>{console.error(e.message);process.exit(1)})
-      interval: 30s
-      timeout: 10s
+          /usr/sbin/unbound-control -c /etc/unbound/ai-gateway.conf status &&
+          /usr/sbin/squid -k check -f /etc/squid/generated/squid.conf
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 10s
+
+  cpa-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "sub2api:172.27.0.3"
+    ports:
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:${CPA_PORT:-8317}:8317"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:8085:8085"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:1455:1455"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:54545:54545"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:51121:51121"
+      - "${CPA_BIND_ADDRESS:-127.0.0.1}:11451:11451"
+    networks:
+      cpa-sub2api:
+        aliases:
+          - cli-proxy-api
+        ipv4_address: 172.27.0.2
+      cpa-egress:
+        ipv4_address: 172.23.0.2
+      cpa-host:
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api:candidate-model-channels-07cb171df083}
-    command: ["./CLIProxyAPI", "-config", "/CLIProxyAPI/conf/config.yaml"]
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api@sha256:1da1d6ab90c2d7a569e8ebcb6eeb25549e2a535b03fbac54f11ceca189c49ae8}
+    network_mode: service:cpa-netns
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - >-
+        while awk 'NR > 1 && $$2 == "00000000" && $$8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
+        awk '$$1 == "00000000000000000000000000000000" && $$2 == "00" && $$10 != "lo" {found=1} END {exit(found ? 0 : 1)}' /proc/net/ipv6_route;
+        do sleep 0.05; done;
+        exec ./CLIProxyAPI -config /CLIProxyAPI/conf/config.yaml
     restart: unless-stopped
+    depends_on:
+      cpa-netns:
+        condition: service_started
+        restart: true
+      egress-proxy:
+        condition: service_started
+        restart: true
     pids_limit: 256
     mem_limit: 480m
     memswap_limit: 480m
@@ -63,18 +130,12 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=64m
-    depends_on:
-      zcode-proxy:
-        condition: service_healthy
     environment:
       DEPLOY: docker-compose
-    ports:
-      - "${CPA_BIND_ADDRESS:-127.0.0.1}:${CPA_PORT:-8317}:8317"
-      - "${CPA_BIND_ADDRESS:-127.0.0.1}:8085:8085"
-      - "${CPA_BIND_ADDRESS:-127.0.0.1}:1455:1455"
-      - "${CPA_BIND_ADDRESS:-127.0.0.1}:54545:54545"
-      - "${CPA_BIND_ADDRESS:-127.0.0.1}:51121:51121"
-      - "${CPA_BIND_ADDRESS:-127.0.0.1}:11451:11451"
+      HTTP_PROXY: http://172.23.0.3:3128
+      HTTPS_PROXY: http://172.23.0.3:3128
+      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,sub2api
+      SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
     volumes:
       - ./data/cpa/conf:/CLIProxyAPI/conf:Z
       - ./data/cpa/auths:/root/.cli-proxy-api:Z
@@ -82,9 +143,7 @@ services:
       - ./data/cpa/plugins:/CLIProxyAPI/plugins:Z
       - ./data/cpa/runtime:/CLIProxyAPI/data:Z
       - ./data/cpa/mgmt.key:/CLIProxyAPI/mgmt.key:ro,Z
-    networks:
-      - providers
-      - provider-egress
+      - ./data/egress-proxy/ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
     healthcheck:
       test:
         - CMD
@@ -101,7 +160,7 @@ services:
       start_period: 10s
 
   postgres:
-    image: ${POSTGRES_IMAGE:-postgres:18-alpine}
+    image: ${POSTGRES_IMAGE:-docker.io/library/postgres@sha256:63bdc97d67b5133bf0e5ebd500bec6d046fa851dc81340d838f0347e616107e8}
     command: ["postgres", "-c", "max_connections=50", "-c", "shared_buffers=64MB"]
     restart: unless-stopped
     pids_limit: 128
@@ -132,7 +191,8 @@ services:
     volumes:
       - ./data/sub2api/postgres:/var/lib/postgresql:Z
     networks:
-      - data
+      postgres-sub2api:
+        ipv4_address: 172.28.0.2
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sub2api} -d ${POSTGRES_DB:-sub2api}"]
       interval: 10s
@@ -141,7 +201,7 @@ services:
       start_period: 10s
 
   redis:
-    image: ${REDIS_IMAGE:-redis:8-alpine}
+    image: ${REDIS_IMAGE:-docker.io/library/redis@sha256:9c3ecc609a8087c0f11c494fefaf37a8f7bf9a967631d4a0da8967a9810be354}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 80m
@@ -177,7 +237,8 @@ services:
     volumes:
       - ./data/sub2api/redis:/data:Z
     networks:
-      - data
+      redis-sub2api:
+        ipv4_address: 172.29.1.2
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -185,8 +246,42 @@ services:
       retries: 5
       start_period: 5s
 
+  sub2api-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "cli-proxy-api:172.27.0.2"
+      - "postgres:172.28.0.2"
+      - "redis:172.29.1.2"
+    ports:
+      - "${SUB2API_BIND_ADDRESS:-127.0.0.1}:${SUB2API_PORT:-8086}:8080"
+    networks:
+      cpa-sub2api:
+        aliases:
+          - sub2api
+        ipv4_address: 172.27.0.3
+      postgres-sub2api:
+        ipv4_address: 172.28.0.3
+      redis-sub2api:
+        ipv4_address: 172.29.1.3
+      sub2api-egress:
+        ipv4_address: 172.24.0.2
+      sub2api-apisix:
+        aliases:
+          - sub2api
+          - sub2api-apisix
+        ipv4_address: 172.22.0.2
+      sub2api-host:
+
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/wei-shaw/sub2api:0.1.181}
+    image: ${SUB2API_IMAGE:-ghcr.io/wei-shaw/sub2api@sha256:b0b9dec5ab978e8b872cedc2706e695c944b5322ae56b20ba99ee9d3871fe810}
+    network_mode: service:sub2api-netns
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        while awk 'NR > 1 && $$2 == "00000000" && $$8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
+        awk '$$1 == "00000000000000000000000000000000" && $$2 == "00" && $$10 != "lo" {found=1} END {exit(found ? 0 : 1)}' /proc/net/ipv6_route;
+        do sleep 0.05; done;
+        exec /app/docker-entrypoint.sh /app/sub2api
     restart: unless-stopped
     pids_limit: 128
     mem_limit: 256m
@@ -203,17 +298,22 @@ services:
     security_opt:
       - no-new-privileges:true
     depends_on:
+      sub2api-netns:
+        condition: service_started
+        restart: true
+      egress-proxy:
+        condition: service_started
+        restart: true
       cli-proxy-api:
-        condition: service_healthy
+        condition: service_started
         restart: true
       postgres:
-        condition: service_healthy
+        condition: service_started
       redis:
-        condition: service_healthy
-    ports:
-      - "${SUB2API_BIND_ADDRESS:-127.0.0.1}:${SUB2API_PORT:-8086}:8080"
+        condition: service_started
     volumes:
       - ./data/sub2api/app:/app/data:Z
+      - ./data/egress-proxy/ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
     environment:
       AUTO_SETUP: "true"
       SERVER_HOST: 0.0.0.0
@@ -241,23 +341,16 @@ services:
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Set TOTP_ENCRYPTION_KEY in .env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
-      SECURITY_URL_ALLOWLIST_ENABLED: ${SUB2API_URL_ALLOWLIST_ENABLED:-true}
-      SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP: "true"
-      SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS: "true"
-      SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS: ${SUB2API_UPSTREAM_HOSTS:-cli-proxy-api}
+      SECURITY_URL_ALLOWLIST_ENABLED: "false"
       GATEWAY_MODELS_LIST_READ_MAX_BYTES: ${GATEWAY_MODELS_LIST_READ_MAX_BYTES:-16777216}
       LOG_ROTATION_MAX_SIZE_MB: ${LOG_ROTATION_MAX_SIZE_MB:-20}
       LOG_ROTATION_MAX_BACKUPS: ${LOG_ROTATION_MAX_BACKUPS:-5}
       LOG_ROTATION_MAX_AGE_DAYS: ${LOG_ROTATION_MAX_AGE_DAYS:-7}
+      HTTP_PROXY: http://172.24.0.3:3128
+      HTTPS_PROXY: http://172.24.0.3:3128
+      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,postgres,redis,sub2api-apisix
+      SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
       TZ: ${TZ:-UTC}
-    networks:
-      providers:
-      sub2api-egress:
-      data:
-      gateway:
-        aliases:
-          - sub2api-apisix
-        ipv4_address: 172.22.0.2
     healthcheck:
       test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 30s
@@ -265,8 +358,33 @@ services:
       retries: 3
       start_period: 30s
 
+  apisix-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "sub2api-apisix:172.22.0.2"
+    ports:
+      - "${APISIX_BIND_ADDRESS:-127.0.0.1}:${APISIX_PORT:-9080}:9080"
+    networks:
+      sub2api-apisix:
+        aliases:
+          - apisix
+        ipv4_address: 172.22.0.3
+      apisix-cloudflared:
+        aliases:
+          - apisix-ingress
+        ipv4_address: 172.21.0.3
+      apisix-host:
+
   apisix:
-    image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}
+    image: ${APISIX_IMAGE:-docker.io/apache/apisix@sha256:51bb7b7fcd4162bec53f276c5a9b7b93d5de55723586842becb3e5f165fc0281}
+    network_mode: service:apisix-netns
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - >-
+        while awk 'NR > 1 && $$2 == "00000000" && $$8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
+        awk '$$1 == "00000000000000000000000000000000" && $$2 == "00" && $$10 != "lo" {found=1} END {exit(found ? 0 : 1)}' /proc/net/ipv6_route;
+        do sleep 0.05; done;
+        exec /docker-entrypoint.sh docker-start
     restart: unless-stopped
     pids_limit: 128
     mem_limit: 128m
@@ -280,21 +398,15 @@ services:
     environment:
       APISIX_STAND_ALONE: "true"
     depends_on:
+      apisix-netns:
+        condition: service_started
+        restart: true
       sub2api:
-        condition: service_healthy
-    ports:
-      - "${APISIX_BIND_ADDRESS:-127.0.0.1}:${APISIX_PORT:-9080}:9080"
+        condition: service_started
     volumes:
       - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro,Z
       - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro,Z
       - ./apisix/lua:/opt/apisix/custom:ro,Z
-    networks:
-      gateway:
-        ipv4_address: 172.22.0.3
-      ingress:
-        aliases:
-          - apisix-ingress
-        ipv4_address: 172.21.0.3
     healthcheck:
       test:
         - CMD
@@ -311,7 +423,7 @@ services:
       start_period: 20s
 
   cloudflared:
-    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.8.2}
+    image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 48m
@@ -330,29 +442,54 @@ services:
       TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN:?Set CLOUDFLARED_TUNNEL_TOKEN in .env}
     depends_on:
       apisix:
-        condition: service_healthy
+        condition: service_started
     networks:
-      ingress:
+      apisix-cloudflared:
         ipv4_address: 172.21.0.2
       cloudflare-egress:
         gw_priority: 1
 
 networks:
-  providers:
+  cpa-sub2api:
     internal: true
-  provider-egress:
-  sub2api-egress:
-  cloudflare-egress:
-  data:
+    ipam:
+      config:
+        - subnet: 172.27.0.0/29
+  postgres-sub2api:
     internal: true
-  gateway:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/29
+  redis-sub2api:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.1.0/29
+  sub2api-apisix:
     internal: true
     ipam:
       config:
         - subnet: 172.22.0.0/29
-  ingress:
-    driver_opts:
-      com.docker.network.bridge.enable_ip_masquerade: "false"
+  apisix-cloudflared:
+    internal: true
     ipam:
       config:
         - subnet: 172.21.0.0/29
+  cpa-egress:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.23.0.0/29
+  sub2api-egress:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.24.0.0/29
+  # Port publication needs a non-internal bridge on Docker 29. Only trusted
+  # namespace owners join these networks; they delete every default route and
+  # drop privilege while applications independently wait for route removal.
+  cpa-host:
+  sub2api-host:
+  apisix-host:
+  proxy-egress:
+  cloudflare-egress:

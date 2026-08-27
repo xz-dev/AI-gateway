@@ -12,5 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Compose and APISIX
+      - name: Validate reusable Compose and runtime boundaries
         run: ./scripts/validate.sh .env.example
+      - name: Validate optional official ZCode namespace override
+        env:
+          ZCODE_PROXY_CREDENTIAL_SECRET: test-only
+          ZCODE_PROXY_API_KEY: test-only
+        run: |
+          ./scripts/init-zcode-override.sh
+          ./scripts/validate.sh .env.example

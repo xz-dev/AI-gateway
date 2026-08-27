@@ -1,6 +1,9 @@
 .env
+.pi/
+compose.override.yaml
 cpa/config.yaml
 data/
 *.local
+__pycache__/
 .serena/
 .DS_Store
