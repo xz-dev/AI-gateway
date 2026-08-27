@@ -52,7 +52,7 @@ services:
 
   zcode-egress-tunnel:
     image: ${TUN2PROXY_IMAGE:?Set TUN2PROXY_IMAGE in .env}
-    restart: unless-stopped
+    restart: "no"
     depends_on:
       zcode-squid-relay:
         condition: service_started

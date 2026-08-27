@@ -563,7 +563,9 @@ if has_zcode:
     if set(tunnel.get("cap_add",[]))!={"NET_ADMIN"} or set(tunnel.get("cap_drop",[]))!={"ALL"} or tunnel.get("privileged") is True:
         raise SystemExit("tun2proxy must have exact NET_ADMIN, not privileged")
     if tunnel.get("read_only") is True:
-        raise SystemExit("tun2proxy needs an ephemeral writable layer for restart-safe resolver setup")
+        raise SystemExit("tun2proxy needs an ephemeral writable layer for resolver setup")
+    if str(tunnel.get("restart")) != "no":
+        raise SystemExit("tun2proxy must stay stopped after failure until its shared namespace is rebuilt")
     if normalized(tunnel.get("command",[])) != ["--proxy","http://172.30.23.3:3128","--dns","virtual","--bypass","172.30.23.3/32","--tcp-timeout","600","--exit-on-fatal-error","--verbosity","info"]:
         raise SystemExit("tun2proxy command mismatch")
     if "/etc/resolv.conf" in volume_targets(tunnel):

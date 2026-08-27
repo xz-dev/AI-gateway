@@ -279,21 +279,6 @@ done
   exit 1
 }
 
-docker restart "$tunnel" >/dev/null
-tunnel_restart_ready=
-for _ in $(seq 1 40); do
-  if [ "$(docker inspect -f '{{.State.Running}}' "$tunnel")" = true ] && probe_tunnel_tls global.$base; then
-    tunnel_restart_ready=1
-    break
-  fi
-  sleep 0.25
-done
-[ "$tunnel_restart_ready" = 1 ] || {
-  docker logs "$tunnel" >&2
-  echo 'namespace egress tunnel did not recover after restart' >&2
-  exit 1
-}
-
 zcode_result=$(docker run --rm --network "container:$tunnel" \
   -e HTTP_PROXY= -e HTTPS_PROXY= -e ALL_PROXY= \
   -e NODE_EXTRA_CA_CERTS=/inspection-ca.crt -e SSL_CERT_FILE=/inspection-ca.crt \

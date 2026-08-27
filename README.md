@@ -131,7 +131,14 @@ nameserver 198.18.0.1
 options ndots:0
 ```
 
-Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. Do not bind a host file over the tunnel owner's `/etc/resolv.conf`. The tunnel intentionally keeps only its disposable container layer writable because tun2proxy must rewrite Docker's runtime resolver file and clean up TUN state across restarts; it has no persistent writable mount, remains unprivileged, and receives only `NET_ADMIN`. CPA reaches ZCode only through `cpa-zcode-relay`; the tunnel reaches Squid only through `zcode-squid-relay`. Each direction has separate two-member source and target networks, and a failed relay or tunnel loses connectivity instead of gaining direct Internet access.
+Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. Do not bind a host file over the tunnel owner's `/etc/resolv.conf`. The tunnel intentionally keeps only its disposable container layer writable because tun2proxy must rewrite Docker's runtime resolver file and clean up TUN state during startup and teardown; it has no persistent writable mount, remains unprivileged, and receives only `NET_ADMIN`. CPA reaches ZCode only through `cpa-zcode-relay`; the tunnel reaches Squid only through `zcode-squid-relay`. Each direction has separate two-member source and target networks, and a failed relay or tunnel loses connectivity instead of gaining direct Internet access.
+
+The tunnel uses `restart: "no"` deliberately. A ZCode process keeps the shared network namespace alive after the tunnel owner exits, so restarting only the owner cannot safely remove stale TUN state. Rebuild the pair in order instead of using `docker compose restart`:
+
+```bash
+docker compose rm -s -f zcode-proxy zcode-egress-tunnel
+docker compose up -d --no-build zcode-egress-tunnel zcode-proxy
+```
 
 For the CPA entry targeting `http://zcode-proxy:8080/v1`, set `proxy-url: direct` on every item under that entry's `api-key-entries`; the provider object itself has no proxy field. The global CPA proxy is only for Internet destinations.
 
