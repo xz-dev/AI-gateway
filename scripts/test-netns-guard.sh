@@ -106,7 +106,10 @@ docker compose -p "$project" -f "$compose" config --quiet
 docker compose -p "$project" -f "$compose" up -d app >/dev/null
 owner=$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=netns)
 app=$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=app)
-[ -n "$owner" ] && [ -n "$app" ] || { echo 'namespace guard services did not start' >&2; exit 1; }
+if [ -z "$owner" ] || [ -z "$app" ]; then
+  echo 'namespace guard services did not start' >&2
+  exit 1
+fi
 
 python3 - "$port" <<'PY'
 import sys, time, urllib.request

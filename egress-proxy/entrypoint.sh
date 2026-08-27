@@ -11,7 +11,7 @@ unbound_pid=$!
 "$@" &
 squid_pid=$!
 
-# shellcheck disable=SC2329 # invoked by the signal trap below
+# shellcheck disable=SC2317,SC2329 # invoked by the signal trap below
 stop() {
   trap - HUP INT TERM
   kill -TERM "$squid_pid" "$unbound_pid" 2>/dev/null || true
