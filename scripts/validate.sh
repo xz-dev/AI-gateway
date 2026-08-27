@@ -85,10 +85,10 @@ expected_submodule=c427191d5a171aa7dbdf8577b52c35c274592e53
   echo 'AI SSE keepalive proxy gitlink mismatch' >&2
   exit 1
 }
-[ -f "$submodule/Dockerfile" ] && [ "$(git -C "$submodule" rev-parse HEAD)" = "$expected_submodule" ] || {
+if [ ! -f "$submodule/Dockerfile" ] || [ "$(git -C "$submodule" rev-parse HEAD)" != "$expected_submodule" ]; then
   echo 'AI SSE keepalive proxy submodule is not initialized at reviewed commit' >&2
   exit 1
-}
+fi
 if [ -n "$(git -C "$submodule" status --porcelain --untracked-files=all)" ]; then
   echo 'AI SSE keepalive proxy submodule is dirty' >&2
   exit 1
