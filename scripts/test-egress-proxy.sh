@@ -215,17 +215,14 @@ docker logs "$proxy" 2>&1 | grep -q "method=GET host=global.$base path=/allowed 
 }
 
 printf 'nameserver 198.18.0.1\noptions ndots:0\n' >"$tmpdir/virtual-resolv.conf"
-printf 'nameserver 10.0.0.1\n' >"$tmpdir/tunnel-resolv.conf"
-chmod 666 "$tmpdir/tunnel-resolv.conf"
 tunnel_security=(--device /dev/net/tun:/dev/net/tun --cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges)
 if [ "$tun_test_mode" = ci-privileged ]; then
   tunnel_security=(--privileged)
   echo 'tun_runtime_mode=ci-privileged production_compose_validation=exact-NET_ADMIN' >&2
 fi
 docker run -d --name "$tunnel" --network "$client_network" --ip 172.29.0.2 \
-  "${tunnel_security[@]}" --read-only \
+  "${tunnel_security[@]}" \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=4m \
-  -v "$tmpdir/tunnel-resolv.conf:/etc/resolv.conf:rw" \
   --sysctl net.ipv6.conf.all.disable_ipv6=1 \
   --sysctl net.ipv6.conf.default.disable_ipv6=1 \
   "$tun2proxy_image" \
@@ -279,6 +276,21 @@ for _ in $(seq 1 20); do
 done
 [ "$tunnel_proxy_seen" = 1 ] || {
   echo 'namespace egress tunnel did not preserve the CONNECT hostname' >&2
+  exit 1
+}
+
+docker restart "$tunnel" >/dev/null
+tunnel_restart_ready=
+for _ in $(seq 1 40); do
+  if [ "$(docker inspect -f '{{.State.Running}}' "$tunnel")" = true ] && probe_tunnel_tls global.$base; then
+    tunnel_restart_ready=1
+    break
+  fi
+  sleep 0.25
+done
+[ "$tunnel_restart_ready" = 1 ] || {
+  docker logs "$tunnel" >&2
+  echo 'namespace egress tunnel did not recover after restart' >&2
   exit 1
 }
 

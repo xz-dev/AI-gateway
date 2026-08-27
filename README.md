@@ -51,7 +51,7 @@ cd /root/AI-gateway
 
 1. Replace `ADMIN_EMAIL=admin@example.invalid` in `.env`.
 2. In Cloudflare Dashboard, create a remotely managed Tunnel and replace `CLOUDFLARED_TUNNEL_TOKEN` in `.env` using an editor that does not expose it in shell history. Keep `.env` mode `0600`.
-3. Add the minimum required destinations to `data/egress-proxy/policy.json`, then render it:
+3. Add the minimum required destinations to `data/egress-proxy/policy.json`, then render it. This ignored runtime file is created only when absent, so repository upgrades never replace the user's allowlist:
 
    ```bash
    ./scripts/init-egress-proxy.sh
@@ -83,14 +83,14 @@ The Compose service uses Cloudflare's supported `TUNNEL_TOKEN` environment varia
 
 ## Configure egress policy
 
-Example bumped destination:
+Example bumped destination (documentation only; it is not enabled by the default deny-all policy):
 
 ```json
 {
-  "domain": "api.example.com",
+  "domain": "api.openai.com",
   "tls": "bump",
   "methods": ["POST"],
-  "paths": ["^/v1/responses($|[?])"]
+  "paths": ["^/v1/(responses|chat/completions|embeddings)($|[?])"]
 }
 ```
 
@@ -103,7 +103,7 @@ Example TLS-preserving destination:
 }
 ```
 
-Domain entries may be exact names or start with `.` to include subdomains. A domain may have multiple `bump` entries when different paths require different methods, but it cannot mix `bump` and `splice`. IP literals, plaintext HTTP, missing SNI, CONNECT ports other than 443, unlisted redirects, unknown methods/paths, private/link-local/loopback/CGNAT/documentation/multicast/reserved destinations, and malformed upstream certificates fail closed. Re-run `./scripts/init-egress-proxy.sh` after every policy edit, then validate and recreate Squid with its dependent clients together.
+Domain entries may be exact names or start with `.` to include subdomains. A domain may have multiple `bump` entries when different paths require different methods, but it cannot mix `bump` and `splice`. IP literals, plaintext HTTP, missing SNI, CONNECT ports other than 443, unlisted redirects, unknown methods/paths, private/link-local/loopback/CGNAT/documentation/multicast/reserved destinations, and malformed upstream certificates fail closed. Never allow all of GitHub: add only the exact repository API, raw-content, or release paths a configured component actually reads. Re-run `./scripts/init-egress-proxy.sh` after every policy edit, then validate and recreate Squid with its dependent clients together.
 
 ## Configure CPA and Sub2API
 
@@ -131,7 +131,7 @@ nameserver 198.18.0.1
 options ndots:0
 ```
 
-Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. CPA reaches ZCode only through `cpa-zcode-relay`; the tunnel reaches Squid only through `zcode-squid-relay`. Each direction has separate two-member source and target networks, and a failed relay or tunnel loses connectivity instead of gaining direct Internet access.
+Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. Do not bind a host file over the tunnel owner's `/etc/resolv.conf`. The tunnel intentionally keeps only its disposable container layer writable because tun2proxy must rewrite Docker's runtime resolver file and clean up TUN state across restarts; it has no persistent writable mount, remains unprivileged, and receives only `NET_ADMIN`. CPA reaches ZCode only through `cpa-zcode-relay`; the tunnel reaches Squid only through `zcode-squid-relay`. Each direction has separate two-member source and target networks, and a failed relay or tunnel loses connectivity instead of gaining direct Internet access.
 
 For the CPA entry targeting `http://zcode-proxy:8080/v1`, set `proxy-url: direct` on every item under that entry's `api-key-entries`; the provider object itself has no proxy field. The global CPA proxy is only for Internet destinations.
 

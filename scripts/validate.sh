@@ -23,8 +23,7 @@ if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
   for path in data/cpa/conf/config.yaml data/cpa/mgmt.key \
     data/egress-proxy/ca.key data/egress-proxy/ca.crt \
     data/egress-proxy/ca-bundle.pem data/egress-proxy/policy.json \
-    data/egress-proxy/generated/squid.conf data/egress-proxy/virtual-resolv.conf \
-    data/egress-proxy/tunnel-resolv.conf; do
+    data/egress-proxy/generated/squid.conf data/egress-proxy/virtual-resolv.conf; do
     [ -f "$path" ] || { echo "missing runtime file: $path" >&2; exit 1; }
   done
   [ "$(stat -c %a data/egress-proxy 2>/dev/null)" = 700 ] || {
@@ -46,26 +45,12 @@ if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
     echo 'virtual-resolv.conf must use tun2proxy virtual DNS' >&2
     exit 1
   }
-  [ "$(grep -Ec '^nameserver[[:space:]]+10\.0\.0\.1$' data/egress-proxy/tunnel-resolv.conf)" = 1 ] || {
-    echo 'tunnel-resolv.conf must use the TUN setup resolver' >&2
+  [ "$(grep -Ec '^nameserver[[:space:]]+' data/egress-proxy/virtual-resolv.conf)" = 1 ] || {
+    echo 'virtual-resolv.conf must contain exactly one nameserver' >&2
     exit 1
   }
-  for resolv in data/egress-proxy/virtual-resolv.conf data/egress-proxy/tunnel-resolv.conf; do
-    [ "$(grep -Ec '^nameserver[[:space:]]+' "$resolv")" = 1 ] || {
-      echo "$resolv must contain exactly one nameserver" >&2
-      exit 1
-    }
-  done
   [ "$(stat -c %a data/egress-proxy/virtual-resolv.conf)" = 444 ] || {
     echo 'virtual-resolv.conf must have mode 444' >&2
-    exit 1
-  }
-  case $(stat -c %a data/egress-proxy/tunnel-resolv.conf) in
-    600|444) ;;
-    *) echo 'tunnel-resolv.conf must have init mode 600 or runtime mode 444' >&2; exit 1 ;;
-  esac
-  [ "$(stat -c %u data/egress-proxy/tunnel-resolv.conf)" = "$(id -u)" ] || {
-    echo 'tunnel-resolv.conf must be owned by the deployment user' >&2
     exit 1
   }
   cert_lines=$(wc -l <data/egress-proxy/ca.crt)
@@ -577,8 +562,12 @@ if has_zcode:
     if zcode.get("network_mode")!="service:zcode-egress-tunnel": raise SystemExit("ZCode must share tun2proxy namespace")
     if set(tunnel.get("cap_add",[]))!={"NET_ADMIN"} or set(tunnel.get("cap_drop",[]))!={"ALL"} or tunnel.get("privileged") is True:
         raise SystemExit("tun2proxy must have exact NET_ADMIN, not privileged")
+    if tunnel.get("read_only") is True:
+        raise SystemExit("tun2proxy needs an ephemeral writable layer for restart-safe resolver setup")
     if normalized(tunnel.get("command",[])) != ["--proxy","http://172.30.23.3:3128","--dns","virtual","--bypass","172.30.23.3/32","--tcp-timeout","600","--exit-on-fatal-error","--verbosity","info"]:
         raise SystemExit("tun2proxy command mismatch")
+    if "/etc/resolv.conf" in volume_targets(tunnel):
+        raise SystemExit("tun2proxy must use Docker's restart-safe writable resolver file")
     if zcode.get("ports") or tunnel.get("ports"): raise SystemExit("ZCode must not publish ports")
 
 key_holders={service for service,cfg in services.items() if "/etc/squid/ca.key" in volume_targets(cfg)}

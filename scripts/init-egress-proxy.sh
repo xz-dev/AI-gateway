@@ -54,8 +54,6 @@ cat "$cert" >>"$tmpdir/ca-bundle.pem"
 install -m 444 "$tmpdir/ca-bundle.pem" "$runtime/ca-bundle.pem"
 printf 'nameserver 198.18.0.1\noptions ndots:0\n' >"$tmpdir/virtual-resolv.conf"
 install -m 444 "$tmpdir/virtual-resolv.conf" "$runtime/virtual-resolv.conf"
-printf 'nameserver 10.0.0.1\n' >"$tmpdir/tunnel-resolv.conf"
-install -m 600 "$tmpdir/tunnel-resolv.conf" "$runtime/tunnel-resolv.conf"
 python3 scripts/render-egress-policy.py "$policy" "$generated"
 chmod 700 "$runtime"
 

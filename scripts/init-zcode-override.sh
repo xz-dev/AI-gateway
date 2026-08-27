@@ -61,10 +61,7 @@ services:
     mem_limit: 64m
     memswap_limit: 64m
     cpus: 0.5
-    read_only: true
     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=4m"]
-    volumes:
-      - ./data/egress-proxy/tunnel-resolv.conf:/etc/resolv.conf:rw,z
     cap_drop: [ALL]
     cap_add: [NET_ADMIN]
     devices: [/dev/net/tun:/dev/net/tun]
