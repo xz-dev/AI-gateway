@@ -103,6 +103,18 @@ Example TLS-preserving destination:
 }
 ```
 
+Optional components need their own `GET`/`bump` entries; none of these are enabled automatically:
+
+| Component | Exact domain | Anchored path |
+|---|---|---|
+| CPA metadata plugin | `models.dev` | `^/api\\.json($|[?])` |
+| CPA metadata plugin | `modelparams.dev` | `^/api/v1/models\\.json($|[?])` |
+| CPA version check | `api.github.com` | `^/repos/router-for-me/CLIProxyAPI/releases/latest($|[?])` |
+| Sub2API version check | `api.github.com` | `^/repos/Wei-Shaw/sub2api/releases/latest($|[?])` |
+| Sub2API Codex version sync | `api.github.com` | `^/repos/openai/codex/releases/latest($|[?])` |
+
+Add any fallback list endpoint, model registry, management UI, or plugin release repository as another exact path only when that feature is used. Never replace these with a repository wildcard.
+
 Domain entries may be exact names or start with `.` to include subdomains. A domain may have multiple `bump` entries when different paths require different methods, but it cannot mix `bump` and `splice`. IP literals, plaintext HTTP, missing SNI, CONNECT ports other than 443, unlisted redirects, unknown methods/paths, private/link-local/loopback/CGNAT/documentation/multicast/reserved destinations, and malformed upstream certificates fail closed. Never allow all of GitHub: add only the exact repository API, raw-content, or release paths a configured component actually reads. Re-run `./scripts/init-egress-proxy.sh` after every policy edit, then validate and recreate Squid with its dependent clients together.
 
 ## Configure CPA and Sub2API
