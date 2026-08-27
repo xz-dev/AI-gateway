@@ -144,7 +144,15 @@ probe_tls() {
     -proxy 172.29.0.3:3128 -connect "$connect_name:443" -servername "$server_name" \
     </dev/null >/dev/null 2>&1
 }
-probe_tls global.$base
+tls_origin_ready=
+for _ in $(seq 1 80); do
+  if probe_tls global.$base; then
+    tls_origin_ready=1
+    break
+  fi
+  sleep 0.25
+done
+[ "$tls_origin_ready" = 1 ] || { echo 'TLS origin fixture did not become ready' >&2; exit 1; }
 probe_tls mixed.$base
 for name in private mapped six; do
   if probe_tls "$name.$base"; then echo "$name address unexpectedly connected" >&2; exit 1; fi
