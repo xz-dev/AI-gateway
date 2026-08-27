@@ -61,7 +61,14 @@ cd /root/AI-gateway
    ```
 
    The generated policy initially denies all egress. Use `tls: "bump"` with explicit methods and anchored POSIX path expressions. Use `tls: "splice"` only when preserving end-to-end TLS behavior is required; splice entries cannot enforce HTTP Host/path.
-4. Validate and start. Compose builds `ai-sse-keepalive-proxy:latest` locally from pinned submodule `middleware/ai-sse-keepalive-proxy`; it never pulls middleware from GHCR:
+4. If production uses optional ZCode, set `ZCODE_PROXY_CREDENTIAL_SECRET` and `ZCODE_PROXY_API_KEY` in `.env`, then initialize dedicated internal TLS before generating override:
+
+   ```bash
+   ./scripts/init-zcode-tls.sh
+   ./scripts/init-zcode-override.sh
+   ```
+
+5. Validate and start. Compose builds `ai-sse-keepalive-proxy:latest` locally from pinned submodule `middleware/ai-sse-keepalive-proxy`; it never pulls middleware from GHCR:
 
    ```bash
    git submodule update --init --recursive
@@ -139,7 +146,15 @@ Leave that internal CPA account without a Sub2API proxy. For every Sub2API accou
 
 ### Production-only ZCode
 
-Do not maintain a downstream ZCode branch. Pin the official release image by manifest digest in the ignored `.env` and create the ignored production override with `./scripts/init-zcode-override.sh`. The override uses a `zcode-egress-tunnel` namespace owner based on the pinned `TUN2PROXY_IMAGE`, with `network_mode: service:zcode-egress-tunnel` on ZCode. The tunnel receives only `/dev/net/tun` and `NET_ADMIN`; it is not privileged and never changes host firewall or routing state.
+Do not maintain a downstream ZCode branch. Pin official release image by manifest digest in ignored `.env`. CPA reaches ZCode at exactly `https://zcode-proxy:8080/v1`; every matching production `api-key-entries[]` remains `proxy-url: direct`, so global CPA proxy still applies only to Internet providers.
+
+Run `./scripts/init-zcode-tls.sh` before `./scripts/init-zcode-override.sh`. Initializer creates ignored `data/zcode-tls/` mode `0700`, cryptographically self-signed dedicated CA, leaf certificate with exact `DNS:zcode-proxy` SAN, `serverAuth`, basic-constraints, and key-usage profiles, combined CPA trust bundle, and exactly one `data/cpa/auths/zcode-planner.json` using runtime `ZCODE_PROXY_API_KEY`. Dedicated CA, relay leaf certificate, and egress inspection CA have pairwise-distinct public keys. The dedicated CA private key stays host-only mode `0600`; neither it, the egress CA key, nor an equivalent key is ever mounted as the relay leaf key. Leaf key/certificate and combined bundle use mode `0444` for direct read-only mounts by unprivileged container UIDs; public CA certificate is nonsecret and also `0444`, while parent directory remains inaccessible at mode `0700`.
+
+Initializer is idempotent and fail-closed: partial files, mismatched or reused keys, bad chain/SAN/usages, near expiry, duplicate/mismatched planner auth, token drift, or CA reuse stop operation. Init mode atomically refreshes derived combined trust bundle when source public trust changes; `--check` rejects stale or mismatched bundle without modifying it. It never prints token. Rotate by stopping coupled stack, moving entire `data/zcode-tls/` and `data/cpa/auths/zcode-planner.json` aside under protected backup, rerunning initializer, validating, then recreating coupled stack. Do not delete old protected material until acceptance. Rollback from HTTPS to the prior plaintext relay is one coordinated restore: restore the old `data/cpa/conf/config.yaml`, complete old CPA auth identity/file set, and prior `compose.override.yaml` together; restore/remove candidate TLS material as recorded in the rollback receipt. Never mix the HTTPS config or planner auth with the plaintext override, or vice versa.
+
+Generated override terminates TLS >=1.2 in existing nonroot/read-only/capability-free `cpa-zcode-relay`, then forwards plaintext only across isolated target network to ZCode `:8080`. CPA receives combined public trust at existing trust target; ZCode API-key authentication remains unchanged. Relay mounts only leaf certificate/key; dedicated CA key stays host-only and dedicated public CA reaches CPA only through combined trust bundle.
+
+Override uses a `zcode-egress-tunnel` namespace owner based on pinned `TUN2PROXY_IMAGE`, with `network_mode: service:zcode-egress-tunnel` on ZCode. Tunnel receives only `/dev/net/tun` and `NET_ADMIN`; it is not privileged and never changes host firewall or routing state.
 
 Use `--dns virtual` and mount an ignored `data/egress-proxy/virtual-resolv.conf` containing only:
 
@@ -150,7 +165,7 @@ options ndots:0
 
 Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. Do not bind a host file over the tunnel owner's `/etc/resolv.conf`. The tunnel intentionally keeps only its disposable container layer writable because tun2proxy must rewrite Docker's runtime resolver file and clean up TUN state during startup and teardown; it has no persistent writable mount, remains unprivileged, and receives only `NET_ADMIN`. CPA reaches ZCode only through `cpa-zcode-relay`; the tunnel reaches Squid only through `zcode-squid-relay`. Each direction has separate two-member source and target networks, and a failed relay or tunnel loses connectivity instead of gaining direct Internet access.
 
-The tunnel uses `restart: "no"` deliberately. A ZCode process keeps the shared network namespace alive after the tunnel owner exits, so restarting only the owner cannot safely remove stale TUN state. Rebuild the pair in order instead of using `docker compose restart`:
+For recovery, treat CPA, `cpa-zcode-relay`, ZCode tunnel, and ZCode as one unit. A missing/expired/mismatched TLS file must keep path failed closed; repair initializer state, validate, then recreate coupled services. Tunnel still uses `restart: "no"` deliberately. A ZCode process keeps shared network namespace alive after tunnel owner exits, so restarting only owner cannot safely remove stale TUN state. Rebuild pair in order instead of `docker compose restart`:
 
 ```bash
 docker compose rm -s -f zcode-proxy
@@ -158,7 +173,7 @@ docker compose rm -s -f zcode-egress-tunnel
 docker compose up -d --no-build zcode-egress-tunnel zcode-proxy
 ```
 
-For the CPA entry targeting `http://zcode-proxy:8080/v1`, set `proxy-url: direct` on every item under that entry's `api-key-entries`; the provider object itself has no proxy field. The global CPA proxy is only for Internet destinations.
+For CPA entry targeting `https://zcode-proxy:8080/v1`, set `proxy-url: direct` on every item under entry's `api-key-entries`; provider object itself has no proxy field. Planner auth uses same exact HTTPS URL and `proxy_url: direct`. Its physical file deliberately stores the API key as metadata `token`: the selected Core stock `/api-call` resolves `metadata.token`, while file `metadata.api_key` is not projected into runtime auth attributes. The approved four-plugin Core E2E covers file-backed list/get/runtime identity plus `$TOKEN$` substitution. Global CPA proxy is only for Internet destinations.
 
 Sub2API admin UI is available at `http://127.0.0.1:8086`. For remote administration:
 
@@ -205,7 +220,7 @@ Persistent application state lives under ignored `data/`, including the egress C
 ./scripts/validate.sh .env.example # tracked template only
 ```
 
-Validation renders Compose and enforces exact per-edge socat commands, two-member source/target membership, fixed internal addresses, nonroot/read-only/capability-free relays, AI SSE middleware submodule/gitlink/local build/image metadata, engine-neutral host publication, startup wrappers, external image digests, and sole-egress membership. Base rendering has 26 services and 24 networks; optional ZCode rendering has 30 services and 28 networks. `test-socat-boundary.sh` proves TCP and UDP forwarding, 256 simultaneous held-open TCP connections, blocked target→source initiation, zero effective relay capabilities, and cleanup. The 512-PID/64-MiB relay bounds leave parent and supervisor headroom above that tested capacity; UDP remains test-only until a real production UDP contract exists. The egress tests keep exact `/dev/net/tun`+`NET_ADMIN` by default; hosted CI labels an explicit privileged runtime-test mode while static Compose validation still rejects privileged production services.
+Validation renders Compose and enforces exact per-edge socat commands, two-member source/target membership, fixed internal addresses, nonroot/read-only/capability-free relays, AI SSE middleware submodule/gitlink/local build/image metadata, ZCode TLS mounts/trust/key ownership, engine-neutral host publication, startup wrappers, external image digests, and sole-egress membership. Base rendering has 26 services and 24 networks; optional ZCode rendering has 30 services and 28 networks. `test-zcode-tls-boundary.sh` builds temporary dedicated identity/auth state; exercises exact certificate profiles and key separation, planner-compatible provider/type and URL ambiguity, disabled identity, malformed active identity, token drift, near-expiry rejection, and stale-bundle behavior; then proves trusted HTTPS forwarding, wrong-CA/name and plaintext rejection, TLS 1.2 minimum, blocked reverse initiation, stopped-relay bypass denial, relay hardening, cleanup, and leaf-only mounts. `test-socat-boundary.sh` separately proves TCP and UDP forwarding, 256 simultaneous held-open TCP connections, blocked target→source initiation, zero effective relay capabilities, and cleanup. The 512-PID/64-MiB relay bounds leave parent and supervisor headroom above that tested capacity; UDP remains test-only until a real production UDP contract exists. Egress tests keep exact `/dev/net/tun`+`NET_ADMIN` by default; hosted CI labels an explicit privileged runtime-test mode while static Compose validation still rejects privileged production services.
 
 ## Layout
 
@@ -231,11 +246,14 @@ Validation renders Compose and enforces exact per-edge socat commands, two-membe
 ├── scripts/
 │   ├── init.sh
 │   ├── init-egress-proxy.sh
+│   ├── init-zcode-tls.sh
 │   ├── init-zcode-override.sh
 │   ├── render-egress-policy.py
 │   ├── test-egress-proxy.sh
 │   ├── test-netns-guard.sh
 │   ├── test-socat-boundary.sh
+│   ├── test-zcode-compose-candidate.sh
+│   ├── test-zcode-tls-boundary.sh
 │   └── validate.sh
 ├── .env.example
 └── compose.yaml

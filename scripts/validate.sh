@@ -167,8 +167,20 @@ if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
 fi
 
 compose_args=(-f "$root/compose.yaml")
-if [ -f "$root/compose.override.yaml" ]; then
-  compose_args+=(-f "$root/compose.override.yaml")
+override_file=${AI_GATEWAY_COMPOSE_OVERRIDE:-}
+if [ -n "$override_file" ]; then
+  [ -f "$override_file" ] || { echo "missing AI_GATEWAY_COMPOSE_OVERRIDE: $override_file" >&2; exit 1; }
+  compose_args+=(-f "$override_file")
+elif [ -f "$root/compose.override.yaml" ]; then
+  override_file=$root/compose.override.yaml
+  compose_args+=(-f "$override_file")
+fi
+if [ -n "$override_file" ] && grep -Eq '^[[:space:]]{2}zcode-proxy:' "$override_file"; then
+  tls_check_env=()
+  for variable in ZCODE_TLS_DIR ZCODE_CPA_AUTH_DIR ZCODE_ENV_FILE ZCODE_EGRESS_CA_CERT ZCODE_EGRESS_CA_BUNDLE; do
+    [ -z "${!variable:-}" ] || tls_check_env+=("$variable=${!variable}")
+  done
+  env "${tls_check_env[@]}" ./scripts/init-zcode-tls.sh --check >/dev/null
 fi
 docker compose "${compose_args[@]}" --env-file "$env_file" config --quiet
 rendered=$tmpdir/compose
@@ -202,22 +214,91 @@ has_zcode = "zcode-proxy" in services
 
 if sys.argv[3] == "1" and has_zcode:
     lines = Path("data/cpa/conf/config.yaml").read_text().splitlines()
-    matches = [index for index, line in enumerate(lines) if re.match(r'^\s{4}base-url:\s*["\']?http://zcode-proxy:8080/v1["\']?\s*$', line)]
+    old_matches = [line for line in lines if re.match(r'^\s{4}base-url:\s*["\']?http://zcode-proxy:8080/v1/?["\']?\s*$', line, re.IGNORECASE)]
+    if old_matches:
+        raise SystemExit("CPA config still contains plaintext ZCode base URL")
+    base_matches = [line for line in lines if re.match(r'^\s{4}base-url:\s*["\']?https://zcode-proxy:8080/v1["\']?\s*$', line)]
+    for base in base_matches:
+        if base.count("https://zcode-proxy:8080/v1") != 1:
+            raise SystemExit("malformed ZCode HTTPS base URL")
+
+    auth_dir = Path("data/cpa/auths")
+    planner_matches = []
+
+    def strict_object(pairs):
+        value = {}
+        seen = set()
+        for key, item in pairs:
+            folded = key.casefold()
+            if folded in seen:
+                raise ValueError("duplicate JSON key")
+            seen.add(folded)
+            value[key] = item
+        return value
+
+    def accepted_type(value):
+        if not isinstance(value, str):
+            return False
+        value = value.strip().lower()
+        return value == "openai-compatibility" or value.startswith("openai-compatible-") or value.startswith("openai-compatibility:")
+
+    def normalize_base_url(raw):
+        from urllib.parse import urlsplit, urlunsplit
+        if not isinstance(raw, str):
+            raise ValueError("missing base_url")
+        parsed = urlsplit(raw.strip())
+        port = parsed.port
+        host = parsed.hostname
+        if parsed.scheme.lower() != "https" or not host or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+            raise ValueError("invalid base_url")
+        host = host.lower()
+        if ":" in host:
+            host = f"[{host}]"
+        if port not in (None, 443):
+            host += f":{port}"
+        path = "" if parsed.path == "/" else parsed.path.rstrip("/")
+        return urlunsplit(("https", host, path, "", ""))
+
+    for path in auth_dir.glob("*.json"):
+        try:
+            raw = path.read_text()
+            loose = json.loads(raw)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(loose, dict) or loose.get("disabled") is True or not accepted_type(loose.get("type")):
+            continue
+        try:
+            value = json.loads(raw, object_pairs_hook=strict_object)
+        except (json.JSONDecodeError, ValueError) as error:
+            raise SystemExit(f"active OpenAI-compatible CPA auth is not strict JSON: {path.name}") from error
+        try:
+            normalized_base = normalize_base_url(value.get("base_url"))
+        except ValueError as error:
+            raise SystemExit(f"active OpenAI-compatible CPA auth has invalid base_url: {path.name}") from error
+        if normalized_base == "https://zcode-proxy:8080/v1":
+            planner_matches.append((path, value))
+    if len(planner_matches) != 1:
+        raise SystemExit("CPA auth directory must contain exactly one HTTPS ZCode planner auth")
+    _, planner = planner_matches[0]
+    if planner.get("proxy_url") != "direct" or not isinstance(planner.get("token"), str) or not planner["token"]:
+        raise SystemExit("ZCode planner auth must contain nonempty token and proxy_url direct")
+
+    matches = [index for index, line in enumerate(lines) if re.match(r'^\s{4}base-url:\s*["\']?https://zcode-proxy:8080/v1["\']?\s*$', line)]
     if len(matches) != 1:
-        raise SystemExit("CPA must contain exactly one internal ZCode compatibility entry")
-    base = matches[0]
-    start = max(index for index in range(base, -1, -1) if re.match(r'^\s{2}-\s+name:', lines[index]))
-    end = next((index for index in range(base + 1, len(lines)) if re.match(r'^\s{2}-\s+name:', lines[index])), len(lines))
-    block = lines[start:end]
-    if any(re.match(r'^\s{4}proxy-url:', line) for line in block):
-        raise SystemExit("ZCode direct routing must be set per API key, not on the provider")
-    keys = [index for index, line in enumerate(block) if re.match(r'^\s{6}-\s+api-key:', line)]
-    if not keys:
-        raise SystemExit("ZCode compatibility entry has no API keys")
-    for key in keys:
-        key_end = next((index for index in range(key + 1, len(block)) if len(block[index]) - len(block[index].lstrip()) <= 6), len(block))
-        if not any(re.match(r'^\s{8}proxy-url:\s*["\']?direct["\']?\s*$', line) for line in block[key + 1:key_end]):
-            raise SystemExit("every ZCode API key must set proxy-url: direct")
+        raise SystemExit("CPA config must contain exactly one HTTPS ZCode compatibility entry")
+    for base in matches:
+        start = max(index for index in range(base, -1, -1) if re.match(r'^\s{2}-\s+name:', lines[index]))
+        end = next((index for index in range(base + 1, len(lines)) if re.match(r'^\s{2}-\s+name:', lines[index])), len(lines))
+        block = lines[start:end]
+        if any(re.match(r'^\s{4}proxy-url:', line) for line in block):
+            raise SystemExit("ZCode direct routing must be set per API key, not on the provider")
+        keys = [index for index, line in enumerate(block) if re.match(r'^\s{6}-\s+api-key:', line)]
+        if not keys:
+            raise SystemExit("ZCode compatibility entry has no API keys")
+        for key in keys:
+            key_end = next((index for index in range(key + 1, len(block)) if len(block[index]) - len(block[index].lstrip()) <= 6), len(block))
+            if not any(re.match(r'^\s{8}proxy-url:\s*["\']?direct["\']?\s*$', line) for line in block[key + 1:key_end]):
+                raise SystemExit("every ZCode API key must set proxy-url: direct")
 
 base_services = {
     "egress-proxy", "cpa-host-netns", "cpa-host-relay", "cpa-netns", "cli-proxy-api", "cpa-squid-relay",
@@ -541,7 +622,7 @@ commands = {
  "sub2api-squid-relay": ("172.30.19.3",3128,"172.30.20.2",3128),
 }
 if has_zcode:
- commands.update({"cpa-zcode-relay":("172.30.21.3",8080,"172.30.22.2",8080),"zcode-squid-relay":("172.30.23.3",3128,"172.30.24.2",3128)})
+ commands.update({"zcode-squid-relay":("172.30.23.3",3128,"172.30.24.2",3128)})
 for relay,(bind,bport,target,tport) in commands.items():
     cfg=services[relay]
     listener = f"TCP4-LISTEN:{bport},reuseaddr,fork" if bind is None else f"TCP4-LISTEN:{bport},bind={bind},reuseaddr,fork"
@@ -553,6 +634,20 @@ for relay,(bind,bport,target,tport) in commands.items():
     if "no-new-privileges:true" not in cfg.get("security_opt",[]) or cfg.get("api") or cfg.get("metrics"):
         raise SystemExit(f"{relay} exposes extra control surface")
     require_relay_capacity(relay, cfg)
+
+if has_zcode:
+    relay = services["cpa-zcode-relay"]
+    expected_tls_command = [
+        "OPENSSL-LISTEN:8080,bind=172.30.21.3,reuseaddr,fork,cert=/run/zcode-tls/server.crt,key=/run/zcode-tls/server.key,verify=0,openssl-min-proto-version=TLS1.2",
+        "TCP4:172.30.22.2:8080,connect-timeout=10",
+    ]
+    if normalized(relay.get("command", [])) != expected_tls_command:
+        raise SystemExit("cpa-zcode-relay TLS command mismatch")
+    if str(relay.get("user")) != "65534:65534" or relay.get("read_only") is not True or set(relay.get("cap_drop", [])) != {"ALL"} or relay.get("cap_add"):
+        raise SystemExit("cpa-zcode-relay hardening mismatch")
+    if "no-new-privileges:true" not in relay.get("security_opt", []) or relay.get("api") or relay.get("metrics"):
+        raise SystemExit("cpa-zcode-relay exposes extra control surface")
+    require_relay_capacity("cpa-zcode-relay", relay)
 
 cpa_host = services["cpa-host-relay"]
 cpa_host_command="\n".join(normalized(cpa_host.get("command",[])))
@@ -613,9 +708,17 @@ for service,proxy in (("cli-proxy-api","http://cpa-egress-relay:3128"),("sub2api
     if env.get("HTTP_PROXY")!=proxy or env.get("HTTPS_PROXY")!=proxy:
         raise SystemExit(f"{service} must use its source-side Squid relay")
     if "/etc/ssl/certs/ai-gateway-ca-bundle.pem" not in volume_targets(services[service]):
-        raise SystemExit(f"{service} must receive only public inspection trust")
+        raise SystemExit(f"{service} must receive only public trust")
+if has_zcode:
+    cpa_mounts = services["cli-proxy-api"].get("volumes", [])
+    trust_sources = [str(v.get("source")) if isinstance(v, dict) else str(v).split(":", 1)[0] for v in cpa_mounts if (v.get("target") if isinstance(v, dict) else (str(v).split(":")[1] if ":" in str(v) else "")) == "/etc/ssl/certs/ai-gateway-ca-bundle.pem"]
+    if len(trust_sources) != 1 or not trust_sources[0].endswith("/data/zcode-tls/cpa-ca-bundle.pem"):
+        raise SystemExit("CPA must override trust with the combined ZCode bundle")
+    relay_targets = volume_targets(services["cpa-zcode-relay"])
+    if relay_targets != {"/run/zcode-tls/server.crt", "/run/zcode-tls/server.key"}:
+        raise SystemExit("cpa-zcode-relay TLS mounts mismatch")
 if "ai-sse-keepalive-ingress-relay:8080" not in Path("apisix/apisix.yaml").read_text():
-    raise SystemExit("APISIX upstream must target its dedicated relay")
+    raise SystemExit("APISIX upstream must target its dedicated AI SSE relay")
 if sys.argv[3]=="1":
     squid=Path("data/egress-proxy/generated/squid.conf").read_text()
     required={"172.30.18.2:3128":"cpa","172.30.20.2:3128":"sub2api","172.30.24.2:3128":"zcode" if has_zcode else None}
@@ -641,7 +744,22 @@ if has_zcode:
     if zcode.get("ports") or tunnel.get("ports"): raise SystemExit("ZCode must not publish ports")
 
 key_holders={service for service,cfg in services.items() if "/etc/squid/ca.key" in volume_targets(cfg)}
-if key_holders!={"egress-proxy"}: raise SystemExit(f"private CA key holders: {key_holders}")
+if key_holders!={"egress-proxy"}: raise SystemExit(f"private egress CA key holders: {key_holders}")
+zcode_leaf_key_holders = set()
+for service, cfg in services.items():
+    for volume in cfg.get("volumes", []):
+        source = str(volume.get("source", "")) if isinstance(volume, dict) else str(volume).split(":", 1)[0]
+        target = str(volume.get("target", "")) if isinstance(volume, dict) else (str(volume).split(":")[1] if ":" in str(volume) else "")
+        if source.endswith("/data/zcode-tls/server.key"):
+            zcode_leaf_key_holders.add((service, target))
+expected_leaf_key_holders = {("cpa-zcode-relay", "/run/zcode-tls/server.key")} if has_zcode else set()
+if zcode_leaf_key_holders != expected_leaf_key_holders:
+    raise SystemExit(f"ZCode leaf key source mounts: {sorted(zcode_leaf_key_holders)}")
+for service,cfg in services.items():
+    for volume in cfg.get("volumes", []):
+        source = str(volume.get("source", "")) if isinstance(volume, dict) else str(volume).split(":", 1)[0]
+        if source.endswith("/data/zcode-tls/ca.key"):
+            raise SystemExit(f"dedicated ZCode CA private key mounted by {service}")
 PY
 ai_sse_image=ai-sse-keepalive-proxy:latest
 BUILDAH_FORMAT=docker docker compose "${compose_args[@]}" --env-file "$env_file" build ai-sse-keepalive-proxy >/dev/null
@@ -725,6 +843,7 @@ socat_image=$(value_from_env SOCAT_IMAGE)
   exit 1
 }
 "$root/scripts/test-socat-boundary.sh" "$socat_image"
+"$root/scripts/test-zcode-tls-boundary.sh" "$socat_image"
 
 netns_guard_image=$(value_from_env NETNS_GUARD_IMAGE)
 [ -n "$netns_guard_image" ] || netns_guard_image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
@@ -744,4 +863,4 @@ docker run --rm \
   "$apisix_image" apisix test >/dev/null
 
 if command -v shellcheck >/dev/null; then shellcheck scripts/*.sh egress-proxy/*.sh; fi
-echo 'compose=valid pairwise_networks=valid ai_sse_keepalive_proxy=valid egress_proxy=valid apisix=valid private_paths=untracked'
+echo 'compose=valid pairwise_networks=valid ai_sse_keepalive_proxy=valid egress_proxy=valid zcode_tls=valid apisix=valid private_paths=untracked'

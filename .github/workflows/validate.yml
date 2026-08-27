@@ -18,11 +18,7 @@ jobs:
         env:
           AI_GATEWAY_TUN_TEST_MODE: ci-privileged
         run: ./scripts/validate.sh .env.example
-      - name: Validate optional official ZCode namespace override
+      - name: Validate optional official ZCode TLS override
         env:
-          ZCODE_PROXY_CREDENTIAL_SECRET: test-only
-          ZCODE_PROXY_API_KEY: test-only
           AI_GATEWAY_TUN_TEST_MODE: ci-privileged
-        run: |
-          ./scripts/init-zcode-override.sh
-          ./scripts/validate.sh .env.example
+        run: ./scripts/test-zcode-compose-candidate.sh

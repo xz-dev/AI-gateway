@@ -39,7 +39,12 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    command: ["TCP4-LISTEN:8080,bind=172.30.21.3,reuseaddr,fork", "TCP4:172.30.22.2:8080,connect-timeout=10"]
+    command: ["OPENSSL-LISTEN:8080,bind=172.30.21.3,reuseaddr,fork,cert=/run/zcode-tls/server.crt,key=/run/zcode-tls/server.key,verify=0,openssl-min-proto-version=TLS1.2", "TCP4:172.30.22.2:8080,connect-timeout=10"]
+    volumes:
+      # Parent host directory stays 0700. Direct bind-mounted leaf certificate
+      # and key are 0444 so unprivileged UID 65534 can read mounted inodes.
+      - ./data/zcode-tls/server.crt:/run/zcode-tls/server.crt:ro,z
+      - ./data/zcode-tls/server.key:/run/zcode-tls/server.key:ro,z
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
@@ -159,6 +164,8 @@ services:
         restart: true
     environment:
       NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,cpa-egress-relay,zcode-proxy
+    volumes:
+      - ./data/zcode-tls/cpa-ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
 
 networks:
   cpa-zcode-source:
