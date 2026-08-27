@@ -60,10 +60,10 @@ if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
     echo 'virtual-resolv.conf must have mode 444' >&2
     exit 1
   }
-  [ "$(stat -c %a data/egress-proxy/tunnel-resolv.conf)" = 600 ] || {
-    echo 'tunnel-resolv.conf must have mode 600' >&2
-    exit 1
-  }
+  case $(stat -c %a data/egress-proxy/tunnel-resolv.conf) in
+    600|444) ;;
+    *) echo 'tunnel-resolv.conf must have init mode 600 or runtime mode 444' >&2; exit 1 ;;
+  esac
   [ "$(stat -c %u data/egress-proxy/tunnel-resolv.conf)" = "$(id -u)" ] || {
     echo 'tunnel-resolv.conf must be owned by the deployment user' >&2
     exit 1
