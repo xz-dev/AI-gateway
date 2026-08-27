@@ -136,7 +136,8 @@ Virtual DNS preserves the requested hostname for Squid CONNECT while preventing 
 The tunnel uses `restart: "no"` deliberately. A ZCode process keeps the shared network namespace alive after the tunnel owner exits, so restarting only the owner cannot safely remove stale TUN state. Rebuild the pair in order instead of using `docker compose restart`:
 
 ```bash
-docker compose rm -s -f zcode-proxy zcode-egress-tunnel
+docker compose rm -s -f zcode-proxy
+docker compose rm -s -f zcode-egress-tunnel
 docker compose up -d --no-build zcode-egress-tunnel zcode-proxy
 ```
 
