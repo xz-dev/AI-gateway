@@ -133,7 +133,7 @@ options ndots:0
 
 Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. CPA reaches ZCode only through `cpa-zcode-relay`; the tunnel reaches Squid only through `zcode-squid-relay`. Each direction has separate two-member source and target networks, and a failed relay or tunnel loses connectivity instead of gaining direct Internet access.
 
-For the CPA entry targeting `http://zcode-proxy:8080/v1`, set that entry's `proxy-url` to `direct`; the global CPA proxy is only for Internet destinations.
+For the CPA entry targeting `http://zcode-proxy:8080/v1`, set `proxy-url: direct` on every item under that entry's `api-key-entries`; the provider object itself has no proxy field. The global CPA proxy is only for Internet destinations.
 
 Sub2API admin UI is available at `http://127.0.0.1:8086`. For remote administration:
 

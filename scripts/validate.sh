@@ -170,6 +170,7 @@ runtime_mode=0
 if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then runtime_mode=1; fi
 python3 - "$rendered" "$rendered_format" "$runtime_mode" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -186,6 +187,25 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 services = compose["services"]
 networks = compose["networks"]
 has_zcode = "zcode-proxy" in services
+
+if sys.argv[3] == "1" and has_zcode:
+    lines = Path("data/cpa/conf/config.yaml").read_text().splitlines()
+    matches = [index for index, line in enumerate(lines) if re.match(r'^\s{4}base-url:\s*["\']?http://zcode-proxy:8080/v1["\']?\s*$', line)]
+    if len(matches) != 1:
+        raise SystemExit("CPA must contain exactly one internal ZCode compatibility entry")
+    base = matches[0]
+    start = max(index for index in range(base, -1, -1) if re.match(r'^\s{2}-\s+name:', lines[index]))
+    end = next((index for index in range(base + 1, len(lines)) if re.match(r'^\s{2}-\s+name:', lines[index])), len(lines))
+    block = lines[start:end]
+    if any(re.match(r'^\s{4}proxy-url:', line) for line in block):
+        raise SystemExit("ZCode direct routing must be set per API key, not on the provider")
+    keys = [index for index, line in enumerate(block) if re.match(r'^\s{6}-\s+api-key:', line)]
+    if not keys:
+        raise SystemExit("ZCode compatibility entry has no API keys")
+    for key in keys:
+        key_end = next((index for index in range(key + 1, len(block)) if len(block[index]) - len(block[index].lstrip()) <= 6), len(block))
+        if not any(re.match(r'^\s{8}proxy-url:\s*["\']?direct["\']?\s*$', line) for line in block[key + 1:key_end]):
+            raise SystemExit("every ZCode API key must set proxy-url: direct")
 
 base_services = {
     "egress-proxy", "cpa-host-netns", "cpa-host-relay", "cpa-netns", "cli-proxy-api", "cpa-squid-relay",
