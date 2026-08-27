@@ -33,9 +33,9 @@ x-socat-relay: &socat-relay
   image: ${SOCAT_IMAGE:-docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b}
   user: "65534:65534"
   restart: unless-stopped
-  pids_limit: 64
-  mem_limit: 32m
-  memswap_limit: 32m
+  pids_limit: 512
+  mem_limit: 64m
+  memswap_limit: 64m
   cpus: 0.2
   read_only: true
   cap_drop: [ALL]

@@ -180,7 +180,7 @@ Persistent application state lives under ignored `data/`, including the egress C
 ./scripts/validate.sh .env.example # tracked template only
 ```
 
-Validation renders Compose and enforces exact per-edge socat commands, two-member source/target membership, fixed internal addresses, nonroot/read-only/capability-free relays, engine-neutral host publication, startup wrappers, image digests, and sole-egress membership. `test-socat-boundary.sh` proves TCP and UDP forwarding, blocked target→source initiation, zero effective relay capabilities, and cleanup. UDP remains test-only until a real production UDP contract exists. The egress tests keep exact `/dev/net/tun`+`NET_ADMIN` by default; hosted CI labels an explicit privileged runtime-test mode while static Compose validation still rejects privileged production services.
+Validation renders Compose and enforces exact per-edge socat commands, two-member source/target membership, fixed internal addresses, nonroot/read-only/capability-free relays, engine-neutral host publication, startup wrappers, image digests, and sole-egress membership. `test-socat-boundary.sh` proves TCP and UDP forwarding, 256 simultaneous held-open TCP connections, blocked target→source initiation, zero effective relay capabilities, and cleanup. The 512-PID/64-MiB relay bounds leave parent and supervisor headroom above that tested capacity; UDP remains test-only until a real production UDP contract exists. The egress tests keep exact `/dev/net/tun`+`NET_ADMIN` by default; hosted CI labels an explicit privileged runtime-test mode while static Compose validation still rejects privileged production services.
 
 ## Layout
 

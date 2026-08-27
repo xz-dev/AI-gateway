@@ -237,6 +237,19 @@ def extra_hosts(config):
 def normalized(parts):
     return [str(part).replace("$$", "$") for part in parts]
 
+def memory_bytes(value):
+    text = str(value).lower()
+    if text.isdigit():
+        return int(text)
+    units = {"k":1024, "m":1024**2, "g":1024**3}
+    return int(text[:-1]) * units[text[-1]]
+
+def require_relay_capacity(service, config):
+    if int(config.get("pids_limit", 0)) != 512:
+        raise SystemExit(f"{service} must reserve PID headroom for streaming connections")
+    if memory_bytes(config.get("mem_limit", 0)) != 64 * 1024**2 or memory_bytes(config.get("memswap_limit", 0)) != 64 * 1024**2:
+        raise SystemExit(f"{service} must reserve memory for 256 concurrent connections")
+
 def require_dependency(service, dependency, restart=None):
     settings = services[service].get("depends_on", {}).get(dependency, {})
     if settings.get("condition") != "service_started":
@@ -487,6 +500,7 @@ for relay,(bind,bport,target,tport) in commands.items():
         raise SystemExit(f"{relay} hardening mismatch")
     if "no-new-privileges:true" not in cfg.get("security_opt",[]) or cfg.get("api") or cfg.get("metrics"):
         raise SystemExit(f"{relay} exposes extra control surface")
+    require_relay_capacity(relay, cfg)
 
 cpa_host = services["cpa-host-relay"]
 cpa_host_command="\n".join(normalized(cpa_host.get("command",[])))
@@ -500,6 +514,7 @@ if str(cpa_host.get("user"))!="65534:65534" or cpa_host.get("read_only") is not 
     raise SystemExit("CPA host relay hardening mismatch")
 if "no-new-privileges:true" not in cpa_host.get("security_opt",[]) or cpa_host.get("api") or cpa_host.get("metrics"):
     raise SystemExit("CPA host relay exposes extra control surface")
+require_relay_capacity("cpa-host-relay", cpa_host)
 
 expected_hosts = {
     "cpa-netns": {"cpa-egress-relay":"172.30.17.3"},

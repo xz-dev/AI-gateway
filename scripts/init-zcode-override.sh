@@ -32,9 +32,9 @@ services:
     depends_on:
       zcode-proxy:
         condition: service_started
-    pids_limit: 64
-    mem_limit: 32m
-    memswap_limit: 32m
+    pids_limit: 512
+    mem_limit: 64m
+    memswap_limit: 64m
     cpus: 0.2
     read_only: true
     cap_drop: [ALL]
@@ -137,9 +137,9 @@ services:
     depends_on:
       egress-proxy:
         condition: service_started
-    pids_limit: 64
-    mem_limit: 32m
-    memswap_limit: 32m
+    pids_limit: 512
+    mem_limit: 64m
+    memswap_limit: 64m
     cpus: 0.2
     read_only: true
     cap_drop: [ALL]
