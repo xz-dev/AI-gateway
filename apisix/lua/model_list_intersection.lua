@@ -17,7 +17,7 @@ local type = type
 
 local _M = {}
 
-local UPSTREAM_HOST = "sub2api-apisix"
+local UPSTREAM_HOST = "sub2api-apisix-relay"
 local UPSTREAM_PORT = 8080
 local BASIC_MAX_BYTES = 1024 * 1024
 local ORIGINAL_MAX_BYTES = 16 * 1024 * 1024

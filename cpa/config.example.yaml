@@ -15,7 +15,7 @@ remote-management:
 auth-dir: "/root/.cli-proxy-api"
 
 # Required because several provider transports do not consult HTTP_PROXY.
-proxy-url: "http://172.23.0.3:3128"
+proxy-url: "http://cpa-egress-relay:3128"
 
 api-keys:
   - "replace-with-generated-cpa-api-key"

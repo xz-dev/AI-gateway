@@ -88,7 +88,7 @@ done
 
 cpa_config=cpa/config.example.yaml
 if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then cpa_config=data/cpa/conf/config.yaml; fi
-grep -Eq '^proxy-url:[[:space:]]*"?http://172\.23\.0\.3:3128"?[[:space:]]*$' "$cpa_config" || {
+grep -Eq '^proxy-url:[[:space:]]*"?http://cpa-egress-relay:3128"?[[:space:]]*$' "$cpa_config" || {
   echo "$cpa_config must set the global pairwise proxy-url" >&2
   exit 1
 }
@@ -184,167 +184,90 @@ with open(sys.argv[1], encoding="utf-8") as handle:
         compose = yaml.safe_load(handle)
 
 services = compose["services"]
+networks = compose["networks"]
+has_zcode = "zcode-proxy" in services
+
+base_services = {
+    "egress-proxy", "cpa-host-netns", "cpa-host-relay", "cpa-netns", "cli-proxy-api", "cpa-squid-relay",
+    "postgres", "redis", "sub2api-host-netns", "sub2api-host-relay", "sub2api-netns", "sub2api",
+    "sub2api-cpa-relay", "sub2api-postgres-relay", "sub2api-redis-relay", "sub2api-squid-relay",
+    "apisix-host-netns", "apisix-host-relay", "apisix-netns", "apisix", "apisix-sub2api-relay",
+    "cloudflared-apisix-relay", "cloudflared",
+}
+optional_services = {"cpa-zcode-relay", "zcode-egress-tunnel", "zcode-proxy", "zcode-squid-relay"}
+expected_services = base_services | (optional_services if has_zcode else set())
+if set(services) != expected_services:
+    raise SystemExit(f"unexpected services: {sorted(set(services) ^ expected_services)}")
+if ("zcode-egress-tunnel" in services) != has_zcode:
+    raise SystemExit("ZCode and its namespace tunnel must be enabled together")
+if "default" in networks or compose.get("volumes"):
+    raise SystemExit("default network and persistent namespace volumes are forbidden")
+
+def image(config):
+    return str(config.get("image", ""))
+
+def require_image(service, repository, exact=None):
+    value = image(services[service])
+    if exact:
+        if value != exact:
+            raise SystemExit(f"{service} must use {exact}")
+    elif not value.startswith(repository + "@sha256:"):
+        raise SystemExit(f"{service} image must use {repository} pinned by digest")
+
 def volume_targets(config):
-    targets = set()
+    out = set()
     for volume in config.get("volumes", []):
-        if isinstance(volume, dict):
-            targets.add(volume.get("target"))
-        elif isinstance(volume, str):
-            parts = volume.split(":")
-            if len(parts) >= 2:
-                targets.add(parts[1])
-    return targets
+        if isinstance(volume, dict): out.add(volume.get("target"))
+        else:
+            parts = str(volume).split(":")
+            if len(parts) > 1: out.add(parts[1])
+    return out
 
 def extra_hosts(config):
-    result = {}
     value = config.get("extra_hosts", [])
     if isinstance(value, dict):
         return {str(name): str(address) for name, address in value.items()}
+    result = {}
     for item in value:
         separator = "=" if "=" in str(item) else ":"
         name, address = str(item).split(separator, 1)
         result[name] = address
     return result
 
-def require_pinned_image(config, repository):
-    image = config.get("image", "")
-    marker = "@sha256:"
-    if not image.startswith(repository + marker):
-        raise SystemExit(f"{repository} image must use its official repository and a digest")
-    digest = image.split(marker, 1)[1]
-    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-        raise SystemExit(f"invalid pinned image digest for {repository}")
+def normalized(parts):
+    return [str(part).replace("$$", "$") for part in parts]
 
-def require_dependency(config, dependency, condition, restart=None):
-    settings = config.get("depends_on", {}).get(dependency, {})
-    if settings.get("condition") != condition:
-        raise SystemExit(f"dependency {dependency} must use {condition}")
+def require_dependency(service, dependency, restart=None):
+    settings = services[service].get("depends_on", {}).get(dependency, {})
+    if settings.get("condition") != "service_started":
+        raise SystemExit(f"{service}->{dependency} must use service_started")
     if restart is not None and settings.get("restart") is not restart:
-        raise SystemExit(f"dependency {dependency} restart must be {restart}")
+        raise SystemExit(f"{service}->{dependency} restart must be {restart}")
 
-expected = {
-    "egress-proxy": {"cpa-egress", "sub2api-egress", "proxy-egress"},
-    "cpa-netns": {"cpa-sub2api", "cpa-egress", "cpa-host"},
-    "cli-proxy-api": set(),
-    "postgres": {"postgres-sub2api"},
-    "redis": {"redis-sub2api"},
-    "sub2api-netns": {"cpa-sub2api", "postgres-sub2api", "redis-sub2api", "sub2api-egress", "sub2api-apisix", "sub2api-host"},
-    "sub2api": set(),
-    "apisix-netns": {"sub2api-apisix", "apisix-cloudflared", "apisix-host"},
-    "apisix": set(),
-    "cloudflared": {"apisix-cloudflared", "cloudflare-egress"},
-}
-has_zcode = "zcode-proxy" in services
-has_zcode_tunnel = "zcode-egress-tunnel" in services
-if has_zcode != has_zcode_tunnel:
-    raise SystemExit("zcode-proxy and zcode-egress-tunnel must be enabled together")
-if sys.argv[3] == "1":
-    squid_lines = Path("data/egress-proxy/generated/squid.conf").read_text().splitlines()
-    required_listeners = {
-        "http_port 172.23.0.3:3128 name=cpa": True,
-        "http_port 172.24.0.3:3128 name=sub2api": True,
-        "http_port 172.25.0.3:3128 name=zcode": has_zcode,
-    }
-    for prefix, required in required_listeners.items():
-        present = any(line.startswith(prefix + " ") for line in squid_lines)
-        if present != required:
-            raise SystemExit(f"runtime listener parity mismatch for {prefix}")
-if has_zcode:
-    expected["egress-proxy"].add("zcode-egress")
-    expected["cpa-netns"].add("zcode-cpa")
-    expected["zcode-egress-tunnel"] = {"zcode-cpa", "zcode-egress"}
-    expected["zcode-proxy"] = set()
-if set(services) != set(expected):
-    raise SystemExit(f"unexpected services: {sorted(set(services) ^ set(expected))}")
 for service, repository in {
-    "cli-proxy-api": "ghcr.io/xz-dev/cli-proxy-api",
-    "sub2api": "ghcr.io/wei-shaw/sub2api",
-    "apisix": "docker.io/apache/apisix",
-    "postgres": "docker.io/library/postgres",
-    "redis": "docker.io/library/redis",
-    "cloudflared": "docker.io/cloudflare/cloudflared",
-}.items():
-    require_pinned_image(services[service], repository)
-for service in ("cpa-netns", "sub2api-netns", "apisix-netns"):
-    require_pinned_image(services[service], "docker.io/library/alpine")
-for service, networks in expected.items():
-    actual = set(services[service].get("networks") or {})
-    if actual != networks:
-        raise SystemExit(f"{service} networks {sorted(actual)} != {sorted(networks)}")
-
-members = {
-    network: {service for service, config in services.items() if network in config.get("networks", {})}
-    for network in compose["networks"]
-}
-expected_members = {
-    "cpa-sub2api": {"cpa-netns", "sub2api-netns"},
-    "postgres-sub2api": {"postgres", "sub2api-netns"},
-    "redis-sub2api": {"redis", "sub2api-netns"},
-    "sub2api-apisix": {"sub2api-netns", "apisix-netns"},
-    "apisix-cloudflared": {"apisix-netns", "cloudflared"},
-    "cpa-egress": {"cpa-netns", "egress-proxy"},
-    "sub2api-egress": {"sub2api-netns", "egress-proxy"},
-    "cpa-host": {"cpa-netns"},
-    "sub2api-host": {"sub2api-netns"},
-    "apisix-host": {"apisix-netns"},
-    "proxy-egress": {"egress-proxy"},
-    "cloudflare-egress": {"cloudflared"},
-}
-if has_zcode:
-    expected_members["zcode-cpa"] = {"zcode-egress-tunnel", "cpa-netns"}
-    expected_members["zcode-egress"] = {"zcode-egress-tunnel", "egress-proxy"}
-if members != expected_members:
-    raise SystemExit(f"network membership mismatch: {members!r}")
-if "default" in compose["networks"]:
-    raise SystemExit("implicit default network is forbidden")
-if compose.get("volumes"):
-    raise SystemExit("namespace route guards must not require persistent volumes")
-internal_networks = ["cpa-sub2api", "postgres-sub2api", "redis-sub2api", "sub2api-apisix", "apisix-cloudflared", "cpa-egress", "sub2api-egress"]
-if has_zcode:
-    internal_networks += ["zcode-cpa", "zcode-egress"]
-for network in internal_networks:
-    if compose["networks"][network].get("internal") is not True:
-        raise SystemExit(f"{network} must be internal")
-for network in ("cpa-host", "sub2api-host", "apisix-host"):
-    config = compose["networks"][network] or {}
-    if config.get("internal") is True or config.get("driver_opts"):
-        raise SystemExit(f"{network} must be an engine-neutral port-publication bridge")
-addresses = [
-    ("egress-proxy", "cpa-egress", "172.23.0.3"),
-    ("cpa-netns", "cpa-egress", "172.23.0.2"),
-    ("cpa-netns", "cpa-sub2api", "172.27.0.2"),
-    ("sub2api-netns", "cpa-sub2api", "172.27.0.3"),
-    ("postgres", "postgres-sub2api", "172.28.0.2"),
-    ("sub2api-netns", "postgres-sub2api", "172.28.0.3"),
-    ("redis", "redis-sub2api", "172.29.1.2"),
-    ("sub2api-netns", "redis-sub2api", "172.29.1.3"),
-    ("egress-proxy", "sub2api-egress", "172.24.0.3"),
-    ("sub2api-netns", "sub2api-egress", "172.24.0.2"),
-    ("sub2api-netns", "sub2api-apisix", "172.22.0.2"),
-    ("apisix-netns", "sub2api-apisix", "172.22.0.3"),
-    ("apisix-netns", "apisix-cloudflared", "172.21.0.3"),
-    ("cloudflared", "apisix-cloudflared", "172.21.0.2"),
-]
-if has_zcode:
-    addresses += [
-        ("egress-proxy", "zcode-egress", "172.25.0.3"),
-        ("zcode-egress-tunnel", "zcode-egress", "172.25.0.2"),
-        ("zcode-egress-tunnel", "zcode-cpa", "172.26.0.2"),
-        ("cpa-netns", "zcode-cpa", "172.26.0.3"),
-    ]
-for service, network, address in addresses:
-    actual = services[service]["networks"][network].get("ipv4_address")
-    if actual != address:
-        raise SystemExit(f"{service}/{network} address {actual!r} != {address!r}")
+    "cli-proxy-api":"ghcr.io/xz-dev/cli-proxy-api", "sub2api":"ghcr.io/wei-shaw/sub2api",
+    "apisix":"docker.io/apache/apisix", "postgres":"docker.io/library/postgres",
+    "redis":"docker.io/library/redis", "cloudflared":"docker.io/cloudflare/cloudflared",
+}.items(): require_image(service, repository)
+for service in ("cpa-netns", "sub2api-netns", "apisix-netns", "cpa-host-netns", "sub2api-host-netns", "apisix-host-netns"):
+    require_image(service, "docker.io/library/alpine")
+socat_image = "docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b"
+relays = {
+    "cpa-squid-relay", "sub2api-host-relay", "sub2api-cpa-relay", "sub2api-postgres-relay",
+    "sub2api-redis-relay", "sub2api-squid-relay", "apisix-host-relay", "apisix-sub2api-relay",
+    "cloudflared-apisix-relay",
+} | ({"cpa-zcode-relay", "zcode-squid-relay"} if has_zcode else set())
+for relay in relays: require_image(relay, "docker.io/alpine/socat", socat_image)
+require_image("cpa-host-relay", "docker.io/alpine/socat", socat_image)
 
 expected_owner_command = [
-    "/bin/sh",
-    "-ec",
+    "/bin/sh", "-ec",
     "while ip -4 route show default | grep -q .; do ip -4 route del default; done; "
     "while ip -6 route show default | grep -q .; do ip -6 route del default; done; "
     'test -z "$(ip -4 route show default)"; test -z "$(ip -6 route show default)"; '
     "exec su nobody -s /bin/sh -c 'exec sleep infinity'",
 ]
+app_owners = {"cli-proxy-api":"cpa-netns", "sub2api":"sub2api-netns", "apisix":"apisix-netns"}
 app_commands = {
     "cli-proxy-api": (
         ["/bin/bash", "-ec"],
@@ -365,164 +288,267 @@ app_commands = {
         "do sleep 0.05; done; exec /docker-entrypoint.sh docker-start",
     ),
 }
-def normalized_command(parts):
-    # Docker Compose preserves escaped dollars in `config --format json`,
-    # while podman-compose emits the runtime single-dollar form.
-    return [str(part).replace("$$", "$") for part in parts]
-
-for owner_name, app_name in (
-    ("cpa-netns", "cli-proxy-api"),
-    ("sub2api-netns", "sub2api"),
-    ("apisix-netns", "apisix"),
+for owner in ("cpa-netns", "sub2api-netns", "apisix-netns", "cpa-host-netns", "sub2api-host-netns", "apisix-host-netns"):
+    cfg=services[owner]
+    if cfg.get("read_only") is not True or set(cfg.get("cap_drop",[])) != {"ALL"} or set(cfg.get("cap_add",[])) != {"NET_ADMIN","SETGID","SETUID"}:
+        raise SystemExit(f"{owner} namespace hardening mismatch")
+    if cfg.get("privileged") is True or "no-new-privileges:true" not in cfg.get("security_opt",[]):
+        raise SystemExit(f"{owner} must not be privileged")
+    if normalized(cfg.get("command",[])) != expected_owner_command:
+        raise SystemExit(f"{owner} must remove default routes and drop privilege")
+for app, owner in app_owners.items():
+    cfg = services[app]
+    if cfg.get("network_mode") != f"service:{owner}" or cfg.get("ports"):
+        raise SystemExit(f"{app} must share only {owner} network namespace")
+    entrypoint, command = app_commands[app]
+    if normalized(cfg.get("entrypoint", [])) != entrypoint or normalized(cfg.get("command", [])) != [command]:
+        raise SystemExit(f"{app} must preserve its route guard and upstream entrypoint")
+    require_dependency(app, owner, True)
+for owner, relay in (("cpa-host-netns","cpa-host-relay"),("sub2api-host-netns","sub2api-host-relay"),("apisix-host-netns","apisix-host-relay")):
+    if not services[owner].get("ports") or services[relay].get("network_mode") != f"service:{owner}" or services[relay].get("networks"):
+        raise SystemExit(f"{relay} must share only published namespace {owner}")
+    require_dependency(relay, owner, True)
+for service, dependency, restart in (
+    ("cli-proxy-api", "cpa-host-relay", None),
+    ("cli-proxy-api", "cpa-squid-relay", True),
+    ("sub2api", "sub2api-host-relay", None),
+    ("sub2api", "sub2api-cpa-relay", True),
+    ("sub2api", "sub2api-postgres-relay", True),
+    ("sub2api", "sub2api-redis-relay", True),
+    ("sub2api", "sub2api-squid-relay", True),
+    ("apisix", "apisix-host-relay", None),
+    ("apisix", "apisix-sub2api-relay", True),
+    ("cloudflared", "cloudflared-apisix-relay", True),
+    ("cpa-squid-relay", "egress-proxy", None),
+    ("sub2api-squid-relay", "egress-proxy", None),
+    ("sub2api-cpa-relay", "cli-proxy-api", None),
+    ("sub2api-postgres-relay", "postgres", None),
+    ("sub2api-redis-relay", "redis", None),
+    ("apisix-sub2api-relay", "sub2api", None),
+    ("cloudflared-apisix-relay", "apisix", None),
 ):
-    owner = services[owner_name]
-    app = services[app_name]
-    if owner.get("read_only") is not True or set(owner.get("cap_drop", [])) != {"ALL"}:
-        raise SystemExit(f"{owner_name} must be a read-only namespace owner")
-    if set(owner.get("cap_add", [])) != {"NET_ADMIN", "SETGID", "SETUID"}:
-        raise SystemExit(f"{owner_name} must receive only route setup and privilege-drop capabilities")
-    if owner.get("privileged") is True or "no-new-privileges:true" not in owner.get("security_opt", []):
-        raise SystemExit(f"{owner_name} must be unprivileged with no-new-privileges")
-    if normalized_command(owner.get("command", [])) != expected_owner_command:
-        raise SystemExit(f"{owner_name} must remove default routes and drop privilege")
-    if not owner.get("ports") or app.get("ports"):
-        raise SystemExit(f"{owner_name} alone must own {app_name} host publications")
-    if app.get("network_mode") != f"service:{owner_name}":
-        raise SystemExit(f"{app_name} must share {owner_name} network namespace")
-    entrypoint, command = app_commands[app_name]
-    if normalized_command(app.get("entrypoint", [])) != entrypoint:
-        raise SystemExit(f"{app_name} must wait for namespace hardening before startup")
-    if normalized_command(app.get("command", [])) != [command]:
-        raise SystemExit(f"{app_name} startup command must preserve its upstream entrypoint after the guard")
-    require_dependency(app, owner_name, "service_started", True)
-
-for service, config in services.items():
-    for dependency, settings in config.get("depends_on", {}).items():
+    require_dependency(service, dependency, restart)
+if has_zcode:
+    for service, dependency, restart in (
+        ("cli-proxy-api", "cpa-zcode-relay", True),
+        ("cpa-zcode-relay", "zcode-proxy", None),
+        ("zcode-egress-tunnel", "zcode-squid-relay", True),
+        ("zcode-proxy", "zcode-egress-tunnel", True),
+        ("zcode-squid-relay", "egress-proxy", None),
+    ):
+        require_dependency(service, dependency, restart)
+for service, cfg in services.items():
+    if service not in ("cpa-host-netns","sub2api-host-netns","apisix-host-netns") and cfg.get("ports"):
+        raise SystemExit(f"only host ingress namespace owners may publish ports: {service}")
+    if cfg.get("privileged") is True:
+        raise SystemExit(f"production service must not be privileged: {service}")
+    for dependency, settings in cfg.get("depends_on",{}).items():
         if settings.get("condition") == "service_healthy":
-            raise SystemExit(f"{service} dependency {dependency} uses non-portable service_healthy")
+            raise SystemExit(f"{service}->{dependency} uses nonportable service_healthy")
 
-for service, network, alias in (
-    ("cpa-netns", "cpa-sub2api", "cli-proxy-api"),
-    ("sub2api-netns", "cpa-sub2api", "sub2api"),
-    ("sub2api-netns", "sub2api-apisix", "sub2api-apisix"),
-    ("apisix-netns", "apisix-cloudflared", "apisix-ingress"),
-):
+def published_targets(config):
+    targets = set()
+    for port in config.get("ports", []):
+        if isinstance(port, dict):
+            targets.add((int(port["target"]), str(port.get("protocol", "tcp"))))
+        else:
+            value = str(port).split("/", 1)
+            targets.add((int(value[0].rsplit(":", 1)[-1]), value[1] if len(value) == 2 else "tcp"))
+    return targets
+
+expected_published = {
+    "cpa-host-netns": {(8317,"tcp"),(8085,"tcp"),(1455,"tcp"),(54545,"tcp"),(51121,"tcp"),(11451,"tcp")},
+    "sub2api-host-netns": {(8080,"tcp")},
+    "apisix-host-netns": {(9080,"tcp")},
+}
+for owner, expected in expected_published.items():
+    if published_targets(services[owner]) != expected:
+        raise SystemExit(f"{owner} host publication mismatch")
+
+expected_network_members = {
+    "cpa-host-source": {"cpa-host-netns":"172.30.1.2"},
+    "host-cpa-target": {"cpa-host-netns":"172.30.2.3","cpa-netns":"172.30.2.2"},
+    "sub2api-host-source": {"sub2api-host-netns":"172.30.3.2"},
+    "host-sub2api-target": {"sub2api-host-netns":"172.30.4.3","sub2api-netns":"172.30.4.2"},
+    "apisix-host-source": {"apisix-host-netns":"172.30.5.2"},
+    "host-apisix-target": {"apisix-host-netns":"172.30.6.3","apisix-netns":"172.30.6.2"},
+    "cloudflared-apisix-source": {"cloudflared":"172.30.7.2","cloudflared-apisix-relay":"172.30.7.3"},
+    "cloudflared-apisix-target": {"cloudflared-apisix-relay":"172.30.8.3","apisix-netns":"172.30.8.2"},
+    "apisix-sub2api-source": {"apisix-netns":"172.30.9.2","apisix-sub2api-relay":"172.30.9.3"},
+    "apisix-sub2api-target": {"apisix-sub2api-relay":"172.30.10.3","sub2api-netns":"172.30.10.2"},
+    "sub2api-cpa-source": {"sub2api-netns":"172.30.11.2","sub2api-cpa-relay":"172.30.11.3"},
+    "sub2api-cpa-target": {"sub2api-cpa-relay":"172.30.12.3","cpa-netns":"172.30.12.2"},
+    "sub2api-postgres-source": {"sub2api-netns":"172.30.13.2","sub2api-postgres-relay":"172.30.13.3"},
+    "sub2api-postgres-target": {"sub2api-postgres-relay":"172.30.14.3","postgres":"172.30.14.2"},
+    "sub2api-redis-source": {"sub2api-netns":"172.30.15.2","sub2api-redis-relay":"172.30.15.3"},
+    "sub2api-redis-target": {"sub2api-redis-relay":"172.30.16.3","redis":"172.30.16.2"},
+    "cpa-squid-source": {"cpa-netns":"172.30.17.2","cpa-squid-relay":"172.30.17.3"},
+    "cpa-squid-target": {"cpa-squid-relay":"172.30.18.3","egress-proxy":"172.30.18.2"},
+    "sub2api-squid-source": {"sub2api-netns":"172.30.19.2","sub2api-squid-relay":"172.30.19.3"},
+    "sub2api-squid-target": {"sub2api-squid-relay":"172.30.20.3","egress-proxy":"172.30.20.2"},
+    "proxy-egress": {"egress-proxy":None},
+    "cloudflare-egress": {"cloudflared":None},
+}
+if has_zcode:
+    expected_network_members.update({
+        "cpa-zcode-source": {"cpa-netns":"172.30.21.2","cpa-zcode-relay":"172.30.21.3"},
+        "cpa-zcode-target": {"cpa-zcode-relay":"172.30.22.3","zcode-egress-tunnel":"172.30.22.2"},
+        "zcode-squid-source": {"zcode-egress-tunnel":"172.30.23.2","zcode-squid-relay":"172.30.23.3"},
+        "zcode-squid-target": {"zcode-squid-relay":"172.30.24.3","egress-proxy":"172.30.24.2"},
+    })
+if set(networks) != set(expected_network_members):
+    raise SystemExit(f"unexpected networks: {sorted(set(networks) ^ set(expected_network_members))}")
+for network, expected in expected_network_members.items():
+    actual = {}
+    for service, config in services.items():
+        settings = (config.get("networks") or {}).get(network)
+        if settings is not None:
+            actual[service] = str(settings.get("ipv4_address")) if settings.get("ipv4_address") else None
+    if actual != expected:
+        raise SystemExit(f"{network} membership/address mismatch: {actual}")
+required_aliases = {
+    ("cpa-squid-relay","cpa-squid-source"):"cpa-egress-relay",
+    ("sub2api-cpa-relay","sub2api-cpa-source"):"cli-proxy-api",
+    ("sub2api-postgres-relay","sub2api-postgres-source"):"postgres",
+    ("sub2api-redis-relay","sub2api-redis-source"):"redis",
+    ("sub2api-squid-relay","sub2api-squid-source"):"sub2api-egress-relay",
+    ("apisix-sub2api-relay","apisix-sub2api-source"):"sub2api-apisix-relay",
+    ("cloudflared-apisix-relay","cloudflared-apisix-source"):"apisix-ingress",
+}
+if has_zcode:
+    required_aliases.update({
+        ("cpa-zcode-relay","cpa-zcode-source"):"zcode-proxy",
+        ("zcode-squid-relay","zcode-squid-source"):"zcode-egress-relay",
+    })
+for (service, network), alias in required_aliases.items():
     if alias not in set(services[service]["networks"][network].get("aliases", [])):
-        raise SystemExit(f"{service}/{network} must provide alias {alias}")
+        raise SystemExit(f"{service}/{network} must provide {alias}")
+
+source_target_edges = [
+    ("cloudflared","cloudflared-apisix-relay","apisix-netns","cloudflared-apisix-source","cloudflared-apisix-target"),
+    ("apisix-netns","apisix-sub2api-relay","sub2api-netns","apisix-sub2api-source","apisix-sub2api-target"),
+    ("sub2api-netns","sub2api-cpa-relay","cpa-netns","sub2api-cpa-source","sub2api-cpa-target"),
+    ("sub2api-netns","sub2api-postgres-relay","postgres","sub2api-postgres-source","sub2api-postgres-target"),
+    ("sub2api-netns","sub2api-redis-relay","redis","sub2api-redis-source","sub2api-redis-target"),
+    ("cpa-netns","cpa-squid-relay","egress-proxy","cpa-squid-source","cpa-squid-target"),
+    ("sub2api-netns","sub2api-squid-relay","egress-proxy","sub2api-squid-source","sub2api-squid-target"),
+]
+if has_zcode:
+    source_target_edges += [
+        ("cpa-netns","cpa-zcode-relay","zcode-egress-tunnel","cpa-zcode-source","cpa-zcode-target"),
+        ("zcode-egress-tunnel","zcode-squid-relay","egress-proxy","zcode-squid-source","zcode-squid-target"),
+    ]
+members={network:{service for service,cfg in services.items() if network in (cfg.get("networks") or {})} for network in networks}
+for source, relay, target, source_net, target_net in source_target_edges:
+    if members.get(source_net) != {source, relay} or members.get(target_net) != {relay, target}:
+        raise SystemExit(f"edge {source}->{relay}->{target} lacks two pairwise networks")
+    if target in members[source_net] or source in members[target_net]:
+        raise SystemExit(f"edge {source}->{target} has direct network reachability")
+for owner, relay, target, source_net, target_net in (
+    ("cpa-host-netns","cpa-host-relay","cpa-netns","cpa-host-source","host-cpa-target"),
+    ("sub2api-host-netns","sub2api-host-relay","sub2api-netns","sub2api-host-source","host-sub2api-target"),
+    ("apisix-host-netns","apisix-host-relay","apisix-netns","apisix-host-source","host-apisix-target"),
+):
+    if members.get(source_net) != {owner} or members.get(target_net) != {owner,target}:
+        raise SystemExit(f"host edge {relay}->{target} network ownership mismatch")
+
+for network, network_members in members.items():
+    if network in {"proxy-egress","cloudflare-egress","cpa-host-source","sub2api-host-source","apisix-host-source"}:
+        if len(network_members)!=1: raise SystemExit(f"{network} must have one namespace/egress owner")
+    elif len(network_members)!=2:
+        raise SystemExit(f"{network} must have exactly two Compose members, got {network_members}")
+    cfg=networks[network] or {}
+    if network.endswith("-source") and network in {"cpa-host-source","sub2api-host-source","apisix-host-source"}:
+        if cfg.get("internal") is True or cfg.get("driver_opts"):
+            raise SystemExit(f"{network} must remain engine-neutral host publication bridge")
+    elif network not in {"proxy-egress","cloudflare-egress"} and cfg.get("internal") is not True:
+        raise SystemExit(f"{network} must be internal")
+
+commands = {
+ "sub2api-host-relay": (None,8080,"172.30.4.2",8080),
+ "apisix-host-relay": (None,9080,"172.30.6.2",9080),
+ "cloudflared-apisix-relay": ("172.30.7.3",9080,"172.30.8.2",9080),
+ "apisix-sub2api-relay": ("172.30.9.3",8080,"172.30.10.2",8080),
+ "sub2api-cpa-relay": ("172.30.11.3",8317,"172.30.12.2",8317),
+ "sub2api-postgres-relay": ("172.30.13.3",5432,"172.30.14.2",5432),
+ "sub2api-redis-relay": ("172.30.15.3",6379,"172.30.16.2",6379),
+ "cpa-squid-relay": ("172.30.17.3",3128,"172.30.18.2",3128),
+ "sub2api-squid-relay": ("172.30.19.3",3128,"172.30.20.2",3128),
+}
+if has_zcode:
+ commands.update({"cpa-zcode-relay":("172.30.21.3",8080,"172.30.22.2",8080),"zcode-squid-relay":("172.30.23.3",3128,"172.30.24.2",3128)})
+for relay,(bind,bport,target,tport) in commands.items():
+    cfg=services[relay]
+    listener = f"TCP4-LISTEN:{bport},reuseaddr,fork" if bind is None else f"TCP4-LISTEN:{bport},bind={bind},reuseaddr,fork"
+    expected=[listener,f"TCP4:{target}:{tport},connect-timeout=10"]
+    if normalized(cfg.get("command",[])) != expected:
+        raise SystemExit(f"{relay} command mismatch")
+    if str(cfg.get("user"))!="65534:65534" or cfg.get("read_only") is not True or set(cfg.get("cap_drop",[]))!={"ALL"} or cfg.get("cap_add"):
+        raise SystemExit(f"{relay} hardening mismatch")
+    if "no-new-privileges:true" not in cfg.get("security_opt",[]) or cfg.get("api") or cfg.get("metrics"):
+        raise SystemExit(f"{relay} exposes extra control surface")
+
+cpa_host = services["cpa-host-relay"]
+cpa_host_command="\n".join(normalized(cpa_host.get("command",[])))
+for port in (8317,8085,1455,54545,51121,11451):
+    expected=f'TCP4-LISTEN:${{port}},reuseaddr,fork" "TCP4:172.30.2.2:${{port}},connect-timeout=10'
+    if expected not in cpa_host_command:
+        raise SystemExit(f"CPA host relay misses supervised port {port}")
+if normalized(cpa_host.get("entrypoint",[])) != ["/bin/sh","-ec"] or "wait -n" not in cpa_host_command:
+    raise SystemExit("CPA host relay must use the bounded shell supervisor")
+if str(cpa_host.get("user"))!="65534:65534" or cpa_host.get("read_only") is not True or set(cpa_host.get("cap_drop",[]))!={"ALL"} or cpa_host.get("cap_add"):
+    raise SystemExit("CPA host relay hardening mismatch")
+if "no-new-privileges:true" not in cpa_host.get("security_opt",[]) or cpa_host.get("api") or cpa_host.get("metrics"):
+    raise SystemExit("CPA host relay exposes extra control surface")
 
 expected_hosts = {
-    "cpa-netns": {"sub2api": "172.27.0.3"},
-    "sub2api-netns": {"cli-proxy-api": "172.27.0.2", "postgres": "172.28.0.2", "redis": "172.29.1.2"},
-    "apisix-netns": {"sub2api-apisix": "172.22.0.2"},
+    "cpa-netns": {"cpa-egress-relay":"172.30.17.3"},
+    "sub2api-netns": {
+        "cli-proxy-api":"172.30.11.3", "postgres":"172.30.13.3",
+        "redis":"172.30.15.3", "sub2api-egress-relay":"172.30.19.3",
+    },
+    "apisix-netns": {"sub2api-apisix-relay":"172.30.9.3"},
+    "cloudflared": {"apisix-ingress":"172.30.7.3"},
 }
 if has_zcode:
-    expected_hosts["cpa-netns"]["zcode-proxy"] = "172.26.0.2"
-for service, hosts in expected_hosts.items():
-    if extra_hosts(services[service]) != hosts:
-        raise SystemExit(f"{service} must use fixed pairwise service addresses")
+    expected_hosts["cpa-netns"]["zcode-proxy"] = "172.30.21.3"
+for service, expected in expected_hosts.items():
+    if extra_hosts(services[service]) != expected:
+        raise SystemExit(f"{service} must use fixed relay addresses")
 
-if str(services["sub2api"]["environment"].get("SECURITY_URL_ALLOWLIST_ENABLED", "")).lower() != "false":
-    raise SystemExit("Sub2API URL allowlist must remain disabled")
-proxied_services = [("cli-proxy-api", "http://172.23.0.3:3128"), ("sub2api", "http://172.24.0.3:3128")]
-for service, proxy in proxied_services:
-    environment = services[service]["environment"]
-    if environment.get("HTTP_PROXY") != proxy or environment.get("HTTPS_PROXY") != proxy:
-        raise SystemExit(f"{service} must use its pairwise egress proxy")
-    if environment.get("SSL_CERT_FILE") != "/etc/ssl/certs/ai-gateway-ca-bundle.pem":
-        raise SystemExit(f"{service} must trust the inspection CA bundle")
-    targets = volume_targets(services[service])
-    if "/etc/ssl/certs/ai-gateway-ca-bundle.pem" not in targets:
-        raise SystemExit(f"{service} must mount the public inspection CA bundle")
+if services["sub2api"].get("environment",{}).get("SECURITY_URL_ALLOWLIST_ENABLED") not in (False,"false"):
+    raise SystemExit("Sub2API URL allowlist must remain false")
+if services["sub2api"].get("environment",{}).get("SERVER_TRUSTED_PROXIES") != "172.30.10.3/32":
+    raise SystemExit("Sub2API must trust only APISIX relay target address")
+for service,proxy in (("cli-proxy-api","http://cpa-egress-relay:3128"),("sub2api","http://sub2api-egress-relay:3128")):
+    env=services[service].get("environment",{})
+    if env.get("HTTP_PROXY")!=proxy or env.get("HTTPS_PROXY")!=proxy:
+        raise SystemExit(f"{service} must use its source-side Squid relay")
+    if "/etc/ssl/certs/ai-gateway-ca-bundle.pem" not in volume_targets(services[service]):
+        raise SystemExit(f"{service} must receive only public inspection trust")
+if "sub2api-apisix-relay:8080" not in Path("apisix/apisix.yaml").read_text():
+    raise SystemExit("APISIX upstream must target its dedicated relay")
+if sys.argv[3]=="1":
+    squid=Path("data/egress-proxy/generated/squid.conf").read_text()
+    required={"172.30.18.2:3128":"cpa","172.30.20.2:3128":"sub2api","172.30.24.2:3128":"zcode" if has_zcode else None}
+    for address,name in required.items():
+        present=f"http_port {address} name={name}" in squid if name else address in squid
+        if (name is not None) != present: raise SystemExit(f"Squid listener parity mismatch: {address}")
 
 if has_zcode:
-    zcode = services["zcode-proxy"]
-    tunnel = services["zcode-egress-tunnel"]
+    tunnel=services["zcode-egress-tunnel"]; zcode=services["zcode-proxy"]
+    require_image("zcode-egress-tunnel","ghcr.io/tun2proxy/tun2proxy")
+    require_image("zcode-proxy","ghcr.io/tridefender/zcode-proxy")
+    if zcode.get("network_mode")!="service:zcode-egress-tunnel": raise SystemExit("ZCode must share tun2proxy namespace")
+    if set(tunnel.get("cap_add",[]))!={"NET_ADMIN"} or set(tunnel.get("cap_drop",[]))!={"ALL"} or tunnel.get("privileged") is True:
+        raise SystemExit("tun2proxy must have exact NET_ADMIN, not privileged")
+    if normalized(tunnel.get("command",[])) != ["--proxy","http://172.30.23.3:3128","--dns","virtual","--bypass","172.30.23.3/32","--tcp-timeout","600","--exit-on-fatal-error","--verbosity","info"]:
+        raise SystemExit("tun2proxy command mismatch")
+    if zcode.get("ports") or tunnel.get("ports"): raise SystemExit("ZCode must not publish ports")
 
-    require_pinned_image(zcode, "ghcr.io/tridefender/zcode-proxy")
-    require_pinned_image(tunnel, "ghcr.io/tun2proxy/tun2proxy")
-    if zcode.get("network_mode") != "service:zcode-egress-tunnel":
-        raise SystemExit("zcode-proxy must share the namespace-wide egress tunnel")
-    require_dependency(zcode, "zcode-egress-tunnel", "service_started", True)
-    require_dependency(tunnel, "egress-proxy", "service_started", True)
-    require_dependency(services["cli-proxy-api"], "zcode-proxy", "service_started", True)
-    aliases = set(tunnel["networks"]["zcode-cpa"].get("aliases", []))
-    if "zcode-proxy" not in aliases:
-        raise SystemExit("zcode-cpa must alias the shared namespace as zcode-proxy")
-
-    environment = zcode.get("environment", {})
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-        if environment.get(name):
-            raise SystemExit("zcode-proxy must rely on namespace egress, not application proxy variables")
-    if environment.get("SSL_CERT_FILE") != "/etc/ssl/certs/ai-gateway-ca-bundle.pem":
-        raise SystemExit("zcode-proxy must trust the public inspection CA bundle")
-    if environment.get("NODE_EXTRA_CA_CERTS") != "/etc/ssl/certs/ai-gateway-ca-bundle.pem":
-        raise SystemExit("zcode-proxy must trust the inspection CA in Node/Bun TLS")
-    targets = volume_targets(zcode)
-    for target in ("/etc/ssl/certs/ai-gateway-ca-bundle.pem", "/etc/resolv.conf"):
-        if target not in targets:
-            raise SystemExit(f"zcode-proxy must mount {target}")
-    healthcheck = " ".join(str(part) for part in zcode.get("healthcheck", {}).get("test", []))
-    if "198.18." not in healthcheck:
-        raise SystemExit("zcode-proxy healthcheck must verify virtual DNS through the namespace tunnel")
-
-    if tunnel.get("read_only") is not True:
-        raise SystemExit("zcode-egress-tunnel root filesystem must be read-only")
-    if "/etc/resolv.conf" not in volume_targets(tunnel):
-        raise SystemExit("zcode-egress-tunnel must receive a writable private resolv.conf")
-    tmpfs = tunnel.get("tmpfs", [])
-    if not any(str(mount).split(":", 1)[0] == "/tmp" for mount in tmpfs):
-        raise SystemExit("zcode-egress-tunnel must use a writable /tmp tmpfs")
-    if set(tunnel.get("cap_add", [])) != {"NET_ADMIN"} or set(tunnel.get("cap_drop", [])) != {"ALL"}:
-        raise SystemExit("zcode-egress-tunnel must have only NET_ADMIN after dropping all capabilities")
-    if tunnel.get("privileged") is True:
-        raise SystemExit("zcode-egress-tunnel must not be privileged")
-    if "no-new-privileges:true" not in tunnel.get("security_opt", []):
-        raise SystemExit("zcode-egress-tunnel must enable no-new-privileges")
-    devices = set()
-    for device in tunnel.get("devices", []):
-        if isinstance(device, dict):
-            devices.add((device.get("source"), device.get("target")))
-        elif isinstance(device, str):
-            parts = device.split(":")
-            if len(parts) >= 2:
-                devices.add((parts[0], parts[1]))
-    if devices != {("/dev/net/tun", "/dev/net/tun")}:
-        raise SystemExit("zcode-egress-tunnel must receive only the TUN device")
-    sysctls = tunnel.get("sysctls", {})
-    for name in ("net.ipv6.conf.all.disable_ipv6", "net.ipv6.conf.default.disable_ipv6"):
-        if str(sysctls.get(name)) != "1":
-            raise SystemExit("zcode-egress-tunnel must disable IPv6 to prevent route bypass")
-    command = [str(part) for part in tunnel.get("command", [])]
-    expected_command = [
-        "--proxy", "http://172.25.0.3:3128",
-        "--dns", "virtual",
-        "--bypass", "172.25.0.3/32",
-        "--tcp-timeout", "600",
-        "--exit-on-fatal-error",
-        "--verbosity", "info",
-    ]
-    if command != expected_command:
-        raise SystemExit("zcode-egress-tunnel command must match the validated fail-closed profile")
-    if tunnel.get("restart") != "unless-stopped" or zcode.get("restart") != "unless-stopped":
-        raise SystemExit("zcode namespace services must restart unless stopped")
-    if zcode.get("read_only") is not True:
-        raise SystemExit("zcode-proxy root filesystem must be read-only")
-    if set(zcode.get("cap_drop", [])) != {"ALL"} or zcode.get("cap_add"):
-        raise SystemExit("zcode-proxy must run without Linux capabilities")
-    if zcode.get("privileged") is True or "no-new-privileges:true" not in zcode.get("security_opt", []):
-        raise SystemExit("zcode-proxy must be unprivileged with no-new-privileges")
-    if zcode.get("ports") or tunnel.get("ports"):
-        raise SystemExit("ZCode namespace services must not publish host ports")
-
-key_holders = {
-    service
-    for service, config in services.items()
-    if "/etc/squid/ca.key" in volume_targets(config)
-}
-if key_holders != {"egress-proxy"}:
-    raise SystemExit(f"inspection CA key holders must be only egress-proxy, got {sorted(key_holders)}")
+key_holders={service for service,cfg in services.items() if "/etc/squid/ca.key" in volume_targets(cfg)}
+if key_holders!={"egress-proxy"}: raise SystemExit(f"private CA key holders: {key_holders}")
 PY
-
 egress_image=$(value_from_env EGRESS_PROXY_IMAGE)
 [ -n "$egress_image" ] || egress_image=ai-gateway-squid:6.13-2-deb13u2
 docker build --quiet --tag "$egress_image" egress-proxy >/dev/null
@@ -581,6 +607,14 @@ zcode_image=$(value_from_env ZCODE_PROXY_IMAGE)
   exit 1
 }
 "$root/scripts/test-egress-proxy.sh" "$egress_image" "$tun2proxy_image" "$zcode_image"
+socat_image=$(value_from_env SOCAT_IMAGE)
+[ -n "$socat_image" ] || socat_image=docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b
+[[ "$socat_image" =~ ^docker\.io/alpine/socat@sha256:[0-9a-f]{64}$ ]] || {
+  echo 'SOCAT_IMAGE must use the official repository pinned by digest' >&2
+  exit 1
+}
+"$root/scripts/test-socat-boundary.sh" "$socat_image"
+
 netns_guard_image=$(value_from_env NETNS_GUARD_IMAGE)
 [ -n "$netns_guard_image" ] || netns_guard_image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 [[ "$netns_guard_image" =~ ^docker\.io/library/alpine@sha256:[0-9a-f]{64}$ ]] || {

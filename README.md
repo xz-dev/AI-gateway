@@ -1,6 +1,6 @@
 # AI Gateway
 
-Reusable Docker Compose stack for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [Sub2API](https://github.com/Wei-Shaw/sub2api), [Apache APISIX](https://apisix.apache.org/), [Squid](https://www.squid-cache.org/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
+Reusable Docker Compose stack for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [Sub2API](https://github.com/Wei-Shaw/sub2api), [Apache APISIX](https://apisix.apache.org/), [Squid](https://www.squid-cache.org/), [socat](http://www.dest-unreach.org/socat/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
 
 It separates provider credentials, client API-key authority, public routing, and Internet ingress:
 
@@ -28,9 +28,10 @@ flowchart LR
 - APISIX strips Sub2API's private `X-Client-Request-ID` and preserves standard `X-Request-ID` on non-opaque responses.
 - Sub2API accepts forwarded client IPs only from APISIX. Its URL allowlist stays disabled because CPA uses an internal HTTP URL; Docker pairwise networks provide the service-reachability boundary instead.
 - CPA, Sub2API admin access, and APISIX bind to loopback by default.
-- Every required service-to-service edge has its own explicit two-member internal network; no service uses Compose's default network. CPA, Sub2API, and APISIX share networking with minimal Alpine namespace owners that hold the existing host publications. Each owner deletes all default routes and drops to `nobody` with zero effective capabilities; each application wrapper independently waits until `/proc` confirms no default route. This keeps the same Compose portable across rootless Podman and rootful Docker without host firewall changes or Docker-specific bridge options.
-- CPA and Sub2API have no direct Internet route. Each reaches the same Squid process over a different internal network/listener and policy. Squid alone joins `proxy-egress`; cloudflared alone joins its separate egress network. APISIX has no Internet route.
-- Production-only services such as ZCode stay out of the reusable Compose file. An ignored `compose.override.yaml` may add the official digest-pinned ZCode image behind a digest-pinned `tun2proxy` sidecar. ZCode shares that sidecar's network namespace, TUN routes, and virtual DNS, so even transports that ignore proxy variables reach Squid by hostname without a downstream ZCode fork. The sidecar and Squid/CPA peers still form dedicated two-member internal networks.
+- Every directed TCP edge has one independent version- and digest-pinned `alpine/socat` relay. Its source and target sides use separate networks, so sources can initiate through the relay but targets cannot open a new connection back. TCP remains full duplex after connection establishment, preserving OAuth, SSE, WebSocket, and 600-second requests. No relay exposes an API or reverse mode. Production currently has no UDP edge; UDP is enabled only when an actual UDP port contract exists.
+- Every internal relay network has exactly two Compose members; no service uses Compose's default network. CPA, Sub2API, and APISIX still share networking with minimal Alpine namespace owners that delete all default routes and drop privilege. Separate host-ingress namespace owners hold published ports and the source/target sides of their dedicated socat relays. This remains portable across rootless Podman and rootful Docker without host firewall changes or engine-specific bridge options.
+- CPA and Sub2API have no direct Internet route. Each reaches Squid only through its own source/target socat relay pair. Squid alone joins `proxy-egress`; cloudflared alone joins its egress network and reaches APISIX only through its own relay. APISIX has no Internet route.
+- Production-only services such as ZCode stay out of the reusable Compose file. An ignored `compose.override.yaml` may add the official digest-pinned ZCode image behind digest-pinned `tun2proxy`. ZCode shares the tunnel namespace, TUN routes, and virtual DNS. CPA→ZCode and ZCode→Squid each cross an independent two-network socat relay, so transports that ignore proxy variables still reach Squid without a downstream ZCode fork.
 - Egress policy is fail-closed. Every HTTPS tunnel must pass service/source, CONNECT domain, exact ClientHello SNI-to-CONNECT matching, and resolved private/reserved-address denial. Squid resolves only through an in-container Unbound instance that strips unsafe answers before caching, including mixed and rebinding responses. `bump` destinations additionally require exact decrypted Host-to-SNI matching plus method/path ACLs. `splice` destinations retain end-to-end TLS fingerprints but cannot expose encrypted Host/path to Squid.
 - TLS inspection uses a locally generated CA. Its private key is mounted only into Squid; CPA, Sub2API, and optional ZCode receive only a public trust bundle. Upstream certificate validation remains enabled.
 - Every external runtime image is pinned by manifest digest; upgrades require an explicit digest change. Every container has PID, memory, CPU, capability, and log-size bounds. Root filesystems are read-only where runtime evidence showed no required overlay writes; APISIX and Sub2API retain writable roots for generated configuration and request handling.
@@ -73,7 +74,7 @@ cd /root/AI-gateway
 Create a Public Hostname in Cloudflare Dashboard with this origin service:
 
 ```text
-http://apisix:9080
+http://apisix-ingress:9080
 ```
 
 Do not point the Tunnel directly at Sub2API or CPA. Configure a Cache Rule that bypasses cache for the API hostname. Cloudflare-side changes remain operator-owned; this repository stores no account ID, tunnel ID, hostname, or token.
@@ -117,7 +118,7 @@ Add provider accounts to CPA, then create an OpenAI-compatible upstream account 
 | Base URL | `http://cli-proxy-api:8317/v1` |
 | API key | private `CPA_API_KEY` value from `.env` |
 
-Leave that internal CPA account without a Sub2API proxy. For every Sub2API account whose Base URL is on the Internet, explicitly assign an active `http` proxy record pointing to `172.24.0.3:3128` with fallback mode `none`; Sub2API's account transports do not consistently inherit proxy environment variables.
+Leave that internal CPA account without a Sub2API proxy. For every Sub2API account whose Base URL is on the Internet, explicitly assign an active `http` proxy record pointing to `sub2api-egress-relay:3128` with fallback mode `none`; Sub2API's account transports do not consistently inherit proxy environment variables.
 
 ### Production-only ZCode
 
@@ -130,7 +131,7 @@ nameserver 198.18.0.1
 options ndots:0
 ```
 
-Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. Both the ZCode/CPA and ZCode/Squid networks remain `internal: true`; a failed or bypassed tunnel therefore loses connectivity instead of gaining direct Internet access. The validator requires official digest-pinned ZCode and tun2proxy images, the shared namespace, virtual-DNS health, the dedicated network aliases/addresses, and public-CA-only trust.
+Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. CPA reaches ZCode only through `cpa-zcode-relay`; the tunnel reaches Squid only through `zcode-squid-relay`. Each direction has separate two-member source and target networks, and a failed relay or tunnel loses connectivity instead of gaining direct Internet access.
 
 For the CPA entry targeting `http://zcode-proxy:8080/v1`, set that entry's `proxy-url` to `direct`; the global CPA proxy is only for Internet destinations.
 
@@ -156,32 +157,14 @@ When upgrading Sub2API, re-audit that provider/upstream authentication failures 
 
 ## Operations
 
-Sub2API and CLIProxyAPI are one operational unit. Restart commands do not reliably cascade, so every restart, stop/start, or recreation must name both applications. Never use `docker restart cli-proxy-api` or recreate only CPA: isolated CPA replacement can leave Sub2API returning `503` for a long time. Namespace owners are a second boundary: never recreate `cpa-netns`, `sub2api-netns`, `apisix-netns`, or `zcode-egress-tunnel` without also recreating the application that shares it. With the production override, always handle the tunnel, ZCode, CPA, and Sub2API as one unit.
+Sub2API, CLIProxyAPI, their namespace owners, and every adjacent socat relay are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never use `docker restart`, never recreate a namespace owner alone, and never recreate CPA without Sub2API. With the production override, include the ZCode tunnel and both ZCode relays in the same full-stack operation.
 
 ```bash
-# Logs
-docker compose logs -f egress-proxy cli-proxy-api sub2api apisix cloudflared
+# Follow all stack and relay logs
+docker compose logs -f
 
-# Restart CPA and Sub2API together
-docker compose restart cli-proxy-api sub2api
-
-# Production override: include the namespace owner and ZCode
-docker compose restart zcode-egress-tunnel zcode-proxy cli-proxy-api sub2api
-
-# Recreate the coupled pair together
-docker compose up -d --wait --force-recreate cli-proxy-api sub2api
-
-# Production override: recreate the complete coupled unit
-docker compose up -d --wait --force-recreate zcode-egress-tunnel zcode-proxy cli-proxy-api sub2api
-
-# Apply a new egress policy to the reusable stack
-docker compose up -d --build --wait --force-recreate egress-proxy cli-proxy-api sub2api
-
-# Production override with ZCode: recreate the namespace owner and coupled clients together
-docker compose up -d --build --wait --force-recreate egress-proxy zcode-egress-tunnel zcode-proxy cli-proxy-api sub2api
-
-# Recreate only public boundary after APISIX config changes
-docker compose up -d --wait --no-deps --force-recreate apisix
+# Apply an image, policy, relay, or namespace change as one coupled recreation
+docker compose up -d --build --wait --force-recreate
 
 # Stop and restart the complete stack without deleting bind-mounted data
 docker compose down
@@ -197,7 +180,7 @@ Persistent application state lives under ignored `data/`, including the egress C
 ./scripts/validate.sh .env.example # tracked template only
 ```
 
-Validation renders Compose, enforces exact pairwise network membership, fixed internal addresses, engine-neutral host publication, startup wrappers, image digests, and sole-egress membership with no default network. It checks private CA/runtime files and the rendered production Squid configuration, then runs filtered DNS, SSL-Bump Host/method/path, official ZCode/TUN failure, and namespace-owner host-publication/direct-egress tests under the current container runtime. It also runs APISIX's config test and ShellCheck when available.
+Validation renders Compose and enforces exact per-edge socat commands, two-member source/target membership, fixed internal addresses, nonroot/read-only/capability-free relays, engine-neutral host publication, startup wrappers, image digests, and sole-egress membership. `test-socat-boundary.sh` proves TCP and UDP forwarding, blocked target→source initiation, zero effective relay capabilities, and cleanup. UDP remains test-only until a real production UDP contract exists. The egress tests keep exact `/dev/net/tun`+`NET_ADMIN` by default; hosted CI labels an explicit privileged runtime-test mode while static Compose validation still rejects privileged production services.
 
 ## Layout
 
@@ -225,6 +208,7 @@ Validation renders Compose, enforces exact pairwise network membership, fixed in
 │   ├── render-egress-policy.py
 │   ├── test-egress-proxy.sh
 │   ├── test-netns-guard.sh
+│   ├── test-socat-boundary.sh
 │   └── validate.sh
 ├── .env.example
 └── compose.yaml

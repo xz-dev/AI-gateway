@@ -14,17 +14,11 @@ x-netns-owner: &netns-owner
   memswap_limit: 16m
   cpus: 0.1
   read_only: true
-  cap_drop:
-    - ALL
-  cap_add:
-    - NET_ADMIN
-    - SETGID
-    - SETUID
+  cap_drop: [ALL]
+  cap_add: [NET_ADMIN, SETGID, SETUID]
   logging: *default-logging
-  security_opt:
-    - no-new-privileges:true
-  tmpfs:
-    - /tmp:rw,noexec,nosuid,nodev,size=1m
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=1m"]
   command:
     - /bin/sh
     - -ec
@@ -34,6 +28,19 @@ x-netns-owner: &netns-owner
       test -z "$$(ip -4 route show default)";
       test -z "$$(ip -6 route show default)";
       exec su nobody -s /bin/sh -c 'exec sleep infinity'
+
+x-socat-relay: &socat-relay
+  image: ${SOCAT_IMAGE:-docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b}
+  user: "65534:65534"
+  restart: unless-stopped
+  pids_limit: 64
+  mem_limit: 32m
+  memswap_limit: 32m
+  cpus: 0.2
+  read_only: true
+  cap_drop: [ALL]
+  logging: *default-logging
+  security_opt: [no-new-privileges:true]
 
 services:
   egress-proxy:
@@ -46,11 +53,9 @@ services:
     memswap_limit: 128m
     cpus: 0.5
     read_only: true
-    cap_drop:
-      - ALL
+    cap_drop: [ALL]
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    security_opt: [no-new-privileges:true]
     sysctls:
       net.ipv4.ip_unprivileged_port_start: "0"
     tmpfs:
@@ -61,27 +66,21 @@ services:
       - ./data/egress-proxy/ca.crt:/etc/squid/ca.crt:ro,z
       - ./data/egress-proxy/ca.key:/etc/squid/ca.key:ro,Z
     networks:
-      cpa-egress:
-        ipv4_address: 172.23.0.3
-      sub2api-egress:
-        ipv4_address: 172.24.0.3
+      cpa-squid-target:
+        ipv4_address: 172.30.18.2
+      sub2api-squid-target:
+        ipv4_address: 172.30.20.2
       proxy-egress:
         gw_priority: 1
     healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          /usr/sbin/unbound-control -c /etc/unbound/ai-gateway.conf status &&
-          /usr/sbin/squid -k check -f /etc/squid/generated/squid.conf
+      test: [CMD-SHELL, "/usr/sbin/unbound-control -c /etc/unbound/ai-gateway.conf status && /usr/sbin/squid -k check -f /etc/squid/generated/squid.conf"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 10s
 
-  cpa-netns:
+  cpa-host-netns:
     <<: *netns-owner
-    extra_hosts:
-      - "sub2api:172.27.0.3"
     ports:
       - "${CPA_BIND_ADDRESS:-127.0.0.1}:${CPA_PORT:-8317}:8317"
       - "${CPA_BIND_ADDRESS:-127.0.0.1}:8085:8085"
@@ -90,18 +89,46 @@ services:
       - "${CPA_BIND_ADDRESS:-127.0.0.1}:51121:51121"
       - "${CPA_BIND_ADDRESS:-127.0.0.1}:11451:11451"
     networks:
-      cpa-sub2api:
-        aliases:
-          - cli-proxy-api
-        ipv4_address: 172.27.0.2
-      cpa-egress:
-        ipv4_address: 172.23.0.2
-      cpa-host:
+      cpa-host-source:
+        ipv4_address: 172.30.1.2
+      host-cpa-target:
+        ipv4_address: 172.30.2.3
+
+  cpa-host-relay:
+    <<: *socat-relay
+    network_mode: service:cpa-host-netns
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        pids=
+        for port in 8317 8085 1455 54545 51121 11451; do
+          socat "TCP4-LISTEN:$${port},reuseaddr,fork" "TCP4:172.30.2.2:$${port},connect-timeout=10" &
+          pids="$${pids} $$!"
+        done
+        trap 'kill $${pids} 2>/dev/null; wait $${pids} 2>/dev/null' EXIT INT TERM
+        wait -n
+    depends_on:
+      cpa-host-netns:
+        condition: service_started
+        restart: true
+
+  cpa-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "cpa-egress-relay:172.30.17.3"
+    networks:
+      host-cpa-target:
+        aliases: [cli-proxy-api]
+        ipv4_address: 172.30.2.2
+      sub2api-cpa-target:
+        ipv4_address: 172.30.12.2
+      cpa-squid-source:
+        ipv4_address: 172.30.17.2
 
   cli-proxy-api:
     image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api@sha256:1da1d6ab90c2d7a569e8ebcb6eeb25549e2a535b03fbac54f11ceca189c49ae8}
     network_mode: service:cpa-netns
-    entrypoint: ["/bin/bash", "-ec"]
+    entrypoint: [/bin/bash, -ec]
     command:
       - >-
         while awk 'NR > 1 && $$2 == "00000000" && $$8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
@@ -110,31 +137,24 @@ services:
         exec ./CLIProxyAPI -config /CLIProxyAPI/conf/config.yaml
     restart: unless-stopped
     depends_on:
-      cpa-netns:
-        condition: service_started
-        restart: true
-      egress-proxy:
-        condition: service_started
-        restart: true
+      cpa-netns: {condition: service_started, restart: true}
+      cpa-host-relay: {condition: service_started}
+      cpa-squid-relay: {condition: service_started, restart: true}
     pids_limit: 256
     mem_limit: 480m
     memswap_limit: 480m
     cpus: 1.75
     read_only: true
-    cap_drop:
-      - ALL
-    cap_add:
-      - DAC_OVERRIDE
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /tmp:rw,nosuid,nodev,size=64m
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=64m"]
     environment:
       DEPLOY: docker-compose
-      HTTP_PROXY: http://172.23.0.3:3128
-      HTTPS_PROXY: http://172.23.0.3:3128
-      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,sub2api
+      HTTP_PROXY: http://cpa-egress-relay:3128
+      HTTPS_PROXY: http://cpa-egress-relay:3128
+      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,cpa-egress-relay
       SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
     volumes:
       - ./data/cpa/conf:/CLIProxyAPI/conf:Z
@@ -145,40 +165,37 @@ services:
       - ./data/cpa/mgmt.key:/CLIProxyAPI/mgmt.key:ro,Z
       - ./data/egress-proxy/ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
     healthcheck:
-      test:
-        - CMD
-        - /bin/bash
-        - -c
-        - >-
-          exec 3<>/dev/tcp/127.0.0.1/8317;
-          printf 'HEAD /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3;
-          IFS= read -r line <&3;
-          [[ "$$line" == *" 200 "* ]]
+      test: [CMD, /bin/bash, -c, "exec 3<>/dev/tcp/127.0.0.1/8317; printf 'HEAD /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3; IFS= read -r line <&3; [[ \"$$line\" == *\" 200 \"* ]]"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
 
+  cpa-squid-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:3128,bind=172.30.17.3,reuseaddr,fork", "TCP4:172.30.18.2:3128,connect-timeout=10"]
+    depends_on:
+      egress-proxy: {condition: service_started}
+    networks:
+      cpa-squid-source:
+        aliases: [cpa-egress-relay]
+        ipv4_address: 172.30.17.3
+      cpa-squid-target:
+        ipv4_address: 172.30.18.3
+
   postgres:
     image: ${POSTGRES_IMAGE:-docker.io/library/postgres@sha256:63bdc97d67b5133bf0e5ebd500bec6d046fa851dc81340d838f0347e616107e8}
-    command: ["postgres", "-c", "max_connections=50", "-c", "shared_buffers=64MB"]
+    command: [postgres, -c, max_connections=50, -c, shared_buffers=64MB]
     restart: unless-stopped
     pids_limit: 128
     mem_limit: 400m
     memswap_limit: 400m
     cpus: 1.0
     read_only: true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETGID
-      - SETUID
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    security_opt: [no-new-privileges:true]
     tmpfs:
       - /run/postgresql:rw,nosuid,nodev,size=16m,mode=3777
       - /tmp:rw,nosuid,nodev,size=64m
@@ -188,13 +205,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-sub2api}
       PGDATA: /var/lib/postgresql/data
       TZ: ${TZ:-UTC}
-    volumes:
-      - ./data/sub2api/postgres:/var/lib/postgresql:Z
+    volumes: [./data/sub2api/postgres:/var/lib/postgresql:Z]
     networks:
-      postgres-sub2api:
-        ipv4_address: 172.28.0.2
+      sub2api-postgres-target:
+        ipv4_address: 172.30.14.2
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sub2api} -d ${POSTGRES_DB:-sub2api}"]
+      test: [CMD-SHELL, "pg_isready -U ${POSTGRES_USER:-sub2api} -d ${POSTGRES_DB:-sub2api}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -208,74 +224,76 @@ services:
     memswap_limit: 80m
     cpus: 0.5
     read_only: true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETGID
-      - SETUID
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /tmp:rw,nosuid,nodev,size=64m
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=64m"]
     command:
       - /bin/sh
       - -ec
       - |
         set -- redis-server --save 60 1 --appendonly yes --appendfsync everysec
-        if [ -n "$${REDIS_PASSWORD:-}" ]; then
-          set -- "$$@" --requirepass "$$REDIS_PASSWORD"
-        fi
+        if [ -n "$${REDIS_PASSWORD:-}" ]; then set -- "$$@" --requirepass "$$REDIS_PASSWORD"; fi
         exec /usr/local/bin/docker-entrypoint.sh "$$@"
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDISCLI_AUTH: ${REDIS_PASSWORD:-}
       TZ: ${TZ:-UTC}
-    volumes:
-      - ./data/sub2api/redis:/data:Z
+    volumes: [./data/sub2api/redis:/data:Z]
     networks:
-      redis-sub2api:
-        ipv4_address: 172.29.1.2
+      sub2api-redis-target:
+        ipv4_address: 172.30.16.2
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [CMD, redis-cli, ping]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 5s
 
-  sub2api-netns:
+  sub2api-host-netns:
     <<: *netns-owner
-    extra_hosts:
-      - "cli-proxy-api:172.27.0.2"
-      - "postgres:172.28.0.2"
-      - "redis:172.29.1.2"
     ports:
       - "${SUB2API_BIND_ADDRESS:-127.0.0.1}:${SUB2API_PORT:-8086}:8080"
     networks:
-      cpa-sub2api:
-        aliases:
-          - sub2api
-        ipv4_address: 172.27.0.3
-      postgres-sub2api:
-        ipv4_address: 172.28.0.3
-      redis-sub2api:
-        ipv4_address: 172.29.1.3
-      sub2api-egress:
-        ipv4_address: 172.24.0.2
-      sub2api-apisix:
-        aliases:
-          - sub2api
-          - sub2api-apisix
-        ipv4_address: 172.22.0.2
-      sub2api-host:
+      sub2api-host-source:
+        ipv4_address: 172.30.3.2
+      host-sub2api-target:
+        ipv4_address: 172.30.4.3
+
+  sub2api-host-relay:
+    <<: *socat-relay
+    network_mode: service:sub2api-host-netns
+    command: ["TCP4-LISTEN:8080,reuseaddr,fork", "TCP4:172.30.4.2:8080,connect-timeout=10"]
+    depends_on:
+      sub2api-host-netns: {condition: service_started, restart: true}
+
+  sub2api-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "cli-proxy-api:172.30.11.3"
+      - "postgres:172.30.13.3"
+      - "redis:172.30.15.3"
+      - "sub2api-egress-relay:172.30.19.3"
+    networks:
+      host-sub2api-target:
+        ipv4_address: 172.30.4.2
+      apisix-sub2api-target:
+        aliases: [sub2api]
+        ipv4_address: 172.30.10.2
+      sub2api-cpa-source:
+        ipv4_address: 172.30.11.2
+      sub2api-postgres-source:
+        ipv4_address: 172.30.13.2
+      sub2api-redis-source:
+        ipv4_address: 172.30.15.2
+      sub2api-squid-source:
+        ipv4_address: 172.30.19.2
 
   sub2api:
     image: ${SUB2API_IMAGE:-ghcr.io/wei-shaw/sub2api@sha256:b0b9dec5ab978e8b872cedc2706e695c944b5322ae56b20ba99ee9d3871fe810}
     network_mode: service:sub2api-netns
-    entrypoint: ["/bin/sh", "-ec"]
+    entrypoint: [/bin/sh, -ec]
     command:
       - >-
         while awk 'NR > 1 && $$2 == "00000000" && $$8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
@@ -287,30 +305,17 @@ services:
     mem_limit: 256m
     memswap_limit: 256m
     cpus: 1.5
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - SETGID
-      - SETUID
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETGID, SETUID]
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    security_opt: [no-new-privileges:true]
     depends_on:
-      sub2api-netns:
-        condition: service_started
-        restart: true
-      egress-proxy:
-        condition: service_started
-        restart: true
-      cli-proxy-api:
-        condition: service_started
-        restart: true
-      postgres:
-        condition: service_started
-      redis:
-        condition: service_started
+      sub2api-netns: {condition: service_started, restart: true}
+      sub2api-host-relay: {condition: service_started}
+      sub2api-cpa-relay: {condition: service_started, restart: true}
+      sub2api-postgres-relay: {condition: service_started, restart: true}
+      sub2api-redis-relay: {condition: service_started, restart: true}
+      sub2api-squid-relay: {condition: service_started, restart: true}
     volumes:
       - ./data/sub2api/app:/app/data:Z
       - ./data/egress-proxy/ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
@@ -320,7 +325,7 @@ services:
       SERVER_PORT: 8080
       SERVER_MODE: release
       RUN_MODE: ${SUB2API_RUN_MODE:-standard}
-      SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.22.0.3/32}
+      SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.30.10.3/32}
       SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL: "false"
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
@@ -346,39 +351,99 @@ services:
       LOG_ROTATION_MAX_SIZE_MB: ${LOG_ROTATION_MAX_SIZE_MB:-20}
       LOG_ROTATION_MAX_BACKUPS: ${LOG_ROTATION_MAX_BACKUPS:-5}
       LOG_ROTATION_MAX_AGE_DAYS: ${LOG_ROTATION_MAX_AGE_DAYS:-7}
-      HTTP_PROXY: http://172.24.0.3:3128
-      HTTPS_PROXY: http://172.24.0.3:3128
-      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,postgres,redis,sub2api-apisix
+      HTTP_PROXY: http://sub2api-egress-relay:3128
+      HTTPS_PROXY: http://sub2api-egress-relay:3128
+      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,postgres,redis,sub2api-egress-relay
       SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
       TZ: ${TZ:-UTC}
     healthcheck:
-      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      test: [CMD, wget, -q, -T, "5", -O, /dev/null, http://localhost:8080/health]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
 
-  apisix-netns:
+  sub2api-cpa-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:8317,bind=172.30.11.3,reuseaddr,fork", "TCP4:172.30.12.2:8317,connect-timeout=10"]
+    depends_on:
+      cli-proxy-api: {condition: service_started}
+    networks:
+      sub2api-cpa-source:
+        aliases: [cli-proxy-api]
+        ipv4_address: 172.30.11.3
+      sub2api-cpa-target:
+        ipv4_address: 172.30.12.3
+
+  sub2api-postgres-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:5432,bind=172.30.13.3,reuseaddr,fork", "TCP4:172.30.14.2:5432,connect-timeout=10"]
+    depends_on:
+      postgres: {condition: service_started}
+    networks:
+      sub2api-postgres-source:
+        aliases: [postgres]
+        ipv4_address: 172.30.13.3
+      sub2api-postgres-target:
+        ipv4_address: 172.30.14.3
+
+  sub2api-redis-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:6379,bind=172.30.15.3,reuseaddr,fork", "TCP4:172.30.16.2:6379,connect-timeout=10"]
+    depends_on:
+      redis: {condition: service_started}
+    networks:
+      sub2api-redis-source:
+        aliases: [redis]
+        ipv4_address: 172.30.15.3
+      sub2api-redis-target:
+        ipv4_address: 172.30.16.3
+
+  sub2api-squid-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:3128,bind=172.30.19.3,reuseaddr,fork", "TCP4:172.30.20.2:3128,connect-timeout=10"]
+    depends_on:
+      egress-proxy: {condition: service_started}
+    networks:
+      sub2api-squid-source:
+        aliases: [sub2api-egress-relay]
+        ipv4_address: 172.30.19.3
+      sub2api-squid-target:
+        ipv4_address: 172.30.20.3
+
+  apisix-host-netns:
     <<: *netns-owner
-    extra_hosts:
-      - "sub2api-apisix:172.22.0.2"
     ports:
       - "${APISIX_BIND_ADDRESS:-127.0.0.1}:${APISIX_PORT:-9080}:9080"
     networks:
-      sub2api-apisix:
-        aliases:
-          - apisix
-        ipv4_address: 172.22.0.3
-      apisix-cloudflared:
-        aliases:
-          - apisix-ingress
-        ipv4_address: 172.21.0.3
-      apisix-host:
+      apisix-host-source:
+        ipv4_address: 172.30.5.2
+      host-apisix-target:
+        ipv4_address: 172.30.6.3
+
+  apisix-host-relay:
+    <<: *socat-relay
+    network_mode: service:apisix-host-netns
+    command: ["TCP4-LISTEN:9080,reuseaddr,fork", "TCP4:172.30.6.2:9080,connect-timeout=10"]
+    depends_on:
+      apisix-host-netns: {condition: service_started, restart: true}
+
+  apisix-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "sub2api-apisix-relay:172.30.9.3"
+    networks:
+      host-apisix-target:
+        ipv4_address: 172.30.6.2
+      cloudflared-apisix-target:
+        ipv4_address: 172.30.8.2
+      apisix-sub2api-source:
+        ipv4_address: 172.30.9.2
 
   apisix:
     image: ${APISIX_IMAGE:-docker.io/apache/apisix@sha256:51bb7b7fcd4162bec53f276c5a9b7b93d5de55723586842becb3e5f165fc0281}
     network_mode: service:apisix-netns
-    entrypoint: ["/bin/bash", "-ec"]
+    entrypoint: [/bin/bash, -ec]
     command:
       - >-
         while awk 'NR > 1 && $$2 == "00000000" && $$8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
@@ -390,37 +455,49 @@ services:
     mem_limit: 128m
     memswap_limit: 128m
     cpus: 1.0
-    cap_drop:
-      - ALL
+    cap_drop: [ALL]
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    security_opt: [no-new-privileges:true]
     environment:
       APISIX_STAND_ALONE: "true"
     depends_on:
-      apisix-netns:
-        condition: service_started
-        restart: true
-      sub2api:
-        condition: service_started
+      apisix-netns: {condition: service_started, restart: true}
+      apisix-host-relay: {condition: service_started}
+      apisix-sub2api-relay: {condition: service_started, restart: true}
     volumes:
       - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro,Z
       - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro,Z
       - ./apisix/lua:/opt/apisix/custom:ro,Z
     healthcheck:
-      test:
-        - CMD
-        - /bin/bash
-        - -ec
-        - >-
-          exec 3<>/dev/tcp/127.0.0.1/9080;
-          printf 'GET /v1/models HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3;
-          IFS= read -r line <&3;
-          [[ "$$line" == *" 404 "* ]]
+      test: [CMD, /bin/bash, -ec, "exec 3<>/dev/tcp/127.0.0.1/9080; printf 'GET /v1/models HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3; IFS= read -r line <&3; [[ \"$$line\" == *\" 404 \"* ]]"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  apisix-sub2api-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:8080,bind=172.30.9.3,reuseaddr,fork", "TCP4:172.30.10.2:8080,connect-timeout=10"]
+    depends_on:
+      sub2api: {condition: service_started}
+    networks:
+      apisix-sub2api-source:
+        aliases: [sub2api-apisix-relay]
+        ipv4_address: 172.30.9.3
+      apisix-sub2api-target:
+        ipv4_address: 172.30.10.3
+
+  cloudflared-apisix-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:9080,bind=172.30.7.3,reuseaddr,fork", "TCP4:172.30.8.2:9080,connect-timeout=10"]
+    depends_on:
+      apisix: {condition: service_started}
+    networks:
+      cloudflared-apisix-source:
+        aliases: [apisix-ingress]
+        ipv4_address: 172.30.7.3
+      cloudflared-apisix-target:
+        ipv4_address: 172.30.8.3
 
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38}
@@ -430,66 +507,80 @@ services:
     memswap_limit: 48m
     cpus: 0.5
     read_only: true
-    cap_drop:
-      - ALL
+    cap_drop: [ALL]
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /tmp:rw,nosuid,nodev,size=64m
-    command: ["tunnel", "--no-autoupdate", "run"]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=64m"]
+    command: [tunnel, --no-autoupdate, run]
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN:?Set CLOUDFLARED_TUNNEL_TOKEN in .env}
+    extra_hosts:
+      - "apisix-ingress:172.30.7.3"
     depends_on:
-      apisix:
-        condition: service_started
+      cloudflared-apisix-relay: {condition: service_started, restart: true}
     networks:
-      apisix-cloudflared:
-        ipv4_address: 172.21.0.2
+      cloudflared-apisix-source:
+        ipv4_address: 172.30.7.2
       cloudflare-egress:
         gw_priority: 1
 
 networks:
-  cpa-sub2api:
+  cpa-host-source:
+    ipam: {config: [{subnet: 172.30.1.0/29}]}
+  host-cpa-target:
     internal: true
-    ipam:
-      config:
-        - subnet: 172.27.0.0/29
-  postgres-sub2api:
+    ipam: {config: [{subnet: 172.30.2.0/29}]}
+  sub2api-host-source:
+    ipam: {config: [{subnet: 172.30.3.0/29}]}
+  host-sub2api-target:
     internal: true
-    ipam:
-      config:
-        - subnet: 172.28.0.0/29
-  redis-sub2api:
+    ipam: {config: [{subnet: 172.30.4.0/29}]}
+  apisix-host-source:
+    ipam: {config: [{subnet: 172.30.5.0/29}]}
+  host-apisix-target:
     internal: true
-    ipam:
-      config:
-        - subnet: 172.29.1.0/29
-  sub2api-apisix:
+    ipam: {config: [{subnet: 172.30.6.0/29}]}
+  cloudflared-apisix-source:
     internal: true
-    ipam:
-      config:
-        - subnet: 172.22.0.0/29
-  apisix-cloudflared:
+    ipam: {config: [{subnet: 172.30.7.0/29}]}
+  cloudflared-apisix-target:
     internal: true
-    ipam:
-      config:
-        - subnet: 172.21.0.0/29
-  cpa-egress:
+    ipam: {config: [{subnet: 172.30.8.0/29}]}
+  apisix-sub2api-source:
     internal: true
-    ipam:
-      config:
-        - subnet: 172.23.0.0/29
-  sub2api-egress:
+    ipam: {config: [{subnet: 172.30.9.0/29}]}
+  apisix-sub2api-target:
     internal: true
-    ipam:
-      config:
-        - subnet: 172.24.0.0/29
-  # Port publication needs a non-internal bridge on Docker 29. Only trusted
-  # namespace owners join these networks; they delete every default route and
-  # drop privilege while applications independently wait for route removal.
-  cpa-host:
-  sub2api-host:
-  apisix-host:
+    ipam: {config: [{subnet: 172.30.10.0/29}]}
+  sub2api-cpa-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.11.0/29}]}
+  sub2api-cpa-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.12.0/29}]}
+  sub2api-postgres-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.13.0/29}]}
+  sub2api-postgres-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.14.0/29}]}
+  sub2api-redis-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.15.0/29}]}
+  sub2api-redis-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.16.0/29}]}
+  cpa-squid-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.17.0/29}]}
+  cpa-squid-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.18.0/29}]}
+  sub2api-squid-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.19.0/29}]}
+  sub2api-squid-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.20.0/29}]}
   proxy-egress:
   cloudflare-egress:

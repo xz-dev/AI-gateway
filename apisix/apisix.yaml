@@ -4,7 +4,7 @@ global_rules:
       real-ip:
         source: http_cf_connecting_ip
         trusted_addresses:
-          - 172.21.0.2/32
+          - 172.30.8.3/32
       proxy-rewrite:
         headers:
           set:
@@ -61,7 +61,7 @@ upstreams:
   - id: sub2api
     type: roundrobin
     nodes:
-      "sub2api-apisix:8080": 1
+      "sub2api-apisix-relay:8080": 1
     timeout:
       connect: 10
       send: 600

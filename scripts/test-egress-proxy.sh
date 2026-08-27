@@ -6,6 +6,8 @@ cd "$root"
 image=${1:-ai-gateway-squid:6.13-2-deb13u2}
 tun2proxy_image=${2:-ghcr.io/tun2proxy/tun2proxy@sha256:562a4208ecf1f53e3c790af512bcc1ce2656f1d10d3541614173eed8b3185708}
 zcode_image=${3:-ghcr.io/tridefender/zcode-proxy@sha256:947dcf83314e16a87b61191c4847bf3d4f10baf4c370c25191d5a49f08a06e52}
+tun_test_mode=${AI_GATEWAY_TUN_TEST_MODE:-exact-capabilities}
+case "$tun_test_mode" in exact-capabilities|ci-privileged) ;; *) echo 'AI_GATEWAY_TUN_TEST_MODE must be exact-capabilities or ci-privileged' >&2; exit 1;; esac
 tmpdir=$(mktemp -d /tmp/ai-gateway-egress-test.XXXXXX)
 suffix=$$
 proxy=ai-egress-test-proxy-$suffix
@@ -215,11 +217,15 @@ docker logs "$proxy" 2>&1 | grep -q "method=GET host=global.$base path=/allowed 
 printf 'nameserver 198.18.0.1\noptions ndots:0\n' >"$tmpdir/virtual-resolv.conf"
 printf 'nameserver 10.0.0.1\n' >"$tmpdir/tunnel-resolv.conf"
 chmod 666 "$tmpdir/tunnel-resolv.conf"
+tunnel_security=(--device /dev/net/tun:/dev/net/tun --cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges)
+if [ "$tun_test_mode" = ci-privileged ]; then
+  tunnel_security=(--privileged)
+  echo 'tun_runtime_mode=ci-privileged production_compose_validation=exact-NET_ADMIN' >&2
+fi
 docker run -d --name "$tunnel" --network "$client_network" --ip 172.29.0.2 \
-  --device /dev/net/tun:/dev/net/tun --read-only \
+  "${tunnel_security[@]}" --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=4m \
   -v "$tmpdir/tunnel-resolv.conf:/etc/resolv.conf:rw" \
-  --cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges \
   --sysctl net.ipv6.conf.all.disable_ipv6=1 \
   --sysctl net.ipv6.conf.default.disable_ipv6=1 \
   "$tun2proxy_image" \
