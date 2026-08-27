@@ -365,6 +365,11 @@ app_commands = {
         "do sleep 0.05; done; exec /docker-entrypoint.sh docker-start",
     ),
 }
+def normalized_command(parts):
+    # Docker Compose preserves escaped dollars in `config --format json`,
+    # while podman-compose emits the runtime single-dollar form.
+    return [str(part).replace("$$", "$") for part in parts]
+
 for owner_name, app_name in (
     ("cpa-netns", "cli-proxy-api"),
     ("sub2api-netns", "sub2api"),
@@ -378,16 +383,16 @@ for owner_name, app_name in (
         raise SystemExit(f"{owner_name} must receive only route setup and privilege-drop capabilities")
     if owner.get("privileged") is True or "no-new-privileges:true" not in owner.get("security_opt", []):
         raise SystemExit(f"{owner_name} must be unprivileged with no-new-privileges")
-    if [str(part) for part in owner.get("command", [])] != expected_owner_command:
+    if normalized_command(owner.get("command", [])) != expected_owner_command:
         raise SystemExit(f"{owner_name} must remove default routes and drop privilege")
     if not owner.get("ports") or app.get("ports"):
         raise SystemExit(f"{owner_name} alone must own {app_name} host publications")
     if app.get("network_mode") != f"service:{owner_name}":
         raise SystemExit(f"{app_name} must share {owner_name} network namespace")
     entrypoint, command = app_commands[app_name]
-    if [str(part) for part in app.get("entrypoint", [])] != entrypoint:
+    if normalized_command(app.get("entrypoint", [])) != entrypoint:
         raise SystemExit(f"{app_name} must wait for namespace hardening before startup")
-    if [str(part) for part in app.get("command", [])] != [command]:
+    if normalized_command(app.get("command", [])) != [command]:
         raise SystemExit(f"{app_name} startup command must preserve its upstream entrypoint after the guard")
     require_dependency(app, owner_name, "service_started", True)
 
