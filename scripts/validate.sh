@@ -89,7 +89,7 @@ expected_submodule=da625d87410d0a0213dc02f0253b653fe4ab4b69
   echo 'AI SSE keepalive proxy submodule is not initialized at reviewed commit' >&2
   exit 1
 }
-if ! git -C "$submodule" diff --quiet || ! git -C "$submodule" diff --cached --quiet; then
+if [ -n "$(git -C "$submodule" status --porcelain --untracked-files=all)" ]; then
   echo 'AI SSE keepalive proxy submodule is dirty' >&2
   exit 1
 fi
@@ -602,6 +602,8 @@ if str(proxy.get("user")) != "65534:65534" or proxy.get("read_only") is not True
     raise SystemExit("AI SSE keepalive proxy hardening mismatch")
 if "no-new-privileges:true" not in proxy.get("security_opt", []) or proxy.get("volumes") or proxy.get("tmpfs") or proxy.get("api") or proxy.get("metrics"):
     raise SystemExit("AI SSE keepalive proxy exposes extra writable/control surface")
+if proxy.get("entrypoint") or proxy.get("command"):
+    raise SystemExit("AI SSE keepalive proxy must preserve its reviewed image entrypoint")
 if int(proxy.get("pids_limit", 0)) != 128 or memory_bytes(proxy.get("mem_limit", 0)) != 64 * 1024**2 or memory_bytes(proxy.get("memswap_limit", 0)) != 64 * 1024**2 or float(proxy.get("cpus", 0)) != 0.5:
     raise SystemExit("AI SSE keepalive proxy resource limits mismatch")
 if normalized(proxy.get("healthcheck", {}).get("test", [])) != ["CMD", "/ai-sse-keepalive-proxy", "healthcheck"]:
