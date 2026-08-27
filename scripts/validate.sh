@@ -71,6 +71,33 @@ for path in .env .pi cpa/config.yaml secrets/cloudflare-tunnel-token data; do
   fi
 done
 
+submodule=middleware/ai-sse-keepalive-proxy
+expected_submodule=da625d87410d0a0213dc02f0253b653fe4ab4b69
+[ "$(git config -f .gitmodules --get submodule.middleware/ai-sse-keepalive-proxy.path)" = "$submodule" ] || {
+  echo 'AI SSE keepalive proxy submodule path mismatch' >&2
+  exit 1
+}
+[ "$(git config -f .gitmodules --get submodule.middleware/ai-sse-keepalive-proxy.url)" = 'https://github.com/xz-dev/ai-sse-keepalive-proxy.git' ] || {
+  echo 'AI SSE keepalive proxy submodule URL mismatch' >&2
+  exit 1
+}
+[ "$(git ls-files -s "$submodule" | awk '{print $1 " " $2}')" = "160000 $expected_submodule" ] || {
+  echo 'AI SSE keepalive proxy gitlink mismatch' >&2
+  exit 1
+}
+[ -f "$submodule/Dockerfile" ] && [ "$(git -C "$submodule" rev-parse HEAD)" = "$expected_submodule" ] || {
+  echo 'AI SSE keepalive proxy submodule is not initialized at reviewed commit' >&2
+  exit 1
+}
+if ! git -C "$submodule" diff --quiet || ! git -C "$submodule" diff --cached --quiet; then
+  echo 'AI SSE keepalive proxy submodule is dirty' >&2
+  exit 1
+fi
+! git grep -nE 'apisix-sse-keepalive|middleware/sse-keepalive|ghcr\.io/.*/ai-sse-keepalive-proxy' -- ':!middleware/ai-sse-keepalive-proxy' ':!scripts/validate.sh' >/dev/null || {
+  echo 'obsolete or registry-hosted AI SSE middleware reference found' >&2
+  exit 1
+}
+
 cpa_config=cpa/config.example.yaml
 if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then cpa_config=data/cpa/conf/config.yaml; fi
 grep -Eq '^proxy-url:[[:space:]]*"?http://cpa-egress-relay:3128"?[[:space:]]*$' "$cpa_config" || {
@@ -196,7 +223,8 @@ base_services = {
     "egress-proxy", "cpa-host-netns", "cpa-host-relay", "cpa-netns", "cli-proxy-api", "cpa-squid-relay",
     "postgres", "redis", "sub2api-host-netns", "sub2api-host-relay", "sub2api-netns", "sub2api",
     "sub2api-cpa-relay", "sub2api-postgres-relay", "sub2api-redis-relay", "sub2api-squid-relay",
-    "apisix-host-netns", "apisix-host-relay", "apisix-netns", "apisix", "apisix-sub2api-relay",
+    "apisix-host-netns", "apisix-host-relay", "apisix-netns", "apisix", "apisix-ai-sse-relay",
+    "ai-sse-keepalive-proxy-netns", "ai-sse-keepalive-proxy", "ai-sse-sub2api-relay",
     "cloudflared-apisix-relay", "cloudflared",
 }
 optional_services = {"cpa-zcode-relay", "zcode-egress-tunnel", "zcode-proxy", "zcode-squid-relay"}
@@ -267,13 +295,21 @@ for service, repository in {
     "apisix":"docker.io/apache/apisix", "postgres":"docker.io/library/postgres",
     "redis":"docker.io/library/redis", "cloudflared":"docker.io/cloudflare/cloudflared",
 }.items(): require_image(service, repository)
-for service in ("cpa-netns", "sub2api-netns", "apisix-netns", "cpa-host-netns", "sub2api-host-netns", "apisix-host-netns"):
+for service in ("cpa-netns", "sub2api-netns", "apisix-netns", "ai-sse-keepalive-proxy-netns", "cpa-host-netns", "sub2api-host-netns", "apisix-host-netns"):
     require_image(service, "docker.io/library/alpine")
+proxy_image = image(services["ai-sse-keepalive-proxy"])
+if not proxy_image or "ghcr.io/" in proxy_image or "@sha256:" in proxy_image:
+    raise SystemExit("AI SSE keepalive proxy must use a local non-registry build tag")
+build = services["ai-sse-keepalive-proxy"].get("build", {})
+if Path(str(build.get("context", ""))).resolve() != Path("middleware/ai-sse-keepalive-proxy").resolve():
+    raise SystemExit("AI SSE keepalive proxy must build from its pinned submodule")
+if services["ai-sse-keepalive-proxy"].get("pull_policy") != "build":
+    raise SystemExit("AI SSE keepalive proxy must force a local Compose build")
 socat_image = "docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b"
 relays = {
     "cpa-squid-relay", "sub2api-host-relay", "sub2api-cpa-relay", "sub2api-postgres-relay",
-    "sub2api-redis-relay", "sub2api-squid-relay", "apisix-host-relay", "apisix-sub2api-relay",
-    "cloudflared-apisix-relay",
+    "sub2api-redis-relay", "sub2api-squid-relay", "apisix-host-relay", "apisix-ai-sse-relay",
+    "ai-sse-sub2api-relay", "cloudflared-apisix-relay",
 } | ({"cpa-zcode-relay", "zcode-squid-relay"} if has_zcode else set())
 for relay in relays: require_image(relay, "docker.io/alpine/socat", socat_image)
 require_image("cpa-host-relay", "docker.io/alpine/socat", socat_image)
@@ -285,7 +321,10 @@ expected_owner_command = [
     'test -z "$(ip -4 route show default)"; test -z "$(ip -6 route show default)"; '
     "exec su nobody -s /bin/sh -c 'exec sleep infinity'",
 ]
-app_owners = {"cli-proxy-api":"cpa-netns", "sub2api":"sub2api-netns", "apisix":"apisix-netns"}
+app_owners = {
+    "cli-proxy-api":"cpa-netns", "sub2api":"sub2api-netns", "apisix":"apisix-netns",
+    "ai-sse-keepalive-proxy":"ai-sse-keepalive-proxy-netns",
+}
 app_commands = {
     "cli-proxy-api": (
         ["/bin/bash", "-ec"],
@@ -306,7 +345,7 @@ app_commands = {
         "do sleep 0.05; done; exec /docker-entrypoint.sh docker-start",
     ),
 }
-for owner in ("cpa-netns", "sub2api-netns", "apisix-netns", "cpa-host-netns", "sub2api-host-netns", "apisix-host-netns"):
+for owner in ("cpa-netns", "sub2api-netns", "apisix-netns", "ai-sse-keepalive-proxy-netns", "cpa-host-netns", "sub2api-host-netns", "apisix-host-netns"):
     cfg=services[owner]
     if cfg.get("read_only") is not True or set(cfg.get("cap_drop",[])) != {"ALL"} or set(cfg.get("cap_add",[])) != {"NET_ADMIN","SETGID","SETUID"}:
         raise SystemExit(f"{owner} namespace hardening mismatch")
@@ -316,12 +355,13 @@ for owner in ("cpa-netns", "sub2api-netns", "apisix-netns", "cpa-host-netns", "s
         raise SystemExit(f"{owner} must remove default routes and drop privilege")
 for app, owner in app_owners.items():
     cfg = services[app]
-    if cfg.get("network_mode") != f"service:{owner}" or cfg.get("ports"):
+    if cfg.get("network_mode") != f"service:{owner}" or cfg.get("ports") or cfg.get("networks"):
         raise SystemExit(f"{app} must share only {owner} network namespace")
-    entrypoint, command = app_commands[app]
-    if normalized(cfg.get("entrypoint", [])) != entrypoint or normalized(cfg.get("command", [])) != [command]:
-        raise SystemExit(f"{app} must preserve its route guard and upstream entrypoint")
     require_dependency(app, owner, True)
+    if app in app_commands:
+        entrypoint, command = app_commands[app]
+        if normalized(cfg.get("entrypoint", [])) != entrypoint or normalized(cfg.get("command", [])) != [command]:
+            raise SystemExit(f"{app} must preserve its route guard and upstream entrypoint")
 for owner, relay in (("cpa-host-netns","cpa-host-relay"),("sub2api-host-netns","sub2api-host-relay"),("apisix-host-netns","apisix-host-relay")):
     if not services[owner].get("ports") or services[relay].get("network_mode") != f"service:{owner}" or services[relay].get("networks"):
         raise SystemExit(f"{relay} must share only published namespace {owner}")
@@ -335,14 +375,16 @@ for service, dependency, restart in (
     ("sub2api", "sub2api-redis-relay", True),
     ("sub2api", "sub2api-squid-relay", True),
     ("apisix", "apisix-host-relay", None),
-    ("apisix", "apisix-sub2api-relay", True),
+    ("apisix", "apisix-ai-sse-relay", True),
+    ("ai-sse-keepalive-proxy", "ai-sse-sub2api-relay", True),
     ("cloudflared", "cloudflared-apisix-relay", True),
     ("cpa-squid-relay", "egress-proxy", None),
     ("sub2api-squid-relay", "egress-proxy", None),
     ("sub2api-cpa-relay", "cli-proxy-api", None),
     ("sub2api-postgres-relay", "postgres", None),
     ("sub2api-redis-relay", "redis", None),
-    ("apisix-sub2api-relay", "sub2api", None),
+    ("apisix-ai-sse-relay", "ai-sse-keepalive-proxy", None),
+    ("ai-sse-sub2api-relay", "sub2api", None),
     ("cloudflared-apisix-relay", "apisix", None),
 ):
     require_dependency(service, dependency, restart)
@@ -392,8 +434,8 @@ expected_network_members = {
     "host-apisix-target": {"apisix-host-netns":"172.30.6.3","apisix-netns":"172.30.6.2"},
     "cloudflared-apisix-source": {"cloudflared":"172.30.7.2","cloudflared-apisix-relay":"172.30.7.3"},
     "cloudflared-apisix-target": {"cloudflared-apisix-relay":"172.30.8.3","apisix-netns":"172.30.8.2"},
-    "apisix-sub2api-source": {"apisix-netns":"172.30.9.2","apisix-sub2api-relay":"172.30.9.3"},
-    "apisix-sub2api-target": {"apisix-sub2api-relay":"172.30.10.3","sub2api-netns":"172.30.10.2"},
+    "apisix-ai-sse-source": {"apisix-netns":"172.30.9.2","apisix-ai-sse-relay":"172.30.9.3"},
+    "apisix-ai-sse-target": {"apisix-ai-sse-relay":"172.30.10.3","ai-sse-keepalive-proxy-netns":"172.30.10.2"},
     "sub2api-cpa-source": {"sub2api-netns":"172.30.11.2","sub2api-cpa-relay":"172.30.11.3"},
     "sub2api-cpa-target": {"sub2api-cpa-relay":"172.30.12.3","cpa-netns":"172.30.12.2"},
     "sub2api-postgres-source": {"sub2api-netns":"172.30.13.2","sub2api-postgres-relay":"172.30.13.3"},
@@ -404,6 +446,8 @@ expected_network_members = {
     "cpa-squid-target": {"cpa-squid-relay":"172.30.18.3","egress-proxy":"172.30.18.2"},
     "sub2api-squid-source": {"sub2api-netns":"172.30.19.2","sub2api-squid-relay":"172.30.19.3"},
     "sub2api-squid-target": {"sub2api-squid-relay":"172.30.20.3","egress-proxy":"172.30.20.2"},
+    "ai-sse-sub2api-source": {"ai-sse-keepalive-proxy-netns":"172.30.25.2","ai-sse-sub2api-relay":"172.30.25.3"},
+    "ai-sse-sub2api-target": {"ai-sse-sub2api-relay":"172.30.26.3","sub2api-netns":"172.30.26.2"},
     "proxy-egress": {"egress-proxy":None},
     "cloudflare-egress": {"cloudflared":None},
 }
@@ -430,7 +474,8 @@ required_aliases = {
     ("sub2api-postgres-relay","sub2api-postgres-source"):"postgres",
     ("sub2api-redis-relay","sub2api-redis-source"):"redis",
     ("sub2api-squid-relay","sub2api-squid-source"):"sub2api-egress-relay",
-    ("apisix-sub2api-relay","apisix-sub2api-source"):"sub2api-apisix-relay",
+    ("apisix-ai-sse-relay","apisix-ai-sse-source"):"ai-sse-keepalive-ingress-relay",
+    ("ai-sse-sub2api-relay","ai-sse-sub2api-source"):"sub2api-ai-sse-relay",
     ("cloudflared-apisix-relay","cloudflared-apisix-source"):"apisix-ingress",
 }
 if has_zcode:
@@ -444,7 +489,8 @@ for (service, network), alias in required_aliases.items():
 
 source_target_edges = [
     ("cloudflared","cloudflared-apisix-relay","apisix-netns","cloudflared-apisix-source","cloudflared-apisix-target"),
-    ("apisix-netns","apisix-sub2api-relay","sub2api-netns","apisix-sub2api-source","apisix-sub2api-target"),
+    ("apisix-netns","apisix-ai-sse-relay","ai-sse-keepalive-proxy-netns","apisix-ai-sse-source","apisix-ai-sse-target"),
+    ("ai-sse-keepalive-proxy-netns","ai-sse-sub2api-relay","sub2api-netns","ai-sse-sub2api-source","ai-sse-sub2api-target"),
     ("sub2api-netns","sub2api-cpa-relay","cpa-netns","sub2api-cpa-source","sub2api-cpa-target"),
     ("sub2api-netns","sub2api-postgres-relay","postgres","sub2api-postgres-source","sub2api-postgres-target"),
     ("sub2api-netns","sub2api-redis-relay","redis","sub2api-redis-source","sub2api-redis-target"),
@@ -486,7 +532,8 @@ commands = {
  "sub2api-host-relay": (None,8080,"172.30.4.2",8080),
  "apisix-host-relay": (None,9080,"172.30.6.2",9080),
  "cloudflared-apisix-relay": ("172.30.7.3",9080,"172.30.8.2",9080),
- "apisix-sub2api-relay": ("172.30.9.3",8080,"172.30.10.2",8080),
+ "apisix-ai-sse-relay": ("172.30.9.3",8080,"172.30.10.2",8080),
+ "ai-sse-sub2api-relay": ("172.30.25.3",8080,"172.30.26.2",8080),
  "sub2api-cpa-relay": ("172.30.11.3",8317,"172.30.12.2",8317),
  "sub2api-postgres-relay": ("172.30.13.3",5432,"172.30.14.2",5432),
  "sub2api-redis-relay": ("172.30.15.3",6379,"172.30.16.2",6379),
@@ -527,7 +574,8 @@ expected_hosts = {
         "cli-proxy-api":"172.30.11.3", "postgres":"172.30.13.3",
         "redis":"172.30.15.3", "sub2api-egress-relay":"172.30.19.3",
     },
-    "apisix-netns": {"sub2api-apisix-relay":"172.30.9.3"},
+    "apisix-netns": {"ai-sse-keepalive-ingress-relay":"172.30.9.3"},
+    "ai-sse-keepalive-proxy-netns": {"sub2api-ai-sse-relay":"172.30.25.3"},
     "cloudflared": {"apisix-ingress":"172.30.7.3"},
 }
 if has_zcode:
@@ -538,15 +586,33 @@ for service, expected in expected_hosts.items():
 
 if services["sub2api"].get("environment",{}).get("SECURITY_URL_ALLOWLIST_ENABLED") not in (False,"false"):
     raise SystemExit("Sub2API URL allowlist must remain false")
-if services["sub2api"].get("environment",{}).get("SERVER_TRUSTED_PROXIES") != "172.30.10.3/32":
-    raise SystemExit("Sub2API must trust only APISIX relay target address")
+if services["sub2api"].get("environment",{}).get("SERVER_TRUSTED_PROXIES") != "172.30.26.3/32":
+    raise SystemExit("Sub2API must trust only AI SSE relay target address")
+proxy = services["ai-sse-keepalive-proxy"]
+expected_proxy_env = {
+    "UPSTREAM_URL":"http://sub2api-ai-sse-relay:8080", "LISTEN_ADDR":":8080",
+    "HEADER_WAIT":"2s", "IDLE_INTERVAL":"15s", "MAX_INSPECT_BODY_BYTES":"16777216",
+    "REQUIRE_NO_DEFAULT_ROUTE":"true",
+}
+actual_proxy_env = proxy.get("environment", {})
+for name, value in expected_proxy_env.items():
+    if actual_proxy_env.get(name) != value:
+        raise SystemExit(f"AI SSE keepalive proxy {name} mismatch")
+if str(proxy.get("user")) != "65534:65534" or proxy.get("read_only") is not True or set(proxy.get("cap_drop", [])) != {"ALL"} or proxy.get("cap_add"):
+    raise SystemExit("AI SSE keepalive proxy hardening mismatch")
+if "no-new-privileges:true" not in proxy.get("security_opt", []) or proxy.get("volumes") or proxy.get("tmpfs") or proxy.get("api") or proxy.get("metrics"):
+    raise SystemExit("AI SSE keepalive proxy exposes extra writable/control surface")
+if int(proxy.get("pids_limit", 0)) != 128 or memory_bytes(proxy.get("mem_limit", 0)) != 64 * 1024**2 or memory_bytes(proxy.get("memswap_limit", 0)) != 64 * 1024**2 or float(proxy.get("cpus", 0)) != 0.5:
+    raise SystemExit("AI SSE keepalive proxy resource limits mismatch")
+if normalized(proxy.get("healthcheck", {}).get("test", [])) != ["CMD", "/ai-sse-keepalive-proxy", "healthcheck"]:
+    raise SystemExit("AI SSE keepalive proxy healthcheck mismatch")
 for service,proxy in (("cli-proxy-api","http://cpa-egress-relay:3128"),("sub2api","http://sub2api-egress-relay:3128")):
     env=services[service].get("environment",{})
     if env.get("HTTP_PROXY")!=proxy or env.get("HTTPS_PROXY")!=proxy:
         raise SystemExit(f"{service} must use its source-side Squid relay")
     if "/etc/ssl/certs/ai-gateway-ca-bundle.pem" not in volume_targets(services[service]):
         raise SystemExit(f"{service} must receive only public inspection trust")
-if "sub2api-apisix-relay:8080" not in Path("apisix/apisix.yaml").read_text():
+if "ai-sse-keepalive-ingress-relay:8080" not in Path("apisix/apisix.yaml").read_text():
     raise SystemExit("APISIX upstream must target its dedicated relay")
 if sys.argv[3]=="1":
     squid=Path("data/egress-proxy/generated/squid.conf").read_text()
@@ -574,6 +640,28 @@ if has_zcode:
 
 key_holders={service for service,cfg in services.items() if "/etc/squid/ca.key" in volume_targets(cfg)}
 if key_holders!={"egress-proxy"}: raise SystemExit(f"private CA key holders: {key_holders}")
+PY
+ai_sse_image=$(value_from_env AI_SSE_KEEPALIVE_PROXY_IMAGE)
+[ -n "$ai_sse_image" ] || ai_sse_image=ai-sse-keepalive-proxy:latest
+[[ "$ai_sse_image" != *ghcr.io/* && "$ai_sse_image" != *@sha256:* ]] || {
+  echo 'AI_SSE_KEEPALIVE_PROXY_IMAGE must use a local build tag, never GHCR or a registry digest' >&2
+  exit 1
+}
+BUILDAH_FORMAT=docker docker compose "${compose_args[@]}" --env-file "$env_file" build ai-sse-keepalive-proxy >/dev/null
+proxy_inspect=$(docker image inspect "$ai_sse_image")
+python3 - "$proxy_inspect" <<'PY'
+import json
+import sys
+
+image = json.loads(sys.argv[1])[0]
+config = image["Config"]
+if config.get("User") != "65534:65534":
+    raise SystemExit("built AI SSE keepalive proxy image user mismatch")
+if config.get("Entrypoint") != ["/ai-sse-keepalive-proxy"]:
+    raise SystemExit("built AI SSE keepalive proxy entrypoint mismatch")
+health = config.get("Healthcheck") or image.get("Healthcheck") or {}
+if health.get("Test") != ["CMD", "/ai-sse-keepalive-proxy", "healthcheck"]:
+    raise SystemExit("built AI SSE keepalive proxy healthcheck mismatch")
 PY
 egress_image=$(value_from_env EGRESS_PROXY_IMAGE)
 [ -n "$egress_image" ] || egress_image=ai-gateway-squid:6.13-2-deb13u2
@@ -659,4 +747,4 @@ docker run --rm \
   "$apisix_image" apisix test >/dev/null
 
 if command -v shellcheck >/dev/null; then shellcheck scripts/*.sh egress-proxy/*.sh; fi
-echo 'compose=valid pairwise_networks=valid egress_proxy=valid apisix=valid private_paths=untracked'
+echo 'compose=valid pairwise_networks=valid ai_sse_keepalive_proxy=valid egress_proxy=valid apisix=valid private_paths=untracked'

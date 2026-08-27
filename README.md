@@ -1,6 +1,6 @@
 # AI Gateway
 
-Reusable Docker Compose stack for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [Sub2API](https://github.com/Wei-Shaw/sub2api), [Apache APISIX](https://apisix.apache.org/), [Squid](https://www.squid-cache.org/), [socat](http://www.dest-unreach.org/socat/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
+Reusable Docker Compose stack for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [Sub2API](https://github.com/Wei-Shaw/sub2api), [Apache APISIX](https://apisix.apache.org/), [ai-sse-keepalive-proxy](https://github.com/xz-dev/ai-sse-keepalive-proxy), [Squid](https://www.squid-cache.org/), [socat](http://www.dest-unreach.org/socat/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
 
 It separates provider credentials, client API-key authority, public routing, and Internet ingress:
 
@@ -9,7 +9,8 @@ flowchart LR
   Client --> Cloudflare
   Cloudflare --> cloudflared
   cloudflared --> APISIX
-  APISIX --> Sub2API
+  APISIX --> Keepalive[AI SSE keepalive proxy]
+  Keepalive --> Sub2API
   Sub2API --> CPA[CLIProxyAPI]
   Sub2API --> PostgreSQL
   Sub2API --> Redis
@@ -22,14 +23,16 @@ flowchart LR
 
 - **Sub2API is the only client API-key authority.** APISIX never validates client keys.
 - APISIX exposes an AI-method/path allowlist. Management, login, health, and unknown routes are not public.
+- `ai-sse-keepalive-proxy` is AI SSE protocol-specific, not a generic arbitrary-SSE transformer. It recognizes streaming OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages framing. Placement after APISIX lets APISIX remain sole public security boundary while proxy owns parser-visible startup/idle writes during silent upstream periods.
+- APISIX reaches middleware only through `apisix-ai-sse-relay`; middleware reaches Sub2API only through `ai-sse-sub2api-relay`. APISIX and Sub2API share no network. Sub2API trusts forwarded IP headers only from outgoing relay target `172.30.26.3/32`, preserving APISIX-sanitized forwarding headers through middleware.
 - APISIX admits 10 requests/second per client with a 40-request burst and at most 50 concurrent requests; excess traffic receives an immediate neutral `429` without delay.
 - Request bodies are capped at 16 MiB and rejected with a neutral `413` before reaching Sub2API.
 - Public final `401` and all final `404` responses become the same zero-byte `404`; other statuses and successful, SSE, and WebSocket responses remain transparent.
 - APISIX strips Sub2API's private `X-Client-Request-ID` and preserves standard `X-Request-ID` on non-opaque responses.
-- Sub2API accepts forwarded client IPs only from APISIX. Its URL allowlist stays disabled because CPA uses an internal HTTP URL; Docker pairwise networks provide the service-reachability boundary instead.
+- Sub2API accepts forwarded client IPs only through AI SSE middleware's outgoing relay, after APISIX sanitizes them. Its URL allowlist stays disabled because CPA uses an internal HTTP URL; Docker pairwise networks provide the service-reachability boundary instead.
 - CPA, Sub2API admin access, and APISIX bind to loopback by default.
 - Every directed TCP edge has one independent version- and digest-pinned `alpine/socat` relay. Its source and target sides use separate networks, so sources can initiate through the relay but targets cannot open a new connection back. TCP remains full duplex after connection establishment, preserving OAuth, SSE, WebSocket, and 600-second requests. No relay exposes an API or reverse mode. Production currently has no UDP edge; UDP is enabled only when an actual UDP port contract exists.
-- Every internal relay network has exactly two Compose members; no service uses Compose's default network. CPA, Sub2API, and APISIX still share networking with minimal Alpine namespace owners that delete all default routes and drop privilege. Separate host-ingress namespace owners hold published ports and the source/target sides of their dedicated socat relays. This remains portable across rootless Podman and rootful Docker without host firewall changes or engine-specific bridge options.
+- Every internal relay network has exactly two Compose members; no service uses Compose's default network. CPA, Sub2API, APISIX, and AI SSE middleware share networking with minimal Alpine namespace owners that delete all default routes and drop privilege. Separate host-ingress namespace owners hold published ports and the source/target sides of their dedicated socat relays. This remains portable across rootless Podman and rootful Docker without host firewall changes or engine-specific bridge options.
 - CPA and Sub2API have no direct Internet route. Each reaches Squid only through its own source/target socat relay pair. Squid alone joins `proxy-egress`; cloudflared alone joins its egress network and reaches APISIX only through its own relay. APISIX has no Internet route.
 - Production-only services such as ZCode stay out of the reusable Compose file. An ignored `compose.override.yaml` may add the official digest-pinned ZCode image behind digest-pinned `tun2proxy`. ZCode shares the tunnel namespace, TUN routes, and virtual DNS. CPA→ZCode and ZCode→Squid each cross an independent two-network socat relay, so transports that ignore proxy variables still reach Squid without a downstream ZCode fork.
 - Egress policy is fail-closed. Every HTTPS tunnel must pass service/source, CONNECT domain, exact ClientHello SNI-to-CONNECT matching, and resolved private/reserved-address denial. Squid resolves only through an in-container Unbound instance that strips unsafe answers before caching, including mixed and rebinding responses. `bump` destinations additionally require exact decrypted Host-to-SNI matching plus method/path ACLs. `splice` destinations retain end-to-end TLS fingerprints but cannot expose encrypted Host/path to Squid.
@@ -42,7 +45,7 @@ flowchart LR
 Requirements: Linux with `/dev/net/tun`, Docker Engine with Compose v2.33.1+ for production or rootless Podman with a Compose provider for local operation, OpenSSL, and a remotely managed Cloudflare Tunnel. The same Compose uses only container-local shared namespaces, temporary route-setup capabilities, virtual DNS, and the TUN device; it never changes host firewall or routing state.
 
 ```bash
-git clone https://github.com/xz-dev/AI-gateway.git /root/AI-gateway
+git clone --recurse-submodules https://github.com/xz-dev/AI-gateway.git /root/AI-gateway
 cd /root/AI-gateway
 ./scripts/init.sh
 ```
@@ -58,11 +61,13 @@ cd /root/AI-gateway
    ```
 
    The generated policy initially denies all egress. Use `tls: "bump"` with explicit methods and anchored POSIX path expressions. Use `tls: "splice"` only when preserving end-to-end TLS behavior is required; splice entries cannot enforce HTTP Host/path.
-4. Validate and start:
+4. Validate and start. Compose builds `ai-sse-keepalive-proxy:latest` locally from pinned submodule `middleware/ai-sse-keepalive-proxy`; it never pulls middleware from GHCR:
 
    ```bash
+   git submodule update --init --recursive
    ./scripts/validate.sh
    docker compose pull cli-proxy-api postgres redis sub2api apisix cloudflared
+   docker compose build ai-sse-keepalive-proxy
    docker compose up -d --build --wait
    docker compose ps
    ```
@@ -177,7 +182,7 @@ When upgrading Sub2API, re-audit that provider/upstream authentication failures 
 
 ## Operations
 
-Sub2API, CLIProxyAPI, their namespace owners, and every adjacent socat relay are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never use `docker restart`, never recreate a namespace owner alone, and never recreate CPA without Sub2API. With the production override, include the ZCode tunnel and both ZCode relays in the same full-stack operation.
+Sub2API, CLIProxyAPI, AI SSE keepalive proxy, their namespace owners, and every adjacent socat relay are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never use `docker restart`, never recreate a namespace owner alone, and never recreate CPA without Sub2API. With the production override, include the ZCode tunnel and both ZCode relays in the same full-stack operation.
 
 ```bash
 # Follow all stack and relay logs
@@ -200,7 +205,7 @@ Persistent application state lives under ignored `data/`, including the egress C
 ./scripts/validate.sh .env.example # tracked template only
 ```
 
-Validation renders Compose and enforces exact per-edge socat commands, two-member source/target membership, fixed internal addresses, nonroot/read-only/capability-free relays, engine-neutral host publication, startup wrappers, image digests, and sole-egress membership. `test-socat-boundary.sh` proves TCP and UDP forwarding, 256 simultaneous held-open TCP connections, blocked target→source initiation, zero effective relay capabilities, and cleanup. The 512-PID/64-MiB relay bounds leave parent and supervisor headroom above that tested capacity; UDP remains test-only until a real production UDP contract exists. The egress tests keep exact `/dev/net/tun`+`NET_ADMIN` by default; hosted CI labels an explicit privileged runtime-test mode while static Compose validation still rejects privileged production services.
+Validation renders Compose and enforces exact per-edge socat commands, two-member source/target membership, fixed internal addresses, nonroot/read-only/capability-free relays, AI SSE middleware submodule/gitlink/local build/image metadata, engine-neutral host publication, startup wrappers, external image digests, and sole-egress membership. Base rendering has 26 services and 24 networks; optional ZCode rendering has 30 services and 28 networks. `test-socat-boundary.sh` proves TCP and UDP forwarding, 256 simultaneous held-open TCP connections, blocked target→source initiation, zero effective relay capabilities, and cleanup. The 512-PID/64-MiB relay bounds leave parent and supervisor headroom above that tested capacity; UDP remains test-only until a real production UDP contract exists. The egress tests keep exact `/dev/net/tun`+`NET_ADMIN` by default; hosted CI labels an explicit privileged runtime-test mode while static Compose validation still rejects privileged production services.
 
 ## Layout
 
@@ -221,6 +226,8 @@ Validation renders Compose and enforces exact per-edge socat commands, two-membe
 │   ├── cpa/
 │   ├── egress-proxy/
 │   └── sub2api/
+├── middleware/
+│   └── ai-sse-keepalive-proxy/ # pinned submodule, built locally by Compose
 ├── scripts/
 │   ├── init.sh
 │   ├── init-egress-proxy.sh

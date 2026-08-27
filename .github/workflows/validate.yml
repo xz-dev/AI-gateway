@@ -12,6 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build AI SSE keepalive proxy locally
+        run: docker compose --env-file .env.example build ai-sse-keepalive-proxy
       - name: Validate reusable Compose and runtime boundaries
         env:
           AI_GATEWAY_TUN_TEST_MODE: ci-privileged

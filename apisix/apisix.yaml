@@ -61,7 +61,7 @@ upstreams:
   - id: sub2api
     type: roundrobin
     nodes:
-      "sub2api-apisix-relay:8080": 1
+      "ai-sse-keepalive-ingress-relay:8080": 1
     timeout:
       connect: 10
       send: 600

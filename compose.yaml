@@ -278,9 +278,9 @@ services:
     networks:
       host-sub2api-target:
         ipv4_address: 172.30.4.2
-      apisix-sub2api-target:
+      ai-sse-sub2api-target:
         aliases: [sub2api]
-        ipv4_address: 172.30.10.2
+        ipv4_address: 172.30.26.2
       sub2api-cpa-source:
         ipv4_address: 172.30.11.2
       sub2api-postgres-source:
@@ -325,7 +325,7 @@ services:
       SERVER_PORT: 8080
       SERVER_MODE: release
       RUN_MODE: ${SUB2API_RUN_MODE:-standard}
-      SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.30.10.3/32}
+      SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.30.26.3/32}
       SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL: "false"
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
@@ -431,13 +431,13 @@ services:
   apisix-netns:
     <<: *netns-owner
     extra_hosts:
-      - "sub2api-apisix-relay:172.30.9.3"
+      - "ai-sse-keepalive-ingress-relay:172.30.9.3"
     networks:
       host-apisix-target:
         ipv4_address: 172.30.6.2
       cloudflared-apisix-target:
         ipv4_address: 172.30.8.2
-      apisix-sub2api-source:
+      apisix-ai-sse-source:
         ipv4_address: 172.30.9.2
 
   apisix:
@@ -463,7 +463,7 @@ services:
     depends_on:
       apisix-netns: {condition: service_started, restart: true}
       apisix-host-relay: {condition: service_started}
-      apisix-sub2api-relay: {condition: service_started, restart: true}
+      apisix-ai-sse-relay: {condition: service_started, restart: true}
     volumes:
       - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro,Z
       - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro,Z
@@ -475,17 +475,71 @@ services:
       retries: 3
       start_period: 20s
 
-  apisix-sub2api-relay:
+  ai-sse-keepalive-proxy-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "sub2api-ai-sse-relay:172.30.25.3"
+    networks:
+      apisix-ai-sse-target:
+        ipv4_address: 172.30.10.2
+      ai-sse-sub2api-source:
+        ipv4_address: 172.30.25.2
+
+  ai-sse-keepalive-proxy:
+    build:
+      context: ./middleware/ai-sse-keepalive-proxy
+    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ai-sse-keepalive-proxy:latest}
+    pull_policy: build
+    user: "65534:65534"
+    network_mode: service:ai-sse-keepalive-proxy-netns
+    restart: unless-stopped
+    depends_on:
+      ai-sse-keepalive-proxy-netns: {condition: service_started, restart: true}
+      ai-sse-sub2api-relay: {condition: service_started, restart: true}
+    pids_limit: 128
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.5
+    read_only: true
+    cap_drop: [ALL]
+    logging: *default-logging
+    security_opt: [no-new-privileges:true]
+    environment:
+      UPSTREAM_URL: http://sub2api-ai-sse-relay:8080
+      LISTEN_ADDR: :8080
+      HEADER_WAIT: ${AI_SSE_KEEPALIVE_PROXY_HEADER_WAIT:-2s}
+      IDLE_INTERVAL: ${AI_SSE_KEEPALIVE_PROXY_IDLE_INTERVAL:-15s}
+      MAX_INSPECT_BODY_BYTES: ${AI_SSE_KEEPALIVE_PROXY_MAX_INSPECT_BODY_BYTES:-16777216}
+      REQUIRE_NO_DEFAULT_ROUTE: "true"
+    healthcheck:
+      test: [CMD, /ai-sse-keepalive-proxy, healthcheck]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  apisix-ai-sse-relay:
     <<: *socat-relay
     command: ["TCP4-LISTEN:8080,bind=172.30.9.3,reuseaddr,fork", "TCP4:172.30.10.2:8080,connect-timeout=10"]
     depends_on:
+      ai-sse-keepalive-proxy: {condition: service_started}
+    networks:
+      apisix-ai-sse-source:
+        aliases: [ai-sse-keepalive-ingress-relay]
+        ipv4_address: 172.30.9.3
+      apisix-ai-sse-target:
+        ipv4_address: 172.30.10.3
+
+  ai-sse-sub2api-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:8080,bind=172.30.25.3,reuseaddr,fork", "TCP4:172.30.26.2:8080,connect-timeout=10"]
+    depends_on:
       sub2api: {condition: service_started}
     networks:
-      apisix-sub2api-source:
-        aliases: [sub2api-apisix-relay]
-        ipv4_address: 172.30.9.3
-      apisix-sub2api-target:
-        ipv4_address: 172.30.10.3
+      ai-sse-sub2api-source:
+        aliases: [sub2api-ai-sse-relay]
+        ipv4_address: 172.30.25.3
+      ai-sse-sub2api-target:
+        ipv4_address: 172.30.26.3
 
   cloudflared-apisix-relay:
     <<: *socat-relay
@@ -546,10 +600,10 @@ networks:
   cloudflared-apisix-target:
     internal: true
     ipam: {config: [{subnet: 172.30.8.0/29}]}
-  apisix-sub2api-source:
+  apisix-ai-sse-source:
     internal: true
     ipam: {config: [{subnet: 172.30.9.0/29}]}
-  apisix-sub2api-target:
+  apisix-ai-sse-target:
     internal: true
     ipam: {config: [{subnet: 172.30.10.0/29}]}
   sub2api-cpa-source:
@@ -582,5 +636,11 @@ networks:
   sub2api-squid-target:
     internal: true
     ipam: {config: [{subnet: 172.30.20.0/29}]}
+  ai-sse-sub2api-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.25.0/29}]}
+  ai-sse-sub2api-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.26.0/29}]}
   proxy-egress:
   cloudflare-egress:
