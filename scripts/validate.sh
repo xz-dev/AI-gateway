@@ -72,7 +72,7 @@ for path in .env .pi cpa/config.yaml secrets/cloudflare-tunnel-token data; do
 done
 
 submodule=middleware/ai-sse-keepalive-proxy
-expected_submodule=da625d87410d0a0213dc02f0253b653fe4ab4b69
+expected_submodule=c427191d5a171aa7dbdf8577b52c35c274592e53
 [ "$(git config -f .gitmodules --get submodule.middleware/ai-sse-keepalive-proxy.path)" = "$submodule" ] || {
   echo 'AI SSE keepalive proxy submodule path mismatch' >&2
   exit 1
@@ -298,8 +298,8 @@ for service, repository in {
 for service in ("cpa-netns", "sub2api-netns", "apisix-netns", "ai-sse-keepalive-proxy-netns", "cpa-host-netns", "sub2api-host-netns", "apisix-host-netns"):
     require_image(service, "docker.io/library/alpine")
 proxy_image = image(services["ai-sse-keepalive-proxy"])
-if not proxy_image or "ghcr.io/" in proxy_image or "@sha256:" in proxy_image:
-    raise SystemExit("AI SSE keepalive proxy must use a local non-registry build tag")
+if proxy_image != "ai-sse-keepalive-proxy:latest":
+    raise SystemExit("AI SSE keepalive proxy must use exact local tag ai-sse-keepalive-proxy:latest")
 build = services["ai-sse-keepalive-proxy"].get("build", {})
 if Path(str(build.get("context", ""))).resolve() != Path("middleware/ai-sse-keepalive-proxy").resolve():
     raise SystemExit("AI SSE keepalive proxy must build from its pinned submodule")
@@ -643,12 +643,7 @@ if has_zcode:
 key_holders={service for service,cfg in services.items() if "/etc/squid/ca.key" in volume_targets(cfg)}
 if key_holders!={"egress-proxy"}: raise SystemExit(f"private CA key holders: {key_holders}")
 PY
-ai_sse_image=$(value_from_env AI_SSE_KEEPALIVE_PROXY_IMAGE)
-[ -n "$ai_sse_image" ] || ai_sse_image=ai-sse-keepalive-proxy:latest
-[[ "$ai_sse_image" != *ghcr.io/* && "$ai_sse_image" != *@sha256:* ]] || {
-  echo 'AI_SSE_KEEPALIVE_PROXY_IMAGE must use a local build tag, never GHCR or a registry digest' >&2
-  exit 1
-}
+ai_sse_image=ai-sse-keepalive-proxy:latest
 BUILDAH_FORMAT=docker docker compose "${compose_args[@]}" --env-file "$env_file" build ai-sse-keepalive-proxy >/dev/null
 proxy_inspect=$(docker image inspect "$ai_sse_image")
 python3 - "$proxy_inspect" <<'PY'
