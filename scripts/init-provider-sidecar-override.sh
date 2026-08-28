@@ -6,7 +6,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 output=${1:-$root/compose.override.yaml}
 [ ! -e "$output" ] || { echo "$output already exists; refusing to overwrite it" >&2; exit 1; }
 
-tmp=$(mktemp /tmp/ai-gateway-zcode-override.XXXXXX)
+tmp=$(mktemp /tmp/ai-gateway-provider-sidecar-override.XXXXXX)
 cleanup() { rm -f -- "$tmp"; }
 trap cleanup EXIT
 
@@ -14,23 +14,23 @@ cat >"$tmp" <<'YAML'
 services:
   egress-proxy:
     networks:
-      zcode-squid-target:
+      provider-sidecar-squid-target:
         ipv4_address: 172.30.24.2
 
   cpa-netns:
     extra_hosts:
       - "cpa-egress-relay:172.30.17.3"
-      - "zcode-proxy:172.30.21.3"
+      - "provider-sidecar:172.30.21.3"
     networks:
-      cpa-zcode-source:
+      cpa-provider-sidecar-source:
         ipv4_address: 172.30.21.2
 
-  cpa-zcode-relay:
+  cpa-provider-sidecar-relay:
     image: ${SOCAT_IMAGE:?Set SOCAT_IMAGE in .env}
     user: "65534:65534"
     restart: unless-stopped
     depends_on:
-      zcode-proxy:
+      provider-sidecar:
         condition: service_started
     pids_limit: 512
     mem_limit: 64m
@@ -39,27 +39,27 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    command: ["OPENSSL-LISTEN:8080,bind=172.30.21.3,reuseaddr,fork,cert=/run/zcode-tls/server.crt,key=/run/zcode-tls/server.key,verify=0,openssl-min-proto-version=TLS1.2", "TCP4:172.30.22.2:8080,connect-timeout=10"]
+    command: ["OPENSSL-LISTEN:8080,bind=172.30.21.3,reuseaddr,fork,cert=/run/provider-sidecar-tls/server.crt,key=/run/provider-sidecar-tls/server.key,verify=0,openssl-min-proto-version=TLS1.2", "TCP4:172.30.22.2:8080,connect-timeout=10"]
     volumes:
       # Parent host directory stays 0700. Direct bind-mounted leaf certificate
       # and key are 0444 so unprivileged UID 65534 can read mounted inodes.
-      - ./data/zcode-tls/server.crt:/run/zcode-tls/server.crt:ro,z
-      - ./data/zcode-tls/server.key:/run/zcode-tls/server.key:ro,z
+      - ./data/provider-sidecar-tls/server.crt:/run/provider-sidecar-tls/server.crt:ro,z
+      - ./data/provider-sidecar-tls/server.key:/run/provider-sidecar-tls/server.key:ro,z
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
     networks:
-      cpa-zcode-source:
-        aliases: [zcode-proxy]
+      cpa-provider-sidecar-source:
+        aliases: [provider-sidecar]
         ipv4_address: 172.30.21.3
-      cpa-zcode-target:
+      cpa-provider-sidecar-target:
         ipv4_address: 172.30.22.3
 
-  zcode-egress-tunnel:
+  provider-sidecar-tunnel:
     image: ${TUN2PROXY_IMAGE:?Set TUN2PROXY_IMAGE in .env}
     restart: "no"
     depends_on:
-      zcode-squid-relay:
+      provider-sidecar-squid-relay:
         condition: service_started
         restart: true
     pids_limit: 64
@@ -90,18 +90,21 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
     networks:
-      cpa-zcode-target:
-        aliases: [zcode-proxy-target]
+      cpa-provider-sidecar-target:
+        aliases: [provider-sidecar-target]
         ipv4_address: 172.30.22.2
-      zcode-squid-source:
+      provider-sidecar-squid-source:
         ipv4_address: 172.30.23.2
 
-  zcode-proxy:
-    image: ${ZCODE_PROXY_IMAGE:?Set ZCODE_PROXY_IMAGE in .env}
-    network_mode: service:zcode-egress-tunnel
+  # This is the transport/security contract only. Add runtime-specific environment,
+  # volumes, command, and healthcheck fields in this ignored production override.
+  provider-sidecar:
+    image: ${PROVIDER_SIDECAR_IMAGE:?Set a digest-pinned PROVIDER_SIDECAR_IMAGE in .env}
+    user: "${PROVIDER_SIDECAR_USER:?Set the non-root PROVIDER_SIDECAR_USER in .env}"
+    network_mode: service:provider-sidecar-tunnel
     restart: unless-stopped
     depends_on:
-      zcode-egress-tunnel:
+      provider-sidecar-tunnel:
         condition: service_started
         restart: true
     pids_limit: 128
@@ -116,23 +119,12 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: ["/tmp:rw,nosuid,nodev,size=64m"]
     environment:
-      ZCODE_PROXY_CREDENTIAL_SECRET: ${ZCODE_PROXY_CREDENTIAL_SECRET:?Set ZCODE_PROXY_CREDENTIAL_SECRET in .env}
-      ZCODE_PROXY_API_KEY: ${ZCODE_PROXY_API_KEY:?Set ZCODE_PROXY_API_KEY in .env}
-      ZCODE_PROXY_CONFIG: /home/bun/.zcode-proxy/config.yaml
-      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ai-gateway-ca-bundle.pem
       SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
     volumes:
-      - ./data/zcode:/home/bun/.zcode-proxy:ro,Z
       - ./data/egress-proxy/ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
       - ./data/egress-proxy/virtual-resolv.conf:/etc/resolv.conf:ro,z
-    healthcheck:
-      test: [CMD, bun, -e, 'import {lookup} from "node:dns/promises"; Promise.all([fetch("http://127.0.0.1:8080/health",{headers:{"x-api-key":process.env.ZCODE_PROXY_API_KEY}}),lookup("zcode.z.ai")]).then(([r,d])=>{if(!r.ok||!d.address.startsWith("198.18."))throw new Error("health="+r.status+" dns="+d.address)}).catch(e=>{console.error(e.message);process.exit(1)})']
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
-  zcode-squid-relay:
+  provider-sidecar-squid-relay:
     image: ${SOCAT_IMAGE:?Set SOCAT_IMAGE in .env}
     user: "65534:65534"
     restart: unless-stopped
@@ -151,36 +143,36 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
     networks:
-      zcode-squid-source:
-        aliases: [zcode-egress-relay]
+      provider-sidecar-squid-source:
+        aliases: [provider-sidecar-egress-relay]
         ipv4_address: 172.30.23.3
-      zcode-squid-target:
+      provider-sidecar-squid-target:
         ipv4_address: 172.30.24.3
 
   cli-proxy-api:
     depends_on:
-      cpa-zcode-relay:
+      cpa-provider-sidecar-relay:
         condition: service_started
         restart: true
     environment:
-      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,cpa-egress-relay,zcode-proxy
+      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,cpa-egress-relay,provider-sidecar
     volumes:
-      - ./data/zcode-tls/cpa-ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
+      - ./data/provider-sidecar-tls/cpa-ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
 
 networks:
-  cpa-zcode-source:
+  cpa-provider-sidecar-source:
     internal: true
     ipam: {config: [{subnet: 172.30.21.0/29}]}
-  cpa-zcode-target:
+  cpa-provider-sidecar-target:
     internal: true
     ipam: {config: [{subnet: 172.30.22.0/29}]}
-  zcode-squid-source:
+  provider-sidecar-squid-source:
     internal: true
     ipam: {config: [{subnet: 172.30.23.0/29}]}
-  zcode-squid-target:
+  provider-sidecar-squid-target:
     internal: true
     ipam: {config: [{subnet: 172.30.24.0/29}]}
 YAML
 
 install -m 600 "$tmp" "$output"
-echo "Created ignored production ZCode override: $output"
+echo "Created ignored production provider-sidecar override: $output"

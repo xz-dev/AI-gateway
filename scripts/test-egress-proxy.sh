@@ -5,7 +5,6 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 image=${1:-ai-gateway-squid:6.13-2-deb13u2}
 tun2proxy_image=${2:-ghcr.io/tun2proxy/tun2proxy@sha256:562a4208ecf1f53e3c790af512bcc1ce2656f1d10d3541614173eed8b3185708}
-zcode_image=${3:-ghcr.io/tridefender/zcode-proxy@sha256:947dcf83314e16a87b61191c4847bf3d4f10baf4c370c25191d5a49f08a06e52}
 tun_test_mode=${AI_GATEWAY_TUN_TEST_MODE:-exact-capabilities}
 case "$tun_test_mode" in exact-capabilities|ci-privileged) ;; *) echo 'AI_GATEWAY_TUN_TEST_MODE must be exact-capabilities or ci-privileged' >&2; exit 1;; esac
 tmpdir=$(mktemp -d /tmp/ai-gateway-egress-test.XXXXXX)
@@ -40,7 +39,6 @@ for command in docker openssl python3 timeout; do
 done
 docker image inspect "$image" >/dev/null 2>&1 || docker build --quiet --tag "$image" egress-proxy >/dev/null
 docker image inspect "$tun2proxy_image" >/dev/null 2>&1 || docker pull "$tun2proxy_image" >/dev/null
-docker image inspect "$zcode_image" >/dev/null 2>&1 || docker pull "$zcode_image" >/dev/null
 [ -c /dev/net/tun ] || { echo '/dev/net/tun is required for namespace egress validation' >&2; exit 1; }
 
 cat >"$tmpdir/policy.json" <<'JSON'
@@ -287,27 +285,6 @@ done
   exit 1
 }
 
-zcode_result=$(docker run --rm --network "container:$tunnel" \
-  -e HTTP_PROXY= -e HTTPS_PROXY= -e ALL_PROXY= \
-  -e NODE_EXTRA_CA_CERTS=/inspection-ca.crt -e SSL_CERT_FILE=/inspection-ca.crt \
-  -v "$tmpdir/virtual-resolv.conf:/etc/resolv.conf:ro" \
-  -v "$tmpdir/ca.crt:/inspection-ca.crt:ro" \
-  --entrypoint bun "$zcode_image" -e '
-    import {sendOrderedUpstreamRequest} from "./src/proxy/ordered-transport.ts";
-    const response = await sendOrderedUpstreamRequest({
-      url: "https://bump.filter.example.net/allowed",
-      method: "GET",
-      headers: [["accept", "text/plain"], ["user-agent", "ZCode/netns-validation"]],
-    });
-    const bytes = (await response.arrayBuffer()).byteLength;
-    if (response.status !== 200 || bytes !== 2) process.exit(1);
-    console.log(`status=${response.status} bytes=${bytes}`);
-  ')
-[ "$zcode_result" = 'status=200 bytes=2' ] || {
-  echo "official ZCode ordered transport failed: $zcode_result" >&2
-  exit 1
-}
-
 docker run -d --name "$tunnel_sibling" --network "container:$tunnel" \
   -e HTTP_PROXY= -e HTTPS_PROXY= -e ALL_PROXY= \
   -v "$tmpdir/virtual-resolv.conf:/etc/resolv.conf:ro" \
@@ -340,4 +317,4 @@ done
   exit 1
 }
 
-echo 'filtered_dns=valid mixed_answers=valid rebind=valid direct_ip=blocked sni_binding=valid bump_policy=valid namespace_tunnel=valid official_zcode=valid tunnel_failure=valid supervision=valid'
+echo 'filtered_dns=valid mixed_answers=valid rebind=valid direct_ip=blocked sni_binding=valid bump_policy=valid namespace_tunnel=valid tunnel_failure=valid supervision=valid'

@@ -175,12 +175,12 @@ elif [ -f "$root/compose.override.yaml" ]; then
   override_file=$root/compose.override.yaml
   compose_args+=(-f "$override_file")
 fi
-if [ -n "$override_file" ] && grep -Eq '^[[:space:]]{2}zcode-proxy:' "$override_file"; then
+if [ -n "$override_file" ] && grep -Eq '^[[:space:]]{2}provider-sidecar:' "$override_file"; then
   tls_check_env=()
-  for variable in ZCODE_TLS_DIR ZCODE_CPA_AUTH_DIR ZCODE_ENV_FILE ZCODE_EGRESS_CA_CERT ZCODE_EGRESS_CA_BUNDLE; do
+  for variable in PROVIDER_SIDECAR_TLS_DIR PROVIDER_SIDECAR_CPA_AUTH_DIR PROVIDER_SIDECAR_ENV_FILE PROVIDER_SIDECAR_EGRESS_CA_CERT PROVIDER_SIDECAR_EGRESS_CA_BUNDLE; do
     [ -z "${!variable:-}" ] || tls_check_env+=("$variable=${!variable}")
   done
-  env "${tls_check_env[@]}" ./scripts/init-zcode-tls.sh --check >/dev/null
+  env "${tls_check_env[@]}" ./scripts/init-provider-sidecar-tls.sh --check >/dev/null
 fi
 docker compose "${compose_args[@]}" --env-file "$env_file" config --quiet
 rendered=$tmpdir/compose
@@ -210,17 +210,17 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 
 services = compose["services"]
 networks = compose["networks"]
-has_zcode = "zcode-proxy" in services
+has_provider_sidecar = "provider-sidecar" in services
 
-if sys.argv[3] == "1" and has_zcode:
+if sys.argv[3] == "1" and has_provider_sidecar:
     lines = Path("data/cpa/conf/config.yaml").read_text().splitlines()
-    old_matches = [line for line in lines if re.match(r'^\s{4}base-url:\s*["\']?http://zcode-proxy:8080/v1/?["\']?\s*$', line, re.IGNORECASE)]
+    old_matches = [line for line in lines if re.match(r'^\s{4}base-url:\s*["\']?http://provider-sidecar:8080/v1/?["\']?\s*$', line, re.IGNORECASE)]
     if old_matches:
-        raise SystemExit("CPA config still contains plaintext ZCode base URL")
-    base_matches = [line for line in lines if re.match(r'^\s{4}base-url:\s*["\']?https://zcode-proxy:8080/v1["\']?\s*$', line)]
+        raise SystemExit("CPA config still contains plaintext provider-sidecar base URL")
+    base_matches = [line for line in lines if re.match(r'^\s{4}base-url:\s*["\']?https://provider-sidecar:8080/v1["\']?\s*$', line)]
     for base in base_matches:
-        if base.count("https://zcode-proxy:8080/v1") != 1:
-            raise SystemExit("malformed ZCode HTTPS base URL")
+        if base.count("https://provider-sidecar:8080/v1") != 1:
+            raise SystemExit("malformed provider-sidecar HTTPS base URL")
 
     auth_dir = Path("data/cpa/auths")
     planner_matches = []
@@ -275,30 +275,30 @@ if sys.argv[3] == "1" and has_zcode:
             normalized_base = normalize_base_url(value.get("base_url"))
         except ValueError as error:
             raise SystemExit(f"active OpenAI-compatible CPA auth has invalid base_url: {path.name}") from error
-        if normalized_base == "https://zcode-proxy:8080/v1":
+        if normalized_base == "https://provider-sidecar:8080/v1":
             planner_matches.append((path, value))
     if len(planner_matches) != 1:
-        raise SystemExit("CPA auth directory must contain exactly one HTTPS ZCode planner auth")
+        raise SystemExit("CPA auth directory must contain exactly one HTTPS provider-sidecar planner auth")
     _, planner = planner_matches[0]
     if planner.get("proxy_url") != "direct" or not isinstance(planner.get("token"), str) or not planner["token"]:
-        raise SystemExit("ZCode planner auth must contain nonempty token and proxy_url direct")
+        raise SystemExit("provider-sidecar planner auth must contain nonempty token and proxy_url direct")
 
-    matches = [index for index, line in enumerate(lines) if re.match(r'^\s{4}base-url:\s*["\']?https://zcode-proxy:8080/v1["\']?\s*$', line)]
+    matches = [index for index, line in enumerate(lines) if re.match(r'^\s{4}base-url:\s*["\']?https://provider-sidecar:8080/v1["\']?\s*$', line)]
     if len(matches) != 1:
-        raise SystemExit("CPA config must contain exactly one HTTPS ZCode compatibility entry")
+        raise SystemExit("CPA config must contain exactly one HTTPS provider-sidecar compatibility entry")
     for base in matches:
         start = max(index for index in range(base, -1, -1) if re.match(r'^\s{2}-\s+name:', lines[index]))
         end = next((index for index in range(base + 1, len(lines)) if re.match(r'^\s{2}-\s+name:', lines[index])), len(lines))
         block = lines[start:end]
         if any(re.match(r'^\s{4}proxy-url:', line) for line in block):
-            raise SystemExit("ZCode direct routing must be set per API key, not on the provider")
+            raise SystemExit("provider-sidecar direct routing must be set per API key, not on the provider")
         keys = [index for index, line in enumerate(block) if re.match(r'^\s{6}-\s+api-key:', line)]
         if not keys:
-            raise SystemExit("ZCode compatibility entry has no API keys")
+            raise SystemExit("provider-sidecar compatibility entry has no API keys")
         for key in keys:
             key_end = next((index for index in range(key + 1, len(block)) if len(block[index]) - len(block[index].lstrip()) <= 6), len(block))
             if not any(re.match(r'^\s{8}proxy-url:\s*["\']?direct["\']?\s*$', line) for line in block[key + 1:key_end]):
-                raise SystemExit("every ZCode API key must set proxy-url: direct")
+                raise SystemExit("every provider-sidecar API key must set proxy-url: direct")
 
 base_services = {
     "egress-proxy", "cpa-host-netns", "cpa-host-relay", "cpa-netns", "cli-proxy-api", "cpa-squid-relay",
@@ -308,12 +308,12 @@ base_services = {
     "ai-sse-keepalive-proxy-netns", "ai-sse-keepalive-proxy", "ai-sse-sub2api-relay",
     "cloudflared-apisix-relay", "cloudflared",
 }
-optional_services = {"cpa-zcode-relay", "zcode-egress-tunnel", "zcode-proxy", "zcode-squid-relay"}
-expected_services = base_services | (optional_services if has_zcode else set())
+optional_services = {"cpa-provider-sidecar-relay", "provider-sidecar-tunnel", "provider-sidecar", "provider-sidecar-squid-relay"}
+expected_services = base_services | (optional_services if has_provider_sidecar else set())
 if set(services) != expected_services:
     raise SystemExit(f"unexpected services: {sorted(set(services) ^ expected_services)}")
-if ("zcode-egress-tunnel" in services) != has_zcode:
-    raise SystemExit("ZCode and its namespace tunnel must be enabled together")
+if ("provider-sidecar-tunnel" in services) != has_provider_sidecar:
+    raise SystemExit("provider-sidecar and its namespace tunnel must be enabled together")
 if "default" in networks or compose.get("volumes"):
     raise SystemExit("default network and persistent namespace volumes are forbidden")
 
@@ -391,7 +391,7 @@ relays = {
     "cpa-squid-relay", "sub2api-host-relay", "sub2api-cpa-relay", "sub2api-postgres-relay",
     "sub2api-redis-relay", "sub2api-squid-relay", "apisix-host-relay", "apisix-ai-sse-relay",
     "ai-sse-sub2api-relay", "cloudflared-apisix-relay",
-} | ({"cpa-zcode-relay", "zcode-squid-relay"} if has_zcode else set())
+} | ({"cpa-provider-sidecar-relay", "provider-sidecar-squid-relay"} if has_provider_sidecar else set())
 for relay in relays: require_image(relay, "docker.io/alpine/socat", socat_image)
 require_image("cpa-host-relay", "docker.io/alpine/socat", socat_image)
 
@@ -469,13 +469,13 @@ for service, dependency, restart in (
     ("cloudflared-apisix-relay", "apisix", None),
 ):
     require_dependency(service, dependency, restart)
-if has_zcode:
+if has_provider_sidecar:
     for service, dependency, restart in (
-        ("cli-proxy-api", "cpa-zcode-relay", True),
-        ("cpa-zcode-relay", "zcode-proxy", None),
-        ("zcode-egress-tunnel", "zcode-squid-relay", True),
-        ("zcode-proxy", "zcode-egress-tunnel", True),
-        ("zcode-squid-relay", "egress-proxy", None),
+        ("cli-proxy-api", "cpa-provider-sidecar-relay", True),
+        ("cpa-provider-sidecar-relay", "provider-sidecar", None),
+        ("provider-sidecar-tunnel", "provider-sidecar-squid-relay", True),
+        ("provider-sidecar", "provider-sidecar-tunnel", True),
+        ("provider-sidecar-squid-relay", "egress-proxy", None),
     ):
         require_dependency(service, dependency, restart)
 for service, cfg in services.items():
@@ -532,12 +532,12 @@ expected_network_members = {
     "proxy-egress": {"egress-proxy":None},
     "cloudflare-egress": {"cloudflared":None},
 }
-if has_zcode:
+if has_provider_sidecar:
     expected_network_members.update({
-        "cpa-zcode-source": {"cpa-netns":"172.30.21.2","cpa-zcode-relay":"172.30.21.3"},
-        "cpa-zcode-target": {"cpa-zcode-relay":"172.30.22.3","zcode-egress-tunnel":"172.30.22.2"},
-        "zcode-squid-source": {"zcode-egress-tunnel":"172.30.23.2","zcode-squid-relay":"172.30.23.3"},
-        "zcode-squid-target": {"zcode-squid-relay":"172.30.24.3","egress-proxy":"172.30.24.2"},
+        "cpa-provider-sidecar-source": {"cpa-netns":"172.30.21.2","cpa-provider-sidecar-relay":"172.30.21.3"},
+        "cpa-provider-sidecar-target": {"cpa-provider-sidecar-relay":"172.30.22.3","provider-sidecar-tunnel":"172.30.22.2"},
+        "provider-sidecar-squid-source": {"provider-sidecar-tunnel":"172.30.23.2","provider-sidecar-squid-relay":"172.30.23.3"},
+        "provider-sidecar-squid-target": {"provider-sidecar-squid-relay":"172.30.24.3","egress-proxy":"172.30.24.2"},
     })
 if set(networks) != set(expected_network_members):
     raise SystemExit(f"unexpected networks: {sorted(set(networks) ^ set(expected_network_members))}")
@@ -559,10 +559,10 @@ required_aliases = {
     ("ai-sse-sub2api-relay","ai-sse-sub2api-source"):"sub2api-ai-sse-relay",
     ("cloudflared-apisix-relay","cloudflared-apisix-source"):"apisix-ingress",
 }
-if has_zcode:
+if has_provider_sidecar:
     required_aliases.update({
-        ("cpa-zcode-relay","cpa-zcode-source"):"zcode-proxy",
-        ("zcode-squid-relay","zcode-squid-source"):"zcode-egress-relay",
+        ("cpa-provider-sidecar-relay","cpa-provider-sidecar-source"):"provider-sidecar",
+        ("provider-sidecar-squid-relay","provider-sidecar-squid-source"):"provider-sidecar-egress-relay",
     })
 for (service, network), alias in required_aliases.items():
     if alias not in set(services[service]["networks"][network].get("aliases", [])):
@@ -578,10 +578,10 @@ source_target_edges = [
     ("cpa-netns","cpa-squid-relay","egress-proxy","cpa-squid-source","cpa-squid-target"),
     ("sub2api-netns","sub2api-squid-relay","egress-proxy","sub2api-squid-source","sub2api-squid-target"),
 ]
-if has_zcode:
+if has_provider_sidecar:
     source_target_edges += [
-        ("cpa-netns","cpa-zcode-relay","zcode-egress-tunnel","cpa-zcode-source","cpa-zcode-target"),
-        ("zcode-egress-tunnel","zcode-squid-relay","egress-proxy","zcode-squid-source","zcode-squid-target"),
+        ("cpa-netns","cpa-provider-sidecar-relay","provider-sidecar-tunnel","cpa-provider-sidecar-source","cpa-provider-sidecar-target"),
+        ("provider-sidecar-tunnel","provider-sidecar-squid-relay","egress-proxy","provider-sidecar-squid-source","provider-sidecar-squid-target"),
     ]
 members={network:{service for service,cfg in services.items() if network in (cfg.get("networks") or {})} for network in networks}
 for source, relay, target, source_net, target_net in source_target_edges:
@@ -621,8 +621,8 @@ commands = {
  "cpa-squid-relay": ("172.30.17.3",3128,"172.30.18.2",3128),
  "sub2api-squid-relay": ("172.30.19.3",3128,"172.30.20.2",3128),
 }
-if has_zcode:
- commands.update({"zcode-squid-relay":("172.30.23.3",3128,"172.30.24.2",3128)})
+if has_provider_sidecar:
+ commands.update({"provider-sidecar-squid-relay":("172.30.23.3",3128,"172.30.24.2",3128)})
 for relay,(bind,bport,target,tport) in commands.items():
     cfg=services[relay]
     listener = f"TCP4-LISTEN:{bport},reuseaddr,fork" if bind is None else f"TCP4-LISTEN:{bport},bind={bind},reuseaddr,fork"
@@ -635,19 +635,19 @@ for relay,(bind,bport,target,tport) in commands.items():
         raise SystemExit(f"{relay} exposes extra control surface")
     require_relay_capacity(relay, cfg)
 
-if has_zcode:
-    relay = services["cpa-zcode-relay"]
+if has_provider_sidecar:
+    relay = services["cpa-provider-sidecar-relay"]
     expected_tls_command = [
-        "OPENSSL-LISTEN:8080,bind=172.30.21.3,reuseaddr,fork,cert=/run/zcode-tls/server.crt,key=/run/zcode-tls/server.key,verify=0,openssl-min-proto-version=TLS1.2",
+        "OPENSSL-LISTEN:8080,bind=172.30.21.3,reuseaddr,fork,cert=/run/provider-sidecar-tls/server.crt,key=/run/provider-sidecar-tls/server.key,verify=0,openssl-min-proto-version=TLS1.2",
         "TCP4:172.30.22.2:8080,connect-timeout=10",
     ]
     if normalized(relay.get("command", [])) != expected_tls_command:
-        raise SystemExit("cpa-zcode-relay TLS command mismatch")
+        raise SystemExit("cpa-provider-sidecar-relay TLS command mismatch")
     if str(relay.get("user")) != "65534:65534" or relay.get("read_only") is not True or set(relay.get("cap_drop", [])) != {"ALL"} or relay.get("cap_add"):
-        raise SystemExit("cpa-zcode-relay hardening mismatch")
+        raise SystemExit("cpa-provider-sidecar-relay hardening mismatch")
     if "no-new-privileges:true" not in relay.get("security_opt", []) or relay.get("api") or relay.get("metrics"):
-        raise SystemExit("cpa-zcode-relay exposes extra control surface")
-    require_relay_capacity("cpa-zcode-relay", relay)
+        raise SystemExit("cpa-provider-sidecar-relay exposes extra control surface")
+    require_relay_capacity("cpa-provider-sidecar-relay", relay)
 
 cpa_host = services["cpa-host-relay"]
 cpa_host_command="\n".join(normalized(cpa_host.get("command",[])))
@@ -673,8 +673,8 @@ expected_hosts = {
     "ai-sse-keepalive-proxy-netns": {"sub2api-ai-sse-relay":"172.30.25.3"},
     "cloudflared": {"apisix-ingress":"172.30.7.3"},
 }
-if has_zcode:
-    expected_hosts["cpa-netns"]["zcode-proxy"] = "172.30.21.3"
+if has_provider_sidecar:
+    expected_hosts["cpa-netns"]["provider-sidecar"] = "172.30.21.3"
 for service, expected in expected_hosts.items():
     if extra_hosts(services[service]) != expected:
         raise SystemExit(f"{service} must use fixed relay addresses")
@@ -709,28 +709,35 @@ for service,proxy in (("cli-proxy-api","http://cpa-egress-relay:3128"),("sub2api
         raise SystemExit(f"{service} must use its source-side Squid relay")
     if "/etc/ssl/certs/ai-gateway-ca-bundle.pem" not in volume_targets(services[service]):
         raise SystemExit(f"{service} must receive only public trust")
-if has_zcode:
+if has_provider_sidecar:
     cpa_mounts = services["cli-proxy-api"].get("volumes", [])
     trust_sources = [str(v.get("source")) if isinstance(v, dict) else str(v).split(":", 1)[0] for v in cpa_mounts if (v.get("target") if isinstance(v, dict) else (str(v).split(":")[1] if ":" in str(v) else "")) == "/etc/ssl/certs/ai-gateway-ca-bundle.pem"]
-    if len(trust_sources) != 1 or not trust_sources[0].endswith("/data/zcode-tls/cpa-ca-bundle.pem"):
-        raise SystemExit("CPA must override trust with the combined ZCode bundle")
-    relay_targets = volume_targets(services["cpa-zcode-relay"])
-    if relay_targets != {"/run/zcode-tls/server.crt", "/run/zcode-tls/server.key"}:
-        raise SystemExit("cpa-zcode-relay TLS mounts mismatch")
+    if len(trust_sources) != 1 or not trust_sources[0].endswith("/data/provider-sidecar-tls/cpa-ca-bundle.pem"):
+        raise SystemExit("CPA must override trust with the combined provider-sidecar bundle")
+    relay_targets = volume_targets(services["cpa-provider-sidecar-relay"])
+    if relay_targets != {"/run/provider-sidecar-tls/server.crt", "/run/provider-sidecar-tls/server.key"}:
+        raise SystemExit("cpa-provider-sidecar-relay TLS mounts mismatch")
 if "ai-sse-keepalive-ingress-relay:8080" not in Path("apisix/apisix.yaml").read_text():
     raise SystemExit("APISIX upstream must target its dedicated AI SSE relay")
 if sys.argv[3]=="1":
     squid=Path("data/egress-proxy/generated/squid.conf").read_text()
-    required={"172.30.18.2:3128":"cpa","172.30.20.2:3128":"sub2api","172.30.24.2:3128":"zcode" if has_zcode else None}
+    required={"172.30.18.2:3128":"cpa","172.30.20.2:3128":"sub2api","172.30.24.2:3128":"provider-sidecar" if has_provider_sidecar else None}
     for address,name in required.items():
         present=f"http_port {address} name={name}" in squid if name else address in squid
         if (name is not None) != present: raise SystemExit(f"Squid listener parity mismatch: {address}")
 
-if has_zcode:
-    tunnel=services["zcode-egress-tunnel"]; zcode=services["zcode-proxy"]
-    require_image("zcode-egress-tunnel","ghcr.io/tun2proxy/tun2proxy")
-    require_image("zcode-proxy","ghcr.io/tridefender/zcode-proxy")
-    if zcode.get("network_mode")!="service:zcode-egress-tunnel": raise SystemExit("ZCode must share tun2proxy namespace")
+if has_provider_sidecar:
+    tunnel=services["provider-sidecar-tunnel"]
+    sidecar=services["provider-sidecar"]
+    require_image("provider-sidecar-tunnel","ghcr.io/tun2proxy/tun2proxy")
+    if not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image(sidecar)):
+        raise SystemExit("provider-sidecar image must be pinned by manifest digest")
+    if sidecar.get("network_mode")!="service:provider-sidecar-tunnel":
+        raise SystemExit("provider-sidecar must share tun2proxy namespace")
+    if str(sidecar.get("user", "")).lower() in {"", "0", "0:0", "root", "root:root"}:
+        raise SystemExit("provider-sidecar must declare a non-root user")
+    if sidecar.get("read_only") is not True or set(sidecar.get("cap_drop",[]))!={"ALL"} or sidecar.get("cap_add") or sidecar.get("privileged") is True:
+        raise SystemExit("provider-sidecar hardening mismatch")
     if set(tunnel.get("cap_add",[]))!={"NET_ADMIN"} or set(tunnel.get("cap_drop",[]))!={"ALL"} or tunnel.get("privileged") is True:
         raise SystemExit("tun2proxy must have exact NET_ADMIN, not privileged")
     if tunnel.get("read_only") is True:
@@ -741,25 +748,26 @@ if has_zcode:
         raise SystemExit("tun2proxy command mismatch")
     if "/etc/resolv.conf" in volume_targets(tunnel):
         raise SystemExit("tun2proxy must use Docker's restart-safe writable resolver file")
-    if zcode.get("ports") or tunnel.get("ports"): raise SystemExit("ZCode must not publish ports")
+    if sidecar.get("ports") or tunnel.get("ports"):
+        raise SystemExit("provider-sidecar must not publish ports")
 
 key_holders={service for service,cfg in services.items() if "/etc/squid/ca.key" in volume_targets(cfg)}
 if key_holders!={"egress-proxy"}: raise SystemExit(f"private egress CA key holders: {key_holders}")
-zcode_leaf_key_holders = set()
+provider_sidecar_leaf_key_holders = set()
 for service, cfg in services.items():
     for volume in cfg.get("volumes", []):
         source = str(volume.get("source", "")) if isinstance(volume, dict) else str(volume).split(":", 1)[0]
         target = str(volume.get("target", "")) if isinstance(volume, dict) else (str(volume).split(":")[1] if ":" in str(volume) else "")
-        if source.endswith("/data/zcode-tls/server.key"):
-            zcode_leaf_key_holders.add((service, target))
-expected_leaf_key_holders = {("cpa-zcode-relay", "/run/zcode-tls/server.key")} if has_zcode else set()
-if zcode_leaf_key_holders != expected_leaf_key_holders:
-    raise SystemExit(f"ZCode leaf key source mounts: {sorted(zcode_leaf_key_holders)}")
+        if source.endswith("/data/provider-sidecar-tls/server.key"):
+            provider_sidecar_leaf_key_holders.add((service, target))
+expected_leaf_key_holders = {("cpa-provider-sidecar-relay", "/run/provider-sidecar-tls/server.key")} if has_provider_sidecar else set()
+if provider_sidecar_leaf_key_holders != expected_leaf_key_holders:
+    raise SystemExit(f"provider-sidecar leaf key source mounts: {sorted(provider_sidecar_leaf_key_holders)}")
 for service,cfg in services.items():
     for volume in cfg.get("volumes", []):
         source = str(volume.get("source", "")) if isinstance(volume, dict) else str(volume).split(":", 1)[0]
-        if source.endswith("/data/zcode-tls/ca.key"):
-            raise SystemExit(f"dedicated ZCode CA private key mounted by {service}")
+        if source.endswith("/data/provider-sidecar-tls/ca.key"):
+            raise SystemExit(f"dedicated provider-sidecar CA private key mounted by {service}")
 PY
 ai_sse_image=ai-sse-keepalive-proxy:latest
 BUILDAH_FORMAT=docker docker compose "${compose_args[@]}" --env-file "$env_file" build ai-sse-keepalive-proxy >/dev/null
@@ -829,13 +837,7 @@ tun2proxy_image=$(value_from_env TUN2PROXY_IMAGE)
   echo 'TUN2PROXY_IMAGE must use the official repository pinned by digest' >&2
   exit 1
 }
-zcode_image=$(value_from_env ZCODE_PROXY_IMAGE)
-[ -n "$zcode_image" ] || zcode_image=ghcr.io/tridefender/zcode-proxy@sha256:947dcf83314e16a87b61191c4847bf3d4f10baf4c370c25191d5a49f08a06e52
-[[ "$zcode_image" =~ ^ghcr\.io/tridefender/zcode-proxy@sha256:[0-9a-f]{64}$ ]] || {
-  echo 'ZCODE_PROXY_IMAGE must use the official repository pinned by digest' >&2
-  exit 1
-}
-"$root/scripts/test-egress-proxy.sh" "$egress_image" "$tun2proxy_image" "$zcode_image"
+"$root/scripts/test-egress-proxy.sh" "$egress_image" "$tun2proxy_image"
 socat_image=$(value_from_env SOCAT_IMAGE)
 [ -n "$socat_image" ] || socat_image=docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b
 [[ "$socat_image" =~ ^docker\.io/alpine/socat@sha256:[0-9a-f]{64}$ ]] || {
@@ -843,7 +845,7 @@ socat_image=$(value_from_env SOCAT_IMAGE)
   exit 1
 }
 "$root/scripts/test-socat-boundary.sh" "$socat_image"
-"$root/scripts/test-zcode-tls-boundary.sh" "$socat_image"
+"$root/scripts/test-provider-sidecar-tls-boundary.sh" "$socat_image"
 
 netns_guard_image=$(value_from_env NETNS_GUARD_IMAGE)
 [ -n "$netns_guard_image" ] || netns_guard_image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
@@ -863,4 +865,4 @@ docker run --rm \
   "$apisix_image" apisix test >/dev/null
 
 if command -v shellcheck >/dev/null; then shellcheck scripts/*.sh egress-proxy/*.sh; fi
-echo 'compose=valid pairwise_networks=valid ai_sse_keepalive_proxy=valid egress_proxy=valid zcode_tls=valid apisix=valid private_paths=untracked'
+echo 'compose=valid pairwise_networks=valid ai_sse_keepalive_proxy=valid egress_proxy=valid provider_sidecar_tls=valid apisix=valid private_paths=untracked'
