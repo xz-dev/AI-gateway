@@ -855,6 +855,45 @@ netns_guard_image=$(value_from_env NETNS_GUARD_IMAGE)
 }
 "$root/scripts/test-netns-guard.sh" "$netns_guard_image"
 
+python3 - "$root/apisix/apisix.yaml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+global_rules, separator, _ = text.partition("\nupstreams:")
+if not separator:
+    raise SystemExit("APISIX config is missing the upstreams boundary")
+blocks = re.findall(r"(?m)^      limit-count:\n((?:        [^\n]*(?:\n|$))*)", global_rules)
+if len(blocks) != 1 or len(re.findall(r"(?m)^      limit-count:\s*$", text)) != 1:
+    raise SystemExit("APISIX must define exactly one global limit-count plugin")
+actual = {}
+for line in blocks[0].splitlines():
+    key, separator, value = line.strip().partition(":")
+    if not separator or key in actual:
+        raise SystemExit("APISIX limit-count block is malformed")
+    actual[key] = value.strip()
+expected = {
+    "count": "300",
+    "time_window": "60",
+    "key": "remote_addr",
+    "key_type": "var",
+    "policy": "local",
+    "rejected_code": "429",
+    "rejected_msg": "Too many requests",
+    "show_limit_quota_header": "false",
+    "allow_degradation": "false",
+}
+if actual != expected:
+    raise SystemExit(f"APISIX global limit-count mismatch: {actual!r}")
+neutral_429 = '''              if ngx.status == 429 then
+                ngx.header["Server"] = nil
+                return
+              end'''
+if text.count(neutral_429) != 1:
+    raise SystemExit("APISIX 429 response redaction is missing or ambiguous")
+PY
+
 apisix_image=$(value_from_env APISIX_IMAGE)
 [ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.18.0-debian
 docker run --rm \

@@ -33,6 +33,16 @@ global_rules:
         nodelay: true
         rejected_code: 429
         rejected_msg: Too many requests
+      limit-count:
+        count: 300
+        time_window: 60
+        key: remote_addr
+        key_type: var
+        policy: local
+        rejected_code: 429
+        rejected_msg: Too many requests
+        show_limit_quota_header: false
+        allow_degradation: false
       response-rewrite:
         vars:
           - ["or", [status, "==", 401], [status, "==", 404]]
