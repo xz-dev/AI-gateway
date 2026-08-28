@@ -19,6 +19,9 @@ flowchart LR
   Proxy --> Providers[Approved HTTPS destinations]
 ```
 
+> [!WARNING]
+> **An external firewall or cloud security group is a deployment prerequisite for every intentionally public host port.** The tracked defaults bind host-published ports to `127.0.0.1`. If that external boundary is unavailable, keep every `*_BIND_ADDRESS` on loopback or a specific trusted interface and never change it to `0.0.0.0`. Container-internal listeners do not make a host port public; Compose `ports` bindings do.
+
 ## Security model
 
 - **Sub2API is the only client API-key authority.** APISIX never validates client keys.
@@ -183,7 +186,7 @@ Sub2API admin UI is available at `http://127.0.0.1:8086`. For remote administrat
 ssh -L 8086:127.0.0.1:8086 user@gateway-host
 ```
 
-To retain direct Sub2API access over Tailscale, set `SUB2API_BIND_ADDRESS` to the host's specific Tailscale IP. Avoid `0.0.0.0` unless every host interface is intentionally trusted.
+To retain direct Sub2API access over Tailscale, set `SUB2API_BIND_ADDRESS` to the host's specific Tailscale IP. Do not use `0.0.0.0` without an independently enforced external firewall/security-group allowlist.
 
 ## Public API behavior
 
