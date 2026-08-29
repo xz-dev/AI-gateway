@@ -18,7 +18,5 @@ jobs:
         env:
           AI_GATEWAY_TUN_TEST_MODE: ci-privileged
         run: ./scripts/validate.sh .env.example
-      - name: Validate generic provider-sidecar boundary
-        env:
-          AI_GATEWAY_TUN_TEST_MODE: ci-privileged
+      - name: Render generic provider-sidecar scaffold
         run: ./scripts/test-provider-sidecar-compose-candidate.sh

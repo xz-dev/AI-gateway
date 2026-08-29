@@ -69,5 +69,5 @@ Next:
   2. Set CLOUDFLARED_TUNNEL_TOKEN in .env using an editor that does not expose it in shell history.
   3. Add only required domains, methods, and paths to data/egress-proxy/policy.json.
   4. Run ./scripts/init-egress-proxy.sh && ./scripts/validate.sh.
-  5. Pull the digest-pinned upstream images, then run docker compose up -d --build --wait.
+  5. Source scripts/container-runtime.sh, pull images with "${AI_GATEWAY_COMPOSE[@]}", then run "${AI_GATEWAY_COMPOSE[@]}" up -d --build.
 EOF

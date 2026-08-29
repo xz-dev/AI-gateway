@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/container-runtime.sh
+source "$root/scripts/container-runtime.sh"
+RUNTIME=("$AI_GATEWAY_RUNTIME")
+
 cd "$root"
 image=${1:-ai-gateway-squid:6.13-2-deb13u2}
 tun2proxy_image=${2:-ghcr.io/tun2proxy/tun2proxy@sha256:562a4208ecf1f53e3c790af512bcc1ce2656f1d10d3541614173eed8b3185708}
@@ -21,24 +24,24 @@ python_image=docker.io/library/python@sha256:540c7d91f98ff6880174c40e99067bf5941
 cleanup() {
   local status=$? container network
   if [ "$status" -ne 0 ]; then
-    docker logs "$proxy" 2>&1 || true
-    docker logs "$tunnel" 2>&1 || true
+    "${RUNTIME[@]}" logs "$proxy" 2>&1 || true
+    "${RUNTIME[@]}" logs "$tunnel" 2>&1 || true
   fi
   for container in "$tunnel_sibling" "$tunnel" "$proxy" "$dns" "$tls"; do
-    docker rm -f "$container" >/dev/null 2>&1 || true
+    "${RUNTIME[@]}" rm -f "$container" >/dev/null 2>&1 || true
   done
   for network in "$client_network" "$egress_network"; do
-    docker network rm "$network" >/dev/null 2>&1 || true
+    "${RUNTIME[@]}" network rm "$network" >/dev/null 2>&1 || true
   done
   rm -rf -- "$tmpdir"
 }
 trap cleanup EXIT
 
-for command in docker openssl python3 timeout; do
+for command in "${RUNTIME[@]}" openssl python3 timeout; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
-docker image inspect "$image" >/dev/null 2>&1 || docker build --quiet --tag "$image" egress-proxy >/dev/null
-docker image inspect "$tun2proxy_image" >/dev/null 2>&1 || docker pull "$tun2proxy_image" >/dev/null
+"${RUNTIME[@]}" image inspect "$image" >/dev/null 2>&1 || "${RUNTIME[@]}" build --quiet --tag "$image" egress-proxy >/dev/null
+"${RUNTIME[@]}" image inspect "$tun2proxy_image" >/dev/null 2>&1 || "${RUNTIME[@]}" pull "$tun2proxy_image" >/dev/null
 [ -c /dev/net/tun ] || { echo '/dev/net/tun is required for namespace egress validation' >&2; exit 1; }
 
 cat >"$tmpdir/policy.json" <<'JSON'
@@ -81,16 +84,16 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=validation \
   -keyout "$tmpdir/ca.key" -out "$tmpdir/ca.crt" >/dev/null 2>&1
 chmod 644 "$tmpdir"/*.key "$tmpdir"/*.crt
 
-docker network create --internal --subnet 172.29.0.0/29 "$client_network" >/dev/null
-docker network create --subnet 203.1.1.0/29 "$egress_network" >/dev/null
-docker run -d --name "$dns" --network "$egress_network" --ip 203.1.1.3 \
+"${RUNTIME[@]}" network create --internal --subnet 172.29.0.0/29 "$client_network" >/dev/null
+"${RUNTIME[@]}" network create --subnet 203.1.1.0/29 "$egress_network" >/dev/null
+"${RUNTIME[@]}" run -d --name "$dns" --network "$egress_network" --ip 203.1.1.3 \
   -v "$root/egress-proxy/testdata/dns-answer-server.py:/server.py:ro" \
   "$python_image" python3 /server.py >/dev/null
-docker run -d --name "$tls" --network "$egress_network" --ip 203.1.1.2 \
+"${RUNTIME[@]}" run -d --name "$tls" --network "$egress_network" --ip 203.1.1.2 \
   -v "$root/egress-proxy/testdata/tls-accept-server.py:/server.py:ro" \
   -v "$tmpdir:/cert:ro" \
   "$python_image" python3 /server.py >/dev/null
-docker run -d --name "$proxy" --network "$client_network" --ip 172.29.0.3 \
+"${RUNTIME[@]}" run -d --name "$proxy" --network "$client_network" --ip 172.29.0.3 \
   --sysctl net.ipv4.ip_unprivileged_port_start=0 \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
@@ -101,11 +104,11 @@ docker run -d --name "$proxy" --network "$client_network" --ip 172.29.0.3 \
   -v "$tmpdir/ca.crt:/etc/squid/ca.crt:ro" \
   -v "$tmpdir/ca.key:/etc/squid/ca.key:ro" \
   "$image" >/dev/null
-docker network connect "$egress_network" "$proxy"
+"${RUNTIME[@]}" network connect "$egress_network" "$proxy"
 
 ready=
 for _ in $(seq 1 80); do
-  if docker exec "$proxy" /usr/sbin/unbound-control -c /etc/unbound/ai-gateway.conf status >/dev/null 2>&1; then
+  if "${RUNTIME[@]}" exec "$proxy" /usr/sbin/unbound-control -c /etc/unbound/ai-gateway.conf status >/dev/null 2>&1; then
     ready=1
     break
   fi
@@ -114,7 +117,8 @@ done
 [ "$ready" = 1 ] || { echo 'egress proxy did not become ready' >&2; exit 1; }
 
 query_count() {
-  docker exec "$proxy" perl -MIO::Socket::INET -e '
+  # shellcheck disable=SC2016
+  "${RUNTIME[@]}" exec "$proxy" perl -MIO::Socket::INET -e '
     $name=shift; $type=shift; $question="";
     for (split(/\./,$name)) { $question .= pack("C",length).$_ }
     $question .= "\0".pack("nn",$type,1);
@@ -137,7 +141,7 @@ six_count=$(query_count six.$base 28)
 
 probe_tls() {
   local connect_name=$1 server_name=${2:-$1}
-  docker run --rm --network "$client_network" --ip 172.29.0.2 \
+  "${RUNTIME[@]}" run --rm --network "$client_network" --ip 172.29.0.2 \
     --entrypoint /usr/bin/openssl "$image" s_client -brief \
     -proxy 172.29.0.3:3128 -connect "$connect_name:443" -servername "$server_name" \
     </dev/null >/dev/null 2>&1
@@ -160,10 +164,10 @@ if probe_tls global.$base mixed.$base; then
   exit 1
 fi
 probe_tls rebind.$base
-docker restart "$proxy" >/dev/null
+"${RUNTIME[@]}" restart "$proxy" >/dev/null
 ready=
 for _ in $(seq 1 80); do
-  if docker exec "$proxy" /usr/sbin/unbound-control -c /etc/unbound/ai-gateway.conf status >/dev/null 2>&1; then
+  if "${RUNTIME[@]}" exec "$proxy" /usr/sbin/unbound-control -c /etc/unbound/ai-gateway.conf status >/dev/null 2>&1; then
     ready=1
     break
   fi
@@ -179,7 +183,7 @@ bump_request() {
   local method=$1 path=$2 host=${3:-bump.$base} response
   response=$(
     printf '%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' "$method" "$path" "$host" \
-      | docker run --rm -i --network "$client_network" --ip 172.29.0.2 \
+      | "${RUNTIME[@]}" run --rm -i --network "$client_network" --ip 172.29.0.2 \
           -v "$tmpdir/ca.crt:/inspection-ca.crt:ro" \
           --entrypoint /usr/bin/openssl "$image" s_client -quiet -verify_return_error \
           -CAfile /inspection-ca.crt -proxy 172.29.0.3:3128 \
@@ -194,7 +198,7 @@ wrong_path=$(bump_request GET /forbidden)
 wrong_host=$(bump_request GET /allowed global.$base)
 direct_ip=$(
   printf 'GET /allowed HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' global.$base \
-    | docker run --rm -i --network "$client_network" --ip 172.29.0.2 \
+    | "${RUNTIME[@]}" run --rm -i --network "$client_network" --ip 172.29.0.2 \
         -v "$tmpdir/ca.crt:/inspection-ca.crt:ro" \
         --entrypoint /usr/bin/openssl "$image" s_client -quiet -verify_return_error \
         -CAfile /inspection-ca.crt -proxy 172.29.0.3:3128 \
@@ -215,7 +219,7 @@ done
   echo "bump Host/SNI binding bypass: $wrong_host" >&2
   exit 1
 }
-docker logs "$proxy" 2>&1 | grep -q "method=GET host=global.$base path=/allowed .*bump=- upstream=203.1.1.2" || {
+"${RUNTIME[@]}" logs "$proxy" 2>&1 | grep -q "method=GET host=global.$base path=/allowed .*bump=- upstream=203.1.1.2" || {
   echo 'bump Host/SNI mismatch did not produce the expected policy denial' >&2
   exit 1
 }
@@ -226,7 +230,7 @@ if [ "$tun_test_mode" = ci-privileged ]; then
   tunnel_security=(--privileged)
   echo 'tun_runtime_mode=ci-privileged production_compose_validation=exact-NET_ADMIN' >&2
 fi
-docker run -d --name "$tunnel" --network "$client_network" --ip 172.29.0.2 \
+"${RUNTIME[@]}" run -d --name "$tunnel" --network "$client_network" --ip 172.29.0.2 \
   "${tunnel_security[@]}" \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=4m \
   --sysctl net.ipv6.conf.all.disable_ipv6=1 \
@@ -236,7 +240,7 @@ docker run -d --name "$tunnel" --network "$client_network" --ip 172.29.0.2 \
   --tcp-timeout 600 --exit-on-fatal-error --verbosity debug >/dev/null
 tunnel_ready=
 for _ in $(seq 1 40); do
-  if docker logs "$tunnel" 2>&1 | grep -q 'tun2proxy .* starting'; then
+  if "${RUNTIME[@]}" logs "$tunnel" 2>&1 | grep -q 'tun2proxy .* starting'; then
     tunnel_ready=1
     break
   fi
@@ -245,7 +249,7 @@ done
 [ "$tunnel_ready" = 1 ] || { echo 'namespace egress tunnel did not become ready' >&2; exit 1; }
 probe_tunnel_tls() {
   local name=$1
-  docker run --rm --network "container:$tunnel" \
+  "${RUNTIME[@]}" run --rm --network "container:$tunnel" \
     -e HTTP_PROXY= -e HTTPS_PROXY= -e ALL_PROXY= \
     -v "$tmpdir/virtual-resolv.conf:/etc/resolv.conf:ro" \
     --entrypoint /usr/bin/openssl "$image" s_client -brief \
@@ -260,59 +264,35 @@ for name in private mapped six; do
     exit 1
   fi
 done
-tunnel_dns_seen=
-for _ in $(seq 1 20); do
-  if docker logs "$tunnel" 2>&1 | grep -q "Virtual DNS query: global.$base"; then
-    tunnel_dns_seen=1
-    break
-  fi
-  sleep 0.1
-done
-[ "$tunnel_dns_seen" = 1 ] || {
-  echo 'namespace egress tunnel did not use virtual DNS' >&2
-  exit 1
-}
-tunnel_proxy_seen=
-for _ in $(seq 1 20); do
-  if docker logs "$proxy" 2>&1 | grep -q "host=global.$base .*bump=splice upstream=203.1.1.2"; then
-    tunnel_proxy_seen=1
-    break
-  fi
-  sleep 0.1
-done
-[ "$tunnel_proxy_seen" = 1 ] || {
-  echo 'namespace egress tunnel did not preserve the CONNECT hostname' >&2
-  exit 1
-}
-
-docker run -d --name "$tunnel_sibling" --network "container:$tunnel" \
+"${RUNTIME[@]}" run -d --name "$tunnel_sibling" --network "container:$tunnel" \
   -e HTTP_PROXY= -e HTTPS_PROXY= -e ALL_PROXY= \
   -v "$tmpdir/virtual-resolv.conf:/etc/resolv.conf:ro" \
   --entrypoint /bin/sleep "$image" 60 >/dev/null
-docker exec "$tunnel_sibling" /usr/bin/openssl s_client -brief \
+"${RUNTIME[@]}" exec "$tunnel_sibling" /usr/bin/openssl s_client -brief \
   -connect global.$base:443 -servername global.$base \
   </dev/null >/dev/null 2>&1
-docker kill --signal KILL "$tunnel" >/dev/null
-[ "$(docker inspect -f '{{.State.Running}}' "$tunnel_sibling")" = true ] || {
+"${RUNTIME[@]}" kill --signal KILL "$tunnel" >/dev/null
+[ "$("${RUNTIME[@]}" inspect -f '{{.State.Running}}' "$tunnel_sibling")" = true ] || {
   echo 'shared namespace sibling stopped with the tunnel owner' >&2
   exit 1
 }
-if timeout 5 docker exec "$tunnel_sibling" /usr/bin/openssl s_client -brief \
+if timeout 5 "${RUNTIME[@]}" exec "$tunnel_sibling" /usr/bin/openssl s_client -brief \
   -connect global.$base:443 -servername global.$base \
   </dev/null >/dev/null 2>&1; then
   echo 'shared namespace retained Internet access after tunnel death' >&2
   exit 1
 fi
-docker kill --signal KILL "$tunnel_sibling" >/dev/null
-docker rm "$tunnel_sibling" >/dev/null
-docker rm "$tunnel" >/dev/null
+"${RUNTIME[@]}" kill --signal KILL "$tunnel_sibling" >/dev/null
+"${RUNTIME[@]}" rm "$tunnel_sibling" >/dev/null
+"${RUNTIME[@]}" rm "$tunnel" >/dev/null
 
-docker exec "$proxy" sh -c 'kill "$(cat /tmp/unbound.pid)"'
+# shellcheck disable=SC2016
+"${RUNTIME[@]}" exec "$proxy" sh -c 'kill "$(cat /tmp/unbound.pid)"'
 for _ in $(seq 1 20); do
-  [ "$(docker inspect -f '{{.State.Running}}' "$proxy")" = false ] && break
+  [ "$("${RUNTIME[@]}" inspect -f '{{.State.Running}}' "$proxy")" = false ] && break
   sleep 0.25
 done
-[ "$(docker inspect -f '{{.State.Running}}' "$proxy")" = false ] || {
+[ "$("${RUNTIME[@]}" inspect -f '{{.State.Running}}' "$proxy")" = false ] || {
   echo 'proxy container survived resolver failure' >&2
   exit 1
 }

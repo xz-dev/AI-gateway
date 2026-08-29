@@ -34,7 +34,7 @@ flowchart LR
 - APISIX strips Sub2API's private `X-Client-Request-ID` and preserves standard `X-Request-ID` on non-opaque responses.
 - Sub2API accepts forwarded client IPs only through AI SSE middleware's outgoing relay, after APISIX sanitizes them. Its URL allowlist stays disabled because CPA uses an internal HTTP URL; Docker pairwise networks provide the service-reachability boundary instead.
 - CPA, Sub2API admin access, and APISIX bind to loopback by default.
-- Every directed TCP edge has one independent version- and digest-pinned `alpine/socat` relay. Its source and target sides use separate networks, so sources can initiate through the relay but targets cannot open a new connection back. TCP remains full duplex after connection establishment, preserving OAuth, SSE, WebSocket, and 600-second requests. No relay exposes an API or reverse mode. Production currently has no UDP edge; UDP is enabled only when an actual UDP port contract exists.
+- Every directed TCP edge has one independent version- and digest-pinned `alpine/socat` relay. Its source and target sides use separate networks, so sources can initiate through the relay but targets cannot open a new connection back. TCP remains full duplex after connection establishment, preserving OAuth, SSE, WebSocket, and 600-second requests. No relay exposes an API or reverse mode. The base template declares TCP edges only.
 - Every internal relay network has exactly two Compose members; no service uses Compose's default network. CPA, Sub2API, APISIX, and AI SSE middleware share networking with minimal Alpine namespace owners that delete all default routes and drop privilege. Separate host-ingress namespace owners hold published ports and the source/target sides of their dedicated socat relays. This remains portable across rootless Podman and rootful Docker without host firewall changes or engine-specific bridge options.
 - CPA and Sub2API have no direct Internet route. Each reaches Squid only through its own source/target socat relay pair. Squid alone joins `proxy-egress`; cloudflared alone joins its egress network and reaches APISIX only through its own relay. APISIX has no Internet route.
 - An optional `provider-sidecar` stays out of the reusable base Compose file. This is a generic role for a digest-pinned OpenAI-compatible service whose runtime-specific image, environment, mounts, command, healthcheck, domains, models, and credentials exist only in ignored production state. The generated override supplies reusable TLS, shared-TUN, virtual-DNS, relay, and Squid boundaries without naming or embedding a concrete provider.
@@ -45,11 +45,11 @@ flowchart LR
 
 ## Quick start
 
-Requirements: Linux with `/dev/net/tun`, Docker Engine with Compose v2.33.1+ for production or rootless Podman with a Compose provider for local operation, OpenSSL, and a remotely managed Cloudflare Tunnel. The same Compose uses only container-local shared namespaces, temporary route-setup capabilities, virtual DNS, and the TUN device; it never changes host firewall or routing state.
+Requirements: Linux with `/dev/net/tun`, either Docker Engine with Compose v2.33.1+ or rootless Podman with a Compose provider, OpenSSL, and a remotely managed Cloudflare Tunnel. Scripts automatically select a running Docker or Podman engine; no `docker` compatibility shim is required. The same Compose uses only container-local shared namespaces, temporary route-setup capabilities, virtual DNS, and the TUN device; it never changes host firewall or routing state.
 
 ```bash
-git clone --recurse-submodules https://github.com/xz-dev/AI-gateway.git /root/AI-gateway
-cd /root/AI-gateway
+git clone --recurse-submodules https://github.com/xz-dev/AI-gateway.git "$HOME/AI-gateway"
+cd "$HOME/AI-gateway"
 ./scripts/init.sh
 ```
 
@@ -78,13 +78,13 @@ cd /root/AI-gateway
    ```bash
    git submodule update --init --recursive
    ./scripts/validate.sh
-   docker compose pull cli-proxy-api postgres redis sub2api apisix cloudflared
-   docker compose build ai-sse-keepalive-proxy
-   docker compose up -d --build --wait
-   docker compose ps
+   source ./scripts/container-runtime.sh
+   "${AI_GATEWAY_COMPOSE[@]}" pull cli-proxy-api postgres redis sub2api apisix cloudflared
+   "${AI_GATEWAY_COMPOSE[@]}" up -d --build
+   "${AI_GATEWAY_COMPOSE[@]}" ps
    ```
 
-   On rootless Podman installations without automatic healthcheck scheduling (for example OpenRC), use the same Compose with `docker compose up -d --build`; do not use `--wait`. `./scripts/validate.sh` performs explicit runtime probes instead of relying on engine health timers.
+   Do not rely on `--wait`: rootless Podman installations without automatic healthcheck scheduling (for example OpenRC) may leave health at `starting`. `./scripts/validate.sh` performs explicit runtime probes instead of relying on engine health timers.
 
 ## Cloudflare Tunnel
 
@@ -153,9 +153,9 @@ Leave that internal CPA account without a Sub2API proxy. For every Sub2API accou
 
 `provider-sidecar` is a reusable deployment role, not a product integration. Pin the selected service image by manifest digest and keep all concrete runtime details in ignored production files. CPA reaches the role at exactly `https://provider-sidecar:8080/v1`; every matching production `api-key-entries[]` remains `proxy-url: direct`, so the global CPA proxy still applies only to Internet providers.
 
-Run `./scripts/init-provider-sidecar-tls.sh` before `./scripts/init-provider-sidecar-override.sh`. Initializer creates ignored `data/provider-sidecar-tls/` mode `0700`, cryptographically self-signed dedicated CA, leaf certificate with exact `DNS:provider-sidecar` SAN, `serverAuth`, basic-constraints, and key-usage profiles, combined CPA trust bundle, and exactly one `data/cpa/auths/provider-sidecar-planner.json` using runtime `PROVIDER_SIDECAR_API_KEY`. Dedicated CA, relay leaf certificate, and egress inspection CA have pairwise-distinct public keys. The dedicated CA private key stays host-only mode `0600`; neither it, the egress CA key, nor an equivalent key is ever mounted as the relay leaf key. Leaf key/certificate and combined bundle use mode `0444` for direct read-only mounts by unprivileged container UIDs; public CA certificate is nonsecret and also `0444`, while parent directory remains inaccessible at mode `0700`.
+Run `./scripts/init-provider-sidecar-tls.sh` before `./scripts/init-provider-sidecar-override.sh`. Initializer creates ignored `data/provider-sidecar-tls/` mode `0700`, a dedicated CA, `DNS:provider-sidecar` server certificate, and combined CPA trust bundle. Dedicated CA and egress inspection CA use distinct keys. The dedicated CA private key stays host-only mode `0600`; relay receives only its leaf certificate and key. Public certificates, leaf key, and combined bundle use mode `0444` inside the inaccessible mode-`0700` parent so unprivileged read-only mounts can read only explicitly mounted files.
 
-Initializer is idempotent and fail-closed: partial files, mismatched or reused keys, bad chain/SAN/usages, near expiry, duplicate/mismatched planner auth, token drift, or CA reuse stop operation. Init mode atomically refreshes derived combined trust bundle when source public trust changes; `--check` rejects stale or mismatched bundle without modifying it. It never prints token. Rotate by stopping coupled stack, moving entire `data/provider-sidecar-tls/` and `data/cpa/auths/provider-sidecar-planner.json` aside under protected backup, rerunning initializer, validating, then recreating coupled stack. Do not delete old protected material until acceptance. Rollback from HTTPS to the prior plaintext relay is one coordinated restore: restore the old `data/cpa/conf/config.yaml`, complete old CPA auth identity/file set, and prior `compose.override.yaml` together; restore/remove candidate TLS material as recorded in the rollback receipt. Never mix the HTTPS config or planner auth with the plaintext override, or vice versa.
+Initializer owns TLS material only. It does not create CPA provider accounts, planner identities, plugin metadata, or API-key files. Configure those application details separately in ignored CPA runtime state. Init mode refreshes the derived trust bundle; `--check` validates existing material without modifying it. Rotate by stopping the coupled stack, moving the entire TLS directory to protected backup, rerunning initializer, validating, and recreating the coupled services.
 
 Generated override terminates TLS >=1.2 in existing nonroot/read-only/capability-free `cpa-provider-sidecar-relay`, then forwards plaintext only across isolated target network to provider-sidecar `:8080`. CPA receives combined public trust at existing trust target; provider-sidecar API-key authentication remains unchanged. Relay mounts only leaf certificate/key; dedicated CA key stays host-only and dedicated public CA reaches CPA only through combined trust bundle.
 
@@ -170,15 +170,16 @@ options ndots:0
 
 Virtual DNS preserves the requested hostname for Squid CONNECT while preventing client-side DNS escape. Do not bind a host file over the tunnel owner's `/etc/resolv.conf`. The tunnel intentionally keeps only its disposable container layer writable because tun2proxy must rewrite Docker's runtime resolver file and clean up TUN state during startup and teardown; it has no persistent writable mount, remains unprivileged, and receives only `NET_ADMIN`. CPA reaches provider-sidecar only through `cpa-provider-sidecar-relay`; the tunnel reaches Squid only through `provider-sidecar-squid-relay`. Each direction has separate two-member source and target networks, and a failed relay or tunnel loses connectivity instead of gaining direct Internet access.
 
-For recovery, treat CPA, `cpa-provider-sidecar-relay`, provider-sidecar tunnel, and provider-sidecar as one unit. A missing/expired/mismatched TLS file must keep path failed closed; repair initializer state, validate, then recreate coupled services. Tunnel still uses `restart: "no"` deliberately. A provider-sidecar process keeps shared network namespace alive after tunnel owner exits, so restarting only owner cannot safely remove stale TUN state. Rebuild pair in order instead of `docker compose restart`:
+For recovery, treat CPA, `cpa-provider-sidecar-relay`, provider-sidecar tunnel, and provider-sidecar as one unit. A missing/expired/mismatched TLS file must keep path failed closed; repair initializer state, validate, then recreate coupled services. Tunnel still uses `restart: "no"` deliberately. A provider-sidecar process keeps shared network namespace alive after tunnel owner exits, so restarting only owner cannot safely remove stale TUN state. Rebuild the pair in order:
 
 ```bash
-docker compose rm -s -f provider-sidecar
-docker compose rm -s -f provider-sidecar-tunnel
-docker compose up -d --no-build provider-sidecar-tunnel provider-sidecar
+source ./scripts/container-runtime.sh
+"${AI_GATEWAY_COMPOSE[@]}" rm -s -f provider-sidecar
+"${AI_GATEWAY_COMPOSE[@]}" rm -s -f provider-sidecar-tunnel
+"${AI_GATEWAY_COMPOSE[@]}" up -d --no-build provider-sidecar-tunnel provider-sidecar
 ```
 
-For CPA entry targeting `https://provider-sidecar:8080/v1`, set `proxy-url: direct` on every item under entry's `api-key-entries`; provider object itself has no proxy field. Planner auth uses same exact HTTPS URL and `proxy_url: direct`. Its physical file deliberately stores the API key as metadata `token`: the selected Core stock `/api-call` resolves `metadata.token`, while file `metadata.api_key` is not projected into runtime auth attributes. The approved four-plugin Core E2E covers file-backed list/get/runtime identity plus `$TOKEN$` substitution. Global CPA proxy is only for Internet destinations.
+Configure the CPA entry for `https://provider-sidecar:8080/v1` in ignored runtime state. Set `proxy-url: direct` on each matching `api-key-entries[]` item because this HTTPS endpoint is an internal relay, while CPA's global proxy remains mandatory for Internet destinations. The template intentionally does not define provider/plugin identity fields.
 
 Sub2API admin UI is available at `http://127.0.0.1:8086`. For remote administration:
 
@@ -205,16 +206,21 @@ When upgrading Sub2API, re-audit that provider/upstream authentication failures 
 Sub2API, CLIProxyAPI, AI SSE keepalive proxy, their namespace owners, and every adjacent socat relay are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never use `docker restart`, never recreate a namespace owner alone, and never recreate CPA without Sub2API. With the production override, include the provider-sidecar tunnel and both provider-sidecar relays in the same full-stack operation.
 
 ```bash
+source ./scripts/container-runtime.sh
+
 # Follow all stack and relay logs
-docker compose logs -f
+"${AI_GATEWAY_COMPOSE[@]}" logs -f
 
 # Apply an image, policy, relay, or namespace change as one coupled recreation
-docker compose up -d --build --wait --force-recreate
+"${AI_GATEWAY_COMPOSE[@]}" up -d --build --force-recreate
 
 # Stop and restart the complete stack without deleting bind-mounted data
-docker compose down
-docker compose up -d --build --wait
+"${AI_GATEWAY_COMPOSE[@]}" down
+"${AI_GATEWAY_COMPOSE[@]}" up -d --build
+"${AI_GATEWAY_COMPOSE[@]}" ps
 ```
+
+Use explicit endpoint/readiness probes after recreation. Do not make correctness depend on engine healthcheck scheduling.
 
 Persistent application state lives under ignored `data/`, including the egress CA/policy, CPA config/auth/logs/plugins/runtime SQLite, and Sub2API PostgreSQL/Redis/application data. Back it up before upgrades. Never commit `.env` or `data/`. Losing the egress CA breaks trust for bumped destinations; never rotate it as part of a routine redeploy.
 
@@ -225,7 +231,7 @@ Persistent application state lives under ignored `data/`, including the egress C
 ./scripts/validate.sh .env.example # tracked template only
 ```
 
-Validation renders Compose and enforces exact per-edge socat commands, two-member source/target membership, fixed internal addresses, nonroot/read-only/capability-free relays, AI SSE middleware submodule/gitlink/local build/image metadata, provider-sidecar TLS mounts/trust/key ownership, engine-neutral host publication, startup wrappers, external image digests, and sole-egress membership. Base rendering has 26 services and 24 networks; optional provider-sidecar rendering has 30 services and 28 networks. `test-provider-sidecar-tls-boundary.sh` builds temporary dedicated identity/auth state; exercises exact certificate profiles and key separation, planner-compatible provider/type and URL ambiguity, disabled identity, malformed active identity, token drift, near-expiry rejection, and stale-bundle behavior; then proves trusted HTTPS forwarding, wrong-CA/name and plaintext rejection, TLS 1.2 minimum, blocked reverse initiation, stopped-relay bypass denial, relay hardening, cleanup, and leaf-only mounts. `test-socat-boundary.sh` separately proves TCP and UDP forwarding, 256 simultaneous held-open TCP connections, blocked target→source initiation, zero effective relay capabilities, and cleanup. The 512-PID/64-MiB relay bounds leave parent and supervisor headroom above that tested capacity; UDP remains test-only until a real production UDP contract exists. Egress tests keep exact `/dev/net/tun`+`NET_ADMIN` by default; hosted CI labels an explicit privileged runtime-test mode while static Compose validation still rejects privileged production services.
+Validation keeps two durable security contracts. First, egress is fail-closed: application namespaces have no direct route, Squid is sole provider egress, filtered DNS blocks private/reserved and rebinding answers, and policy tests distinguish domain, SNI/Host, method, and path allowlists. Second, every declared directed edge uses disjoint pairwise networks joined by one nonroot/read-only/capability-free relay; forward TCP works while reverse initiation and relay bypass fail. Compose rendering, local image builds, APISIX/Squid syntax, digest pinning, and untracked-secret checks are lightweight scaffold gates, not snapshots of service counts, fixed addresses, or application policy values. Like Compose startup, `validate.sh` automatically includes repo-root `compose.override.yaml` when present; `AI_GATEWAY_COMPOSE_OVERRIDE` selects a different explicit override.
 
 ## Layout
 
@@ -234,7 +240,7 @@ Validation renders Compose and enforces exact per-edge socat commands, two-membe
 ├── apisix/
 │   ├── apisix.yaml       # standalone routes and public response policy
 │   ├── config.yaml       # APISIX data-plane configuration
-│   └── lua/              # production custom Lua modules
+│   └── lua/              # custom APISIX modules
 ├── cpa/
 │   └── config.example.yaml
 ├── egress-proxy/
@@ -253,6 +259,7 @@ Validation renders Compose and enforces exact per-edge socat commands, two-membe
 │   ├── init-egress-proxy.sh
 │   ├── init-provider-sidecar-tls.sh
 │   ├── init-provider-sidecar-override.sh
+│   ├── container-runtime.sh
 │   ├── render-egress-policy.py
 │   ├── test-egress-proxy.sh
 │   ├── test-netns-guard.sh

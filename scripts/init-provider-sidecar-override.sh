@@ -97,7 +97,7 @@ services:
         ipv4_address: 172.30.23.2
 
   # This is the transport/security contract only. Add runtime-specific environment,
-  # volumes, command, and healthcheck fields in this ignored production override.
+  # volumes, command, and healthcheck fields in this ignored runtime override.
   provider-sidecar:
     image: ${PROVIDER_SIDECAR_IMAGE:?Set a digest-pinned PROVIDER_SIDECAR_IMAGE in .env}
     user: "${PROVIDER_SIDECAR_USER:?Set the non-root PROVIDER_SIDECAR_USER in .env}"
@@ -175,4 +175,4 @@ networks:
 YAML
 
 install -m 600 "$tmp" "$output"
-echo "Created ignored production provider-sidecar override: $output"
+echo "Created ignored provider-sidecar override: $output"
