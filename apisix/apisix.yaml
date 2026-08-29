@@ -207,6 +207,31 @@ routes:
       proxy-buffering:
         disable_proxy_buffering: true
 
+  - id: ai-api-pi-codex-auth-normalize
+    uri: /backend-api/codex/*
+    methods:
+      - GET
+      - POST
+    priority: 200
+    vars:
+      - [uri, "~~", '^/backend-api/codex/responses(?:/.*)?$']
+      - [http_x_ai_gateway_auth, "==", "pi-x-api-key"]
+      - [http_x_api_key, "~~", '.+']
+    enable_websocket: true
+    upstream_id: sub2api
+    plugin_config_id: apisix-native-upstream-404
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              ngx.req.clear_header("Authorization")
+              ngx.req.clear_header("X-AI-Gateway-Auth")
+            end
+
   - id: ai-api-codex-get
     uris:
       - /backend-api/codex/*

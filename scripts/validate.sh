@@ -292,6 +292,33 @@ netns_guard_image=$(value_from_env NETNS_GUARD_IMAGE)
 [ -n "$netns_guard_image" ] || netns_guard_image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 "$root/scripts/test-netns-guard.sh" "$netns_guard_image"
 
+python3 - "$root/apisix/apisix.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+route_id = "  - id: ai-api-pi-codex-auth-normalize\n"
+if text.count(route_id) != 1:
+    raise SystemExit("APISIX must declare exactly one Pi Codex auth-normalization route")
+start = text.index(route_id)
+end = text.find("\n  - id:", start + len(route_id))
+route = text[start:] if end < 0 else text[start:end]
+for required in (
+    "      - GET\n      - POST",
+    "priority: 200",
+    "^/backend-api/codex/responses(?:/.*)?$",
+    'http_x_ai_gateway_auth, "==", "pi-x-api-key"',
+    "http_x_api_key, \"~~\", '.+'",
+    "enable_websocket: true",
+    'ngx.req.clear_header("Authorization")',
+    'ngx.req.clear_header("X-AI-Gateway-Auth")',
+):
+    if required not in route:
+        raise SystemExit(f"incomplete Pi Codex auth normalization: {required}")
+if "Bearer " in route or 'clear_header("X-API-Key")' in route:
+    raise SystemExit("Pi Codex normalization must not embed or clear the Sub2API credential")
+PY
+
 apisix_image=$(value_from_env APISIX_IMAGE)
 [ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.18.0-debian
 "${RUNTIME[@]}" run --rm \

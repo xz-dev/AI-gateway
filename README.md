@@ -149,6 +149,31 @@ Add provider accounts to CPA, then create an OpenAI-compatible upstream account 
 
 Leave that internal CPA account without a Sub2API proxy. For every Sub2API account whose Base URL is on the Internet, explicitly assign an active `http` proxy record pointing to `sub2api-egress-relay:3128` with fallback mode `none`; Sub2API's account transports do not consistently inherit proxy environment variables.
 
+### Pi Codex SSE and WebSocket transports
+
+Pi's built-in `openai-codex` provider parses its `apiKey` as a JWT to obtain the ChatGPT account ID, while Sub2API expects its own opaque API key. Keep those identities separate: give Pi a JWT-shaped, non-credential parse token through private environment `PI_CODEX_PARSE_TOKEN`, and send the real Sub2API credential only as `x-api-key`. Do not reuse a live OpenAI OAuth access token as the parse token.
+
+Override the built-in provider in the user's private `~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "openai-codex": {
+      "baseUrl": "${AI_GATEWAY_PUBLIC_URL}/backend-api",
+      "apiKey": "$PI_CODEX_PARSE_TOKEN",
+      "headers": {
+        "x-api-key": "$AI_GATEWAY_API_KEY",
+        "x-ai-gateway-auth": "pi-x-api-key"
+      }
+    }
+  }
+}
+```
+
+The higher-priority APISIX Codex Responses route matches only that marker plus a nonempty `x-api-key`. It removes the parse-only `Authorization` and marker before proxying; it neither stores nor validates the credential. Sub2API remains the sole API-key authority and authenticates `x-api-key`. Requests missing either header fail closed through the normal opaque public response policy. The same `/backend-api/codex/responses` path handles POST/SSE and GET/WebSocket.
+
+Set `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true` only after enabling a reviewed WebSocket mode on the corresponding Sub2API account. Use `ctx_pool` when per-turn admission and pricing controls are required. In Pi settings, `transport: "websocket"` reuses one connection while sending full context; `transport: "websocket-cached"` reuses it and sends `previous_response_id` plus the new input delta. `transport: "sse"` remains the explicit HTTP streaming mode.
+
 ### Optional provider-sidecar
 
 `provider-sidecar` is a reusable deployment role, not a product integration. Pin the selected service image by manifest digest and keep all concrete runtime details in ignored production files. CPA reaches the role at exactly `https://provider-sidecar:8080/v1`; every matching production `api-key-entries[]` remains `proxy-url: direct`, so the global CPA proxy still applies only to Internet providers.
