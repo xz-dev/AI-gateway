@@ -73,7 +73,7 @@ cd "$HOME/AI-gateway"
 
    The public contract is intentionally narrow: the sidecar is OpenAI-compatible at `/v1`, listens on plain HTTP port `8080` inside its shared tunnel namespace, publishes no host port, runs as the declared non-root user, and obtains all Internet access through TUN → relay → Squid. The generator does not know or store any vendor-specific runtime setting.
 
-5. Validate and start. Compose builds `ai-sse-keepalive-proxy:7c522ef` locally from pinned submodule `middleware/ai-sse-keepalive-proxy`; it never pulls middleware from GHCR:
+5. Validate and start. Compose builds `ai-sse-keepalive-proxy:v0.1.0` locally from tagged, pinned submodule `middleware/ai-sse-keepalive-proxy`; it never pulls middleware from GHCR:
 
    ```bash
    git submodule update --init --recursive
