@@ -6,8 +6,8 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/scripts/container-runtime.sh"
 RUNTIME=("$AI_GATEWAY_RUNTIME")
 
-image=${1:-docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b}
-python_image=docker.io/library/python@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
+image=${1:-docker.io/alpine/socat:1.8.1.3}
+python_image=docker.io/library/python:3.13.15-alpine3.24
 suffix=$$
 source_net=ai-socat-source-$suffix
 target_net=ai-socat-target-$suffix

@@ -1,4 +1,4 @@
-FROM docker.io/library/debian@sha256:abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f
+FROM docker.io/library/debian:13.6
 
 ARG SQUID_OPENSSL_VERSION=6.13-2+deb13u2
 ARG UNBOUND_VERSION=1.22.0-2+deb13u3

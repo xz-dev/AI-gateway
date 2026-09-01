@@ -99,7 +99,7 @@ services:
   # This is the transport/security contract only. Add runtime-specific environment,
   # volumes, command, and healthcheck fields in this ignored runtime override.
   provider-sidecar:
-    image: ${PROVIDER_SIDECAR_IMAGE:?Set a digest-pinned PROVIDER_SIDECAR_IMAGE in .env}
+    image: ${PROVIDER_SIDECAR_IMAGE:?Set a version-tagged PROVIDER_SIDECAR_IMAGE in .env}
     user: "${PROVIDER_SIDECAR_USER:?Set the non-root PROVIDER_SIDECAR_USER in .env}"
     network_mode: service:provider-sidecar-tunnel
     restart: unless-stopped

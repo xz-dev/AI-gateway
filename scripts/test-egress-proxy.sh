@@ -7,7 +7,7 @@ RUNTIME=("$AI_GATEWAY_RUNTIME")
 
 cd "$root"
 image=${1:-ai-gateway-squid:6.13-2-deb13u2}
-tun2proxy_image=${2:-ghcr.io/tun2proxy/tun2proxy@sha256:562a4208ecf1f53e3c790af512bcc1ce2656f1d10d3541614173eed8b3185708}
+tun2proxy_image=${2:-ghcr.io/tun2proxy/tun2proxy:v0.8.3}
 tun_test_mode=${AI_GATEWAY_TUN_TEST_MODE:-exact-capabilities}
 case "$tun_test_mode" in exact-capabilities|ci-privileged) ;; *) echo 'AI_GATEWAY_TUN_TEST_MODE must be exact-capabilities or ci-privileged' >&2; exit 1;; esac
 tmpdir=$(mktemp -d /tmp/ai-gateway-egress-test.XXXXXX)
@@ -19,7 +19,7 @@ tunnel=ai-egress-test-tunnel-$suffix
 tunnel_sibling=ai-egress-test-sibling-$suffix
 client_network=ai-egress-test-client-$suffix
 egress_network=ai-egress-test-out-$suffix
-python_image=docker.io/library/python@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
+python_image=docker.io/library/python:3.13.15-alpine3.24
 
 cleanup() {
   local status=$? container network

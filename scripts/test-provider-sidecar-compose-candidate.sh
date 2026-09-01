@@ -10,7 +10,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 cp "$root/.env.example" "$work/runtime.env"
 cat >>"$work/runtime.env" <<'EOF'
-PROVIDER_SIDECAR_IMAGE=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+PROVIDER_SIDECAR_IMAGE=docker.io/library/alpine:3.22.5
 PROVIDER_SIDECAR_USER=65534:65534
 PROVIDER_SIDECAR_API_KEY=test-only-provider-sidecar-api-key
 EOF

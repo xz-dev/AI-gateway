@@ -172,8 +172,16 @@ for service, config in services.items():
             if isinstance(settings, dict) and settings.get("condition") == "service_healthy":
                 raise SystemExit(f"{service}->{dependency} uses nonportable service_healthy")
     image = str(config.get("image", ""))
-    if image and not config.get("build") and "@sha256:" not in image:
-        raise SystemExit(f"external image is not pinned by digest: {service}")
+    if not image:
+        continue
+    if "@sha256:" in image:
+        raise SystemExit(f"image digest references are forbidden: {service}")
+    image_name = image.rsplit("/", 1)[-1]
+    if ":" not in image_name:
+        raise SystemExit(f"image is missing an explicit version tag: {service}")
+    image_tag = image_name.rsplit(":", 1)[1]
+    if image_tag.lower() == "latest" or not any(char.isdigit() for char in image_tag):
+        raise SystemExit(f"image tag is not an explicit non-floating version: {service}={image_tag}")
 
 network_members = {name: members(name) for name in networks}
 for name, config in networks.items():
@@ -282,14 +290,14 @@ fi
 # one-way relay edges. The egress test intentionally distinguishes domain,
 # method, path, Host, and SNI allowlist decisions.
 tun2proxy_image=$(value_from_env TUN2PROXY_IMAGE)
-[ -n "$tun2proxy_image" ] || tun2proxy_image=ghcr.io/tun2proxy/tun2proxy@sha256:562a4208ecf1f53e3c790af512bcc1ce2656f1d10d3541614173eed8b3185708
+[ -n "$tun2proxy_image" ] || tun2proxy_image=ghcr.io/tun2proxy/tun2proxy:v0.8.3
 "$root/scripts/test-egress-proxy.sh" "$egress_image" "$tun2proxy_image"
 socat_image=$(value_from_env SOCAT_IMAGE)
-[ -n "$socat_image" ] || socat_image=docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b
+[ -n "$socat_image" ] || socat_image=docker.io/alpine/socat:1.8.1.3
 "$root/scripts/test-socat-boundary.sh" "$socat_image"
 "$root/scripts/test-provider-sidecar-tls-boundary.sh" "$socat_image"
 netns_guard_image=$(value_from_env NETNS_GUARD_IMAGE)
-[ -n "$netns_guard_image" ] || netns_guard_image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+[ -n "$netns_guard_image" ] || netns_guard_image=docker.io/library/alpine:3.22.5
 "$root/scripts/test-netns-guard.sh" "$netns_guard_image"
 
 python3 - "$root/apisix/apisix.yaml" <<'PY'

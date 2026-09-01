@@ -7,8 +7,8 @@ RUNTIME=("$AI_GATEWAY_RUNTIME")
 COMPOSE=("${AI_GATEWAY_COMPOSE[@]}")
 
 cd "$root"
-guard_image=${1:-docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1}
-python_image=docker.io/library/python@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
+guard_image=${1:-docker.io/library/alpine:3.22.5}
+python_image=docker.io/library/python:3.13.15-alpine3.24
 suffix=$$
 project=ai-netns-test-$suffix
 internal_network=$project-internal

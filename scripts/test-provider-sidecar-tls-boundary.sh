@@ -6,7 +6,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/scripts/container-runtime.sh"
 RUNTIME=("$AI_GATEWAY_RUNTIME")
 
-image=${1:-docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b}
+image=${1:-docker.io/alpine/socat:1.8.1.3}
 suffix=$$
 source_net=ai-provider-sidecar-tls-source-$suffix
 target_net=ai-provider-sidecar-tls-target-$suffix

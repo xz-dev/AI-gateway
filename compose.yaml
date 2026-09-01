@@ -7,7 +7,7 @@ x-default-logging: &default-logging
     max-file: "5"
 
 x-netns-owner: &netns-owner
-  image: ${NETNS_GUARD_IMAGE:-docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1}
+  image: ${NETNS_GUARD_IMAGE:-docker.io/library/alpine:3.22.5}
   restart: unless-stopped
   pids_limit: 16
   mem_limit: 16m
@@ -30,7 +30,7 @@ x-netns-owner: &netns-owner
       exec su nobody -s /bin/sh -c 'exec sleep infinity'
 
 x-socat-relay: &socat-relay
-  image: ${SOCAT_IMAGE:-docker.io/alpine/socat@sha256:3d9e7966201dd3a065df591020a09fd3c70845de7e7086e3531ea69db774406b}
+  image: ${SOCAT_IMAGE:-docker.io/alpine/socat:1.8.1.3}
   user: "65534:65534"
   restart: unless-stopped
   pids_limit: 512
@@ -126,7 +126,7 @@ services:
         ipv4_address: 172.30.17.2
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api@sha256:198a2bfd2e86db36f9cf2a982c905254362ffd84784b0226728158d0b7b558b3}
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api:v7.2.146-xz.1}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -184,7 +184,7 @@ services:
         ipv4_address: 172.30.18.3
 
   postgres:
-    image: ${POSTGRES_IMAGE:-docker.io/library/postgres@sha256:63bdc97d67b5133bf0e5ebd500bec6d046fa851dc81340d838f0347e616107e8}
+    image: ${POSTGRES_IMAGE:-docker.io/library/postgres:18.6-alpine3.24}
     command: [postgres, -c, max_connections=50, -c, shared_buffers=64MB]
     restart: unless-stopped
     pids_limit: 128
@@ -217,7 +217,7 @@ services:
       start_period: 10s
 
   redis:
-    image: ${REDIS_IMAGE:-docker.io/library/redis@sha256:9c3ecc609a8087c0f11c494fefaf37a8f7bf9a967631d4a0da8967a9810be354}
+    image: ${REDIS_IMAGE:-docker.io/library/redis:8.10.1-alpine3.23}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 80m
@@ -291,7 +291,7 @@ services:
         ipv4_address: 172.30.19.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/wei-shaw/sub2api@sha256:b0b9dec5ab978e8b872cedc2706e695c944b5322ae56b20ba99ee9d3871fe810}
+    image: ${SUB2API_IMAGE:-ghcr.io/wei-shaw/sub2api:0.1.185}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
@@ -442,7 +442,7 @@ services:
         ipv4_address: 172.30.9.2
 
   apisix:
-    image: ${APISIX_IMAGE:-docker.io/apache/apisix@sha256:51bb7b7fcd4162bec53f276c5a9b7b93d5de55723586842becb3e5f165fc0281}
+    image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}
     network_mode: service:apisix-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -489,7 +489,7 @@ services:
   ai-sse-keepalive-proxy:
     build:
       context: ./middleware/ai-sse-keepalive-proxy
-    image: ai-sse-keepalive-proxy:latest
+    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ai-sse-keepalive-proxy:7c522ef}
     pull_policy: build
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
@@ -555,7 +555,7 @@ services:
         ipv4_address: 172.30.8.3
 
   cloudflared:
-    image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38}
+    image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared:2026.8.3}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 48m
