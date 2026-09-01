@@ -354,6 +354,7 @@ services:
       LOG_ROTATION_MAX_AGE_DAYS: ${LOG_ROTATION_MAX_AGE_DAYS:-7}
       HTTP_PROXY: http://sub2api-egress-relay:3128
       HTTPS_PROXY: http://sub2api-egress-relay:3128
+      UPDATE_PROXY_URL: http://sub2api-egress-relay:3128
       NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,postgres,redis,sub2api-egress-relay
       SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
       TZ: ${TZ:-UTC}
