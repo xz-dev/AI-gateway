@@ -255,7 +255,7 @@ for service, config in services.items():
             raise SystemExit(f"proxy environment mismatch: {service}")
 
 sub2api_environment = services.get("sub2api", {}).get("environment") or {}
-if sub2api_environment.get("UPDATE_PROXY_URL") != sub2api_environment.get("HTTPS_PROXY"):
+if sub2api_environment.get("UPDATE_PROXY_URL") != "http://sub2api-egress-relay:3128":
     raise SystemExit("Sub2API update and pricing clients must use the fail-closed egress relay")
 
 key_holders = {service for service, config in services.items() if "/etc/squid/ca.key" in volume_targets(config)}
