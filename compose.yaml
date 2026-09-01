@@ -126,7 +126,7 @@ services:
         ipv4_address: 172.30.17.2
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api@sha256:1da1d6ab90c2d7a569e8ebcb6eeb25549e2a535b03fbac54f11ceca189c49ae8}
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api@sha256:198a2bfd2e86db36f9cf2a982c905254362ffd84784b0226728158d0b7b558b3}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
