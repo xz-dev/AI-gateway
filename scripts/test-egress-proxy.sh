@@ -219,7 +219,15 @@ done
   echo "bump Host/SNI binding bypass: $wrong_host" >&2
   exit 1
 }
-"${RUNTIME[@]}" logs "$proxy" 2>&1 | grep -q "method=GET host=global.$base path=/allowed .*bump=- upstream=203.1.1.2" || {
+mismatch_logged=
+for _ in $(seq 1 20); do
+  if "${RUNTIME[@]}" logs "$proxy" 2>&1 | grep -q "method=GET host=global.$base path=/allowed .*bump=- upstream=203.1.1.2"; then
+    mismatch_logged=1
+    break
+  fi
+  sleep 0.1
+done
+[ "$mismatch_logged" = 1 ] || {
   echo 'bump Host/SNI mismatch did not produce the expected policy denial' >&2
   exit 1
 }
