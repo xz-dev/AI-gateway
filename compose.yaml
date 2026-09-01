@@ -489,7 +489,7 @@ services:
   ai-sse-keepalive-proxy:
     build:
       context: ./middleware/ai-sse-keepalive-proxy
-    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ai-sse-keepalive-proxy:7c522ef}
+    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ai-sse-keepalive-proxy:v0.1.0}
     pull_policy: build
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
