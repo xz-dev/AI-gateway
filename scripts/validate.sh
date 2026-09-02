@@ -58,6 +58,99 @@ grep -Eq '^proxy-url:[[:space:]]*"?http://cpa-egress-relay:3128"?[[:space:]]*$' 
 
 tmpdir=$(mktemp -d /tmp/ai-gateway-validate.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
+python3 scripts/render-egress-policy.py egress-proxy/policy.example.json "$tmpdir/proxy-default"
+python3 - egress-proxy/policy.example.json <<'PY'
+import copy
+import json
+import sys
+
+
+def entry(domain, *paths):
+    return (domain, "bump", ("GET",), tuple(sorted(paths)))
+
+
+expected = {
+    "cpa": sorted((
+        entry(
+            "api.github.com",
+            r"^/repos/router-for-me/CLIProxyAPI/releases/latest$",
+            r"^/repos/router-for-me/Cli-Proxy-API-Management-Center/releases/latest$",
+        ),
+        entry(
+            "github.com",
+            r"^/router-for-me/Cli-Proxy-API-Management-Center/releases/download/[^/]+/management\.html$",
+        ),
+        entry(
+            "release-assets.githubusercontent.com",
+            r"^/github-production-release-asset/1051566067/",
+        ),
+        entry(
+            "raw.githubusercontent.com",
+            r"^/router-for-me/models/refs/heads/main/models\.json$",
+            r"^/router-for-me/models/refs/heads/main/codex_client_models\.json$",
+        ),
+    )),
+    "sub2api": sorted((
+        entry(
+            "api.github.com",
+            r"^/repos/Wei-Shaw/sub2api/releases/latest$",
+            r"^/repos/openai/codex/releases/latest$",
+            r"^/repos/openai/codex/releases\?per_page=30$",
+        ),
+        entry(
+            "raw.githubusercontent.com",
+            r"^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\.json$",
+            r"^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\.sha256$",
+        ),
+    )),
+}
+
+
+def shape(policy):
+    services = policy.get("services") if isinstance(policy, dict) else None
+    if not isinstance(services, dict):
+        return None
+    return {
+        name: sorted(
+            (
+                item.get("domain"),
+                item.get("tls"),
+                tuple(sorted(item.get("methods", []))),
+                tuple(sorted(item.get("paths", []))),
+            )
+            for item in spec.get("destinations", [])
+        )
+        for name, spec in services.items()
+    }
+
+
+def check(policy):
+    actual = shape(policy)
+    if actual != expected:
+        raise ValueError(
+            "default egress policy differs from the exact control-plane baseline\n"
+            f"expected={expected!r}\nactual={actual!r}"
+        )
+
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    policy = json.load(handle)
+check(policy)
+
+# Prove the exact-shape check rejects the unsafe wildcard this baseline replaces.
+broadened = copy.deepcopy(policy)
+next(
+    item
+    for item in broadened["services"]["cpa"]["destinations"]
+    if item["domain"] == "github.com"
+)["paths"] = [r"^/[^/]+/[^/]+/releases/download/"]
+try:
+    check(broadened)
+except ValueError:
+    pass
+else:
+    raise SystemExit("default policy validation accepted a broad GitHub release path")
+PY
 python3 scripts/render-egress-policy.py egress-proxy/testdata/policy.json "$tmpdir/proxy-test"
 python3 - "$tmpdir/proxy-test" <<'PY'
 import ipaddress

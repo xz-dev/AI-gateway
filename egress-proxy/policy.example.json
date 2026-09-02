@@ -3,12 +3,67 @@
     "cpa": {
       "listen": "172.30.18.2:3128",
       "client": "172.30.18.3/32",
-      "destinations": []
+      "destinations": [
+        {
+          "domain": "api.github.com",
+          "tls": "bump",
+          "methods": ["GET"],
+          "paths": [
+            "^/repos/router-for-me/CLIProxyAPI/releases/latest$",
+            "^/repos/router-for-me/Cli-Proxy-API-Management-Center/releases/latest$"
+          ]
+        },
+        {
+          "domain": "github.com",
+          "tls": "bump",
+          "methods": ["GET"],
+          "paths": [
+            "^/router-for-me/Cli-Proxy-API-Management-Center/releases/download/[^/]+/management\\.html$"
+          ]
+        },
+        {
+          "domain": "release-assets.githubusercontent.com",
+          "tls": "bump",
+          "methods": ["GET"],
+          "paths": [
+            "^/github-production-release-asset/1051566067/"
+          ]
+        },
+        {
+          "domain": "raw.githubusercontent.com",
+          "tls": "bump",
+          "methods": ["GET"],
+          "paths": [
+            "^/router-for-me/models/refs/heads/main/models\\.json$",
+            "^/router-for-me/models/refs/heads/main/codex_client_models\\.json$"
+          ]
+        }
+      ]
     },
     "sub2api": {
       "listen": "172.30.20.2:3128",
       "client": "172.30.20.3/32",
-      "destinations": []
+      "destinations": [
+        {
+          "domain": "api.github.com",
+          "tls": "bump",
+          "methods": ["GET"],
+          "paths": [
+            "^/repos/Wei-Shaw/sub2api/releases/latest$",
+            "^/repos/openai/codex/releases/latest$",
+            "^/repos/openai/codex/releases\\?per_page=30$"
+          ]
+        },
+        {
+          "domain": "raw.githubusercontent.com",
+          "tls": "bump",
+          "methods": ["GET"],
+          "paths": [
+            "^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\\.json$",
+            "^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\\.sha256$"
+          ]
+        }
+      ]
     }
   }
 }
