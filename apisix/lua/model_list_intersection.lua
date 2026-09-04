@@ -17,9 +17,12 @@ local type = type
 
 local _M = {}
 
-local UPSTREAM_HOST = "ai-sse-keepalive-ingress-relay"
-local UPSTREAM_PORT = 8080
-local BASIC_MAX_BYTES = 1024 * 1024
+-- basic 腿：Sub2API（组 entitlement 名单）；original 腿：model-catalog 边车 → apisix-models → enricher
+local BASIC_UPSTREAM_HOST = "ai-sse-keepalive-ingress-relay"
+local BASIC_UPSTREAM_PORT = 8080
+local ORIGINAL_UPSTREAM_HOST = "model-catalog-sidecar"
+local ORIGINAL_UPSTREAM_PORT = 8080
+local BASIC_MAX_BYTES = 16 * 1024 * 1024
 local ORIGINAL_MAX_BYTES = 16 * 1024 * 1024
 local FINAL_MAX_BYTES = 16 * 1024 * 1024
 local CONNECT_TIMEOUT_MS = 3000
@@ -90,7 +93,7 @@ local function response_header(headers, wanted)
     end
 end
 
-local function copy_request_headers()
+local function copy_request_headers(host)
     local copied = {}
     for name, value in pairs(ngx.req.get_headers()) do
         if not OMIT_REQUEST_HEADERS[string_lower(name)] then
@@ -101,7 +104,7 @@ local function copy_request_headers()
         end
     end
     local client_ip = ngx.var.remote_addr
-    copied.Host = UPSTREAM_HOST
+    copied.Host = host
     copied["CF-Connecting-IP"] = client_ip
     copied["X-Forwarded-For"] = client_ip
     copied["X-Real-IP"] = client_ip
@@ -145,11 +148,11 @@ local function read_body(httpc, response, max_bytes)
     return table_concat(chunks)
 end
 
-local function fetch(path, query, max_bytes, headers)
+local function fetch(host, port, path, query, max_bytes, headers)
     local httpc = http.new()
     httpc:set_timeouts(CONNECT_TIMEOUT_MS, SEND_TIMEOUT_MS, READ_TIMEOUT_MS)
 
-    local ok, err = httpc:connect(UPSTREAM_HOST, UPSTREAM_PORT)
+    local ok, err = httpc:connect(host, port)
     if not ok then
         return nil, "failed connecting to upstream: " .. tostring(err)
     end
@@ -383,26 +386,23 @@ function _M.run(_, ctx)
         return busy_response(acquire_err)
     end
 
-    local headers = copy_request_headers()
-    local original_thread = ngx.thread.spawn(
-        fetch, path, raw_query, ORIGINAL_MAX_BYTES, headers)
-    local basic_thread = ngx.thread.spawn(
-        fetch, path, nil, BASIC_MAX_BYTES, headers)
-
-    local basic_ok, basic, basic_err = ngx.thread.wait(basic_thread)
-    if not basic_ok or not basic then
-        ngx.thread.kill(original_thread)
-        return gateway_error(basic_err or basic)
+    -- 串行双腿：basic 先行（隐式鉴权 + entitlement）；非 2xx 原样透传且不发 original 腿
+    -- basic 腿携带与 original 相同的 query：Sub2API 带 client_version 走本地生成（mapping 并集 ∩ 组清单），
+    -- slug 集合即组 entitlement；其元数据不可信（硬编码兑底），交集时仅取 slug、内容取自 enricher
+    local basic, basic_err = fetch(BASIC_UPSTREAM_HOST, BASIC_UPSTREAM_PORT,
+        path, raw_query, BASIC_MAX_BYTES, copy_request_headers(BASIC_UPSTREAM_HOST))
+    if not basic then
+        return gateway_error(basic_err)
     end
     if basic.status < 200 or basic.status >= 300 then
-        ngx.thread.kill(original_thread)
         apply_upstream_headers(basic.headers)
         return basic.status, basic.body
     end
 
-    local original_ok, original, original_err = ngx.thread.wait(original_thread)
-    if not original_ok or not original then
-        return gateway_error(original_err or original)
+    local original, original_err = fetch(ORIGINAL_UPSTREAM_HOST, ORIGINAL_UPSTREAM_PORT,
+        path, raw_query, ORIGINAL_MAX_BYTES, copy_request_headers(ORIGINAL_UPSTREAM_HOST))
+    if not original then
+        return gateway_error(original_err)
     end
     if original.status < 200 or original.status >= 300 then
         apply_upstream_headers(original.headers)

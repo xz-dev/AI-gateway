@@ -88,6 +88,37 @@ plugin_configs:
               ngx.header["X-Client-Request-ID"] = nil
             end
 routes:
+  - id: ai-api-models-intersect
+    uris:
+      - /v1/models
+    methods:
+      - GET
+    priority: 200
+    vars:
+      - - arg_client_version
+        - ~~
+        - .+
+    upstream_id: sub2api
+    plugin_config_id: apisix-native-upstream-404
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - >-
+            return function(_, ctx)
+              local status, body, headers = require("model_list_intersection").run(_, ctx)
+              if status then
+                return status, body, headers
+              end
+            end
+      serverless-post-function:
+        phase: log
+        functions:
+          - >-
+            return function(_, ctx)
+              require("model_list_intersection").release(_, ctx)
+            end
+
   - id: ai-api-models-get
     uris:
       - /v1/models

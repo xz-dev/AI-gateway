@@ -1,0 +1,257 @@
+upstreams:
+  - id: enricher
+    type: roundrobin
+    nodes:
+      "models-enricher:8090": 1
+    timeout:
+      connect: 5
+      send: 30
+      read: 30
+  - id: wsalias
+    type: roundrobin
+    nodes:
+      "ws-alias-proxy:8090": 1
+    timeout:
+      connect: 5
+      send: 3600
+      read: 3600
+  - id: cpa
+    type: roundrobin
+    nodes:
+      "cpa:8317": 1
+    timeout:
+      connect: 3600
+      send: 3600
+      read: 3600
+
+routes:
+  # 别名模型路由：公开裸别名 + 跨渠道优先级 fallback（ai-proxy-multi）。
+  # codex/ 一跳有意缺席（OpenAI 额度用尽、OAuth 已禁用）：400 unknown provider
+  # 不触发 fallback（仅 429/5xx 触发），放进来只会让请求直接死掉。
+  # 额度恢复后，在每个路由的 instances 头部加回 codex 实例即可（priority 更高）：
+  #   - name: codex
+  #     provider: openai-compatible
+  #     priority: 10
+  #     weight: 1
+  #     override: { endpoint: "http://172.30.35.3:8317" }
+  #     options:  { model: "codex/<alias>" }
+  # 已知限制：WS 升级走 catch-all（GET），别名不覆盖 WS 传输。
+  - id: alias-gpt-5-6-sol
+    uris:
+      - /v1/chat/completions
+      - /v1/responses
+    methods:
+      - POST
+    priority: 30
+    filter_func: |
+      function(vars)
+        ngx.req.read_body()
+        local b = ngx.req.get_body_data() or ""
+        return b:find('"model"%s*:%s*"gpt%-5%.6%-sol"') ~= nil
+      end
+    plugins:
+      ai-proxy-multi:
+        balancer:
+          algorithm: chash
+          hash_on: header
+          key: session_id
+        fallback_strategy:
+          - http_429
+          - http_5xx
+        max_retries: 1
+        instances:
+          - name: axis
+            provider: openai-compatible
+            auth:
+              header:
+                Authorization: "Bearer __CPA_API_KEY__"
+            priority: 1
+            weight: 1
+            override:
+              endpoint: "http://172.30.35.3:8317"
+            options:
+              model: "axis/gpt-5.6-sol"
+    upstream_id: cpa
+  - id: alias-gpt-5-6-terra
+    uris:
+      - /v1/chat/completions
+      - /v1/responses
+    methods:
+      - POST
+    priority: 30
+    filter_func: |
+      function(vars)
+        ngx.req.read_body()
+        local b = ngx.req.get_body_data() or ""
+        return b:find('"model"%s*:%s*"gpt%-5%.6%-terra"') ~= nil
+      end
+    plugins:
+      ai-proxy-multi:
+        balancer:
+          algorithm: chash
+          hash_on: header
+          key: session_id
+        fallback_strategy:
+          - http_429
+          - http_5xx
+        max_retries: 1
+        instances:
+          - name: axis
+            provider: openai-compatible
+            auth:
+              header:
+                Authorization: "Bearer __CPA_API_KEY__"
+            priority: 1
+            weight: 1
+            override:
+              endpoint: "http://172.30.35.3:8317"
+            options:
+              model: "axis/gpt-5.6-terra"
+    upstream_id: cpa
+  - id: alias-gpt-5-6-luna
+    uris:
+      - /v1/chat/completions
+      - /v1/responses
+    methods:
+      - POST
+    priority: 30
+    filter_func: |
+      function(vars)
+        ngx.req.read_body()
+        local b = ngx.req.get_body_data() or ""
+        return b:find('"model"%s*:%s*"gpt%-5%.6%-luna"') ~= nil
+      end
+    plugins:
+      ai-proxy-multi:
+        balancer:
+          algorithm: chash
+          hash_on: header
+          key: session_id
+        fallback_strategy:
+          - http_429
+          - http_5xx
+        max_retries: 1
+        instances:
+          - name: axis
+            provider: openai-compatible
+            auth:
+              header:
+                Authorization: "Bearer __CPA_API_KEY__"
+            priority: 1
+            weight: 1
+            override:
+              endpoint: "http://172.30.35.3:8317"
+            options:
+              model: "axis/gpt-5.6-luna"
+    upstream_id: cpa
+  - id: alias-grok-4-6
+    uris:
+      - /v1/chat/completions
+      - /v1/responses
+    methods:
+      - POST
+    priority: 30
+    filter_func: |
+      function(vars)
+        ngx.req.read_body()
+        local b = ngx.req.get_body_data() or ""
+        return b:find('"model"%s*:%s*"grok%-4%.6"') ~= nil
+      end
+    plugins:
+      ai-proxy-multi:
+        balancer:
+          algorithm: chash
+          hash_on: header
+          key: session_id
+        fallback_strategy:
+          - http_429
+          - http_5xx
+        max_retries: 1
+        instances:
+          - name: grok-oauth
+            provider: openai-compatible
+            auth:
+              header:
+                Authorization: "Bearer __CPA_API_KEY__"
+            priority: 1
+            weight: 1
+            override:
+              endpoint: "http://172.30.35.3:8317"
+            options:
+              model: "grok-4.6"
+          - name: xl
+            provider: openai-compatible
+            auth:
+              header:
+                Authorization: "Bearer __CPA_API_KEY__"
+            priority: 1
+            weight: 1
+            override:
+              endpoint: "http://172.30.35.3:8317"
+            options:
+              model: "xl/grok-4.6"
+    upstream_id: cpa
+  - id: alias-team-a-gpt-5-6-sol
+    uris:
+      - /v1/chat/completions
+      - /v1/responses
+    methods:
+      - POST
+    priority: 30
+    filter_func: |
+      function(vars)
+        ngx.req.read_body()
+        local b = ngx.req.get_body_data() or ""
+        return b:find('"model"%s*:%s*"team%-a/gpt%-5%.6%-sol"') ~= nil
+      end
+    plugins:
+      ai-proxy-multi:
+        balancer:
+          algorithm: chash
+          hash_on: header
+          key: session_id
+        fallback_strategy:
+          - http_429
+          - http_5xx
+        max_retries: 1
+        instances:
+          - name: axis
+            provider: openai-compatible
+            auth:
+              header:
+                Authorization: "Bearer __CPA_API_KEY__"
+            priority: 1
+            weight: 1
+            override:
+              endpoint: "http://172.30.35.3:8317"
+            options:
+              model: "axis/gpt-5.6-sol"
+    upstream_id: cpa
+  # WS 别名覆盖：GET /v1/responses + Upgrade → ws-alias-proxy 边车（帧级 model 改写）
+  - id: ws-alias
+    uris:
+      - /v1/responses
+    methods:
+      - GET
+    priority: 30
+    vars:
+      - ["http_upgrade", "==", "websocket"]
+    enable_websocket: true
+    upstream_id: wsalias
+  - id: codex-models
+    uri: /v1/models
+    methods:
+      - GET
+    vars:
+      - ["arg_client_version", "~~", ".+"]
+    priority: 20
+    upstream_id: enricher
+  - id: catch-all
+    uri: /*
+    priority: 1
+    enable_websocket: true
+    plugins:
+      proxy-buffering:
+        disable_proxy_buffering: true
+    upstream_id: cpa
+#END

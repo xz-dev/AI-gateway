@@ -1,0 +1,13 @@
+# ws-alias-proxy 配置。与 apisix-models/apisix.yaml 中 ai-proxy-multi 的
+# 别名实例保持同步（两者是同一别名表的 HTTP/WS 两侧）。
+listen: ":8090"
+upstream: "http://cpa:8317"   # netns extra_hosts → wsalias-cpa-relay(172.30.39.3)
+stickiness_header: Session-Id
+max_frame_bytes: 16777216
+dial_timeout: 15s
+aliases:
+  gpt-5.6-sol:   [axis/gpt-5.6-sol]     # codex 池成员待额度恢复后取消注释
+  gpt-5.6-terra: [axis/gpt-5.6-terra]   # codex/gpt-5.6-terra
+  gpt-5.6-luna:  [axis/gpt-5.6-luna]    # codex/gpt-5.6-luna
+  grok-4.6:      [grok-4.6, xl/grok-4.6] # oauth grok + xl 双通道 LB
+  team-a/gpt-5.6-sol: [axis/gpt-5.6-sol]  # 含斜杠别名 drill

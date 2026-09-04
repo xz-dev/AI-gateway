@@ -1,0 +1,17 @@
+server {
+    listen 8080;
+    server_name _;
+
+    # 唯一可用 path：/v1/models（查询原样透传）
+    location = /v1/models {
+        proxy_pass http://172.30.42.2:9080;
+        proxy_http_version 1.1;
+        proxy_set_header Host "apisix-models";
+        proxy_set_header Connection "";
+        proxy_read_timeout 60s;
+    }
+
+    location / {
+        return 444;
+    }
+}

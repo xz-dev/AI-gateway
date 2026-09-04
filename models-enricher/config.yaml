@@ -1,0 +1,78 @@
+cpa_base_url: http://cpa:8317
+source_ttl: 10m
+channel_timeout: 8s
+overall_deadline: 25s
+# Optional per-channel path / regex / field overrides. Keys match CPA name or prefix.
+channels: {}
+
+# 公开裸别名（fallback 链公开名，APISIX ai-proxy-multi 承载路由）
+# 有序链式继承：codex（暂停，缺失=空模板）→ axis → overrides 盖顶。
+static_models:
+  - slug: gpt-5.6-sol
+    inherit: [id@gpt-5.6-sol, axis/gpt-5.6-sol]
+    overrides:
+      display_name: GPT-5.6 Sol
+      description: 公开别名；fallback 链 codex(暂停)→axis
+  - slug: gpt-5.6-terra
+    inherit: [id@gpt-5.6-terra, axis/gpt-5.6-terra]
+    overrides:
+      display_name: GPT-5.6 Terra
+      description: 公开别名；fallback 链 codex(暂停)→axis
+  - slug: team-a/gpt-5.6-sol
+    inherit: [id@gpt-5.6-sol]
+    overrides:
+      display_name: Team-A GPT-5.6 Sol
+      description: 含斜杠别名 drill；池 axis
+  - slug: grok-4.6
+    inherit: [xl/grok-4.6]
+    overrides:
+      display_name: Grok 4.6
+      description: 公开别名；LB 池 grok-oauth+xl
+  - slug: gpt-5.6-luna
+    inherit: [id@gpt-5.6-luna, axis/gpt-5.6-luna]
+    overrides:
+      display_name: GPT-5.6 Luna
+      description: 公开别名；fallback 链 codex(暂停)→axis
+  # GLM-5.3：官方（docs.z.ai）1M ctx / 128K out 由源填充；推理恒开，effort low/high/max。
+  - slug: zcode/glm-5.3
+    overrides:
+      supported_reasoning_levels: [{effort: low}, {effort: high}, {effort: max}]
+      default_reasoning_level: max
+  # Sub2API 目录裸名条目：继承带前缀池条目（已剥模板+源填充），
+  # 让 Sub2API 本地目录的元数据查找命中真值而不是硬编码 272000 兜底。
+  - slug: glm-5.3
+    inherit: [id@zcode/glm-5.3, zcode/glm-5.3]
+  - slug: glm-5.2
+    inherit: [id@zcode/glm-5.2, zcode/glm-5.2]
+  - slug: glm-5.1
+    inherit: [id@zcode/glm-5.1, zcode/glm-5.1]
+  - slug: glm-5
+    inherit: [id@zcode/glm-5, zcode/glm-5]
+  - slug: glm-5-turbo
+    inherit: [id@zcode/glm-5-turbo, zcode/glm-5-turbo]
+  - slug: glm-5v-turbo
+    inherit: [id@zcode/glm-5v-turbo, zcode/glm-5v-turbo]
+  - slug: glm-4.7
+    inherit: [id@zcode/glm-4.7, zcode/glm-4.7]
+  - slug: glm-4.6
+    inherit: [id@zcode/glm-4.6, zcode/glm-4.6]
+  - slug: glm-4.6v
+    inherit: [id@zcode/glm-4.6v, zcode/glm-4.6v]
+  - slug: glm-4.5-air
+    inherit: [id@zcode/glm-4.5-air, zcode/glm-4.5-air]
+  - slug: kimi-k3
+    inherit: [id@kimi-coding/kimi-k3, kimi-coding/kimi-k3]
+  - slug: kimi-k3-256k
+    inherit: [id@kimi-coding/kimi-k3-256k, kimi-coding/kimi-k3-256k]
+  - slug: kimi-k2.7-code
+    inherit: [id@kimi-coding/kimi-k2.7-code, kimi-coding/kimi-k2.7-code]
+  - slug: kimi-k2.7-code-highspeed
+    inherit: [id@kimi-coding/kimi-k2.7-code-highspeed, kimi-coding/kimi-k2.7-code-highspeed]
+  - slug: kimi-k2.6
+    inherit: [id@kimi-coding/kimi-k2.6, kimi-coding/kimi-k2.6]
+  - slug: kimi-k2.5
+    inherit: [id@kimi-coding/kimi-k2.5, kimi-coding/kimi-k2.5]
+  - slug: kimi-k2-thinking
+    inherit: [id@kimi-coding/kimi-k2-thinking, kimi-coding/kimi-k2-thinking]
+  - slug: kimi-k2
+    inherit: [id@kimi-coding/kimi-k2, kimi-coding/kimi-k2]

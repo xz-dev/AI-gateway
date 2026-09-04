@@ -7,3 +7,5 @@ data/
 __pycache__/
 .serena/
 .DS_Store
+models-enricher/models-enricher
+ws-alias-proxy/ws-alias-proxy

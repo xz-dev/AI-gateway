@@ -281,6 +281,28 @@ Persistent application state lives under ignored `data/`, including the egress C
 
 Validation keeps three durable security contracts. First, the tracked fresh-install policy is the exact control-plane baseline documented above: missing, extra, or broadened GitHub rules fail offline validation. Second, egress is fail-closed: application namespaces have no direct route, Squid is sole provider egress, filtered DNS blocks private/reserved and rebinding answers, and policy tests distinguish domain, SNI/Host, method, and path allowlists. Third, every declared directed edge uses disjoint pairwise networks joined by one nonroot/read-only/capability-free relay; forward TCP works while reverse initiation and relay bypass fail. Compose rendering, local image builds, APISIX/Squid syntax, explicit non-floating version tags, and untracked-secret checks are lightweight scaffold gates, not snapshots of service counts, fixed addresses, or application policy values. Like Compose startup, `validate.sh` automatically includes repo-root `compose.override.yaml` when present; `AI_GATEWAY_COMPOSE_OVERRIDE` selects a different explicit override.
 
+### Optional models gateway (apisix-models + models-enricher)
+
+A dedicated second APISIX instance (`apisix-models`, config in `apisix-models/`) sits between Sub2API and CPA. It transparently proxies all CPA-bound traffic (SSE streaming and Codex WebSocket enabled on the catch-all route) and splits `GET /v1/models` requests carrying a non-empty `client_version` query to `models-enricher`.
+
+`models-enricher` (Go service in `models-enricher/`) answers Codex manifest requests: it discovers enabled key-type CPA channels via the management API (`CPA_MANAGEMENT_KEY`), fetches each channel's live models through CPA `api-call` (credentials never leave CPA), fills missing metadata from models.dev/modelparams.dev (10-minute cache), applies YAML overrides and include/exclude regexes, drops unprefixed slugs, and merges into CPA's native manifest (fill-gaps; explicit overrides win). The client-facing CPA key comes from `CPA_CLIENT_KEY` (defaults to `CPA_API_KEY`). Future inference model routing lands on this APISIX instance natively (`ai-proxy-multi`, chash).
+
+Cutover: point the Sub2API CPA hop at the `apisix-models` relay and remove the legacy `sub2api-cpa-relay` (see change `add-apisix-models-gateway` tasks 4.x).
+
+### Front-door model catalog intersection (model-catalog-sidecar)
+
+Parameterized Codex catalog requests (`GET /v1/models?client_version=...`) are answered by the **front** APISIX via `lua/model_list_intersection.lua` (route `ai-api-models-intersect`, priority 200): it serially fetches (1) Sub2API's own response with the client's key and original query — the slug set of that response is the group's entitlement (mapping union ∩ group models list; its hardcoded metadata is discarded) — and (2) the enriched live manifest through `model-catalog-sidecar`, then returns the intersection with metadata taken from the enricher. Sub2API errors pass through verbatim (implicit auth); enricher failure is a hard 502 by design (no fallback to wrong data).
+
+`model-catalog-sidecar` (nginx-unprivileged, read-only, non-root) is a single-purpose bridge: it accepts only `GET /v1/models` (everything else 444) and forwards to `apisix-models` with no credential attached (the codex-models route requires none; the enricher holds its own CPA key). The sidecar joins both `apisix-catalog-source` (front side) and `apisix-catalog-target` (apisix-models side) /29 nets, same one-way shape as the socat relays.
+
+Ops notes:
+
+- Unparameterized `/v1/models` keeps going straight to Sub2API (route `ai-api-models-get`, unchanged behavior).
+- The Sub2API "sync models" button failing for CPA accounts is known-harmless: catalog data comes from the enricher, not from Sub2API's sync.
+- Never write model metadata into Sub2API's DB (e.g. `extra.upstream_model_metadata` snapshots) — they go stale by construction; the intersection makes them unnecessary.
+- Group models lists (`ModelsListConfig.enabled=true`) are the sole catalog entitlement source; request-path gating stays on account `model_mapping`.
+- Account DB writes require `docker restart ai-gateway-sub2api-1` (account cache).
+
 ## Layout
 
 ```text
@@ -289,6 +311,14 @@ Validation keeps three durable security contracts. First, the tracked fresh-inst
 │   ├── apisix.yaml       # standalone routes and public response policy
 │   ├── config.yaml       # APISIX data-plane configuration
 │   └── lua/              # custom APISIX modules
+├── apisix-models/        # dedicated Sub2API<->CPA gateway instance
+│   ├── apisix.yaml       # models route split + WS/SSE catch-all
+│   └── config.yaml       # standalone data-plane configuration
+├── models-enricher/      # Go Codex manifest enricher sidecar
+├── model-catalog-sidecar/ # nginx single-path bridge: front APISIX → apisix-models (injects own CPA key)
+│   ├── Dockerfile
+│   ├── config.yaml       # channel paths, overrides, regex filters
+│   └── *.go
 ├── cpa/
 │   └── config.example.yaml
 ├── egress-proxy/

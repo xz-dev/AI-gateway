@@ -70,6 +70,8 @@ services:
         ipv4_address: 172.30.18.2
       sub2api-squid-target:
         ipv4_address: 172.30.20.2
+      enricher-squid-target:
+        ipv4_address: 172.30.32.2
       proxy-egress:
         gw_priority: 1
     healthcheck:
@@ -120,10 +122,14 @@ services:
       host-cpa-target:
         aliases: [cli-proxy-api]
         ipv4_address: 172.30.2.2
-      sub2api-cpa-target:
-        ipv4_address: 172.30.12.2
       cpa-squid-source:
         ipv4_address: 172.30.17.2
+      apisix-models-cpa-target:
+        ipv4_address: 172.30.36.2
+      enricher-cpa-target:
+        ipv4_address: 172.30.30.2
+      wsalias-cpa-target:
+        ipv4_address: 172.30.40.2
 
   cli-proxy-api:
     image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api:v7.2.146-xz.1}
@@ -365,11 +371,13 @@ services:
       retries: 3
       start_period: 30s
 
+  # Cutover done (task 4.3): this relay now feeds Sub2API traffic to the
+  # apisix-models gateway; apisix-models-netns owns 172.30.12.2 on the target net.
   sub2api-cpa-relay:
     <<: *socat-relay
-    command: ["TCP4-LISTEN:8317,bind=172.30.11.3,reuseaddr,fork", "TCP4:172.30.12.2:8317,connect-timeout=10"]
+    command: ["TCP4-LISTEN:8317,bind=172.30.11.3,reuseaddr,fork", "TCP4:172.30.12.2:9080,connect-timeout=10"]
     depends_on:
-      cli-proxy-api: {condition: service_started}
+      apisix-models: {condition: service_started}
     networks:
       sub2api-cpa-source:
         aliases: [cli-proxy-api]
@@ -434,6 +442,7 @@ services:
     <<: *netns-owner
     extra_hosts:
       - "ai-sse-keepalive-ingress-relay:172.30.9.3"
+      - "model-catalog-sidecar:172.30.41.3"
     networks:
       host-apisix-target:
         ipv4_address: 172.30.6.2
@@ -441,6 +450,8 @@ services:
         ipv4_address: 172.30.8.2
       apisix-ai-sse-source:
         ipv4_address: 172.30.9.2
+      apisix-catalog-source:
+        ipv4_address: 172.30.41.2
 
   apisix:
     image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}
@@ -555,6 +566,257 @@ services:
       cloudflared-apisix-target:
         ipv4_address: 172.30.8.3
 
+  apisix-models-host-netns:
+    <<: *netns-owner
+    ports:
+      - "${APISIX_MODELS_BIND_ADDRESS:-127.0.0.1}:${APISIX_MODELS_PORT:-9081}:9080"
+    networks:
+      apisix-models-host-source:
+        ipv4_address: 172.30.33.2
+      host-apisix-models-target:
+        ipv4_address: 172.30.34.3
+
+  apisix-models-host-relay:
+    <<: *socat-relay
+    network_mode: service:apisix-models-host-netns
+    command: ["TCP4-LISTEN:9080,reuseaddr,fork", "TCP4:172.30.34.2:9080,connect-timeout=10"]
+    depends_on:
+      apisix-models-host-netns: {condition: service_started, restart: true}
+
+  apisix-models-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "cpa:172.30.35.3"
+      - "models-enricher:172.30.27.3"
+      - "ws-alias-proxy:172.30.37.3"
+    networks:
+      host-apisix-models-target:
+        ipv4_address: 172.30.34.2
+      apisix-models-cpa-source:
+        ipv4_address: 172.30.35.2
+      apisix-models-enricher-source:
+        ipv4_address: 172.30.27.2
+      apisix-models-wsalias-source:
+        ipv4_address: 172.30.37.2
+      sub2api-cpa-target:
+        ipv4_address: 172.30.12.2
+      apisix-catalog-target:
+        ipv4_address: 172.30.42.2
+
+  apisix-models:
+    image: ${APISIX_MODELS_IMAGE:-${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}}
+    network_mode: service:apisix-models-netns
+    entrypoint: [/bin/bash, -ec]
+    command:
+      - >-
+        case "$$CPA_API_KEY" in *[\&/\\]*) echo "CPA_API_KEY has unsafe chars for sed"; exit 1;; esac;
+        sed "s|__CPA_API_KEY__|$$CPA_API_KEY|g" /opt/apisix.yaml.tpl > /usr/local/apisix/conf/apisix.yaml;
+        while awk 'NR > 1 && $$2 == "00000000" && $$8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
+        awk '$$1 == "00000000000000000000000000000000" && $$2 == "00" && $$10 != "lo" {found=1} END {exit(found ? 0 : 1)}' /proc/net/ipv6_route;
+        do sleep 0.05; done;
+        exec /docker-entrypoint.sh docker-start
+    restart: unless-stopped
+    pids_limit: 128
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 1.0
+    cap_drop: [ALL]
+    logging: *default-logging
+    security_opt: [no-new-privileges:true]
+    environment:
+      APISIX_STAND_ALONE: "true"
+      CPA_API_KEY: ${CPA_API_KEY:?Set CPA_API_KEY in .env}
+    depends_on:
+      apisix-models-netns: {condition: service_started, restart: true}
+      apisix-models-host-relay: {condition: service_started}
+      apisix-models-cpa-relay: {condition: service_started, restart: true}
+      apisix-models-enricher-relay: {condition: service_started, restart: true}
+      apisix-models-wsalias-relay: {condition: service_started, restart: true}
+    volumes:
+      - ./apisix-models/config.yaml:/usr/local/apisix/conf/config.yaml:ro,Z
+      - ./apisix-models/apisix.yaml:/opt/apisix.yaml.tpl:ro,Z
+    healthcheck:
+      test: [CMD, /bin/bash, -ec, "exec 3<>/dev/tcp/127.0.0.1/9080; printf 'GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3; IFS= read -r line <&3; true"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  apisix-models-cpa-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:8317,bind=172.30.35.3,reuseaddr,fork", "TCP4:172.30.36.2:8317,connect-timeout=10"]
+    depends_on:
+      cli-proxy-api: {condition: service_started}
+    networks:
+      apisix-models-cpa-source:
+        aliases: [cpa]
+        ipv4_address: 172.30.35.3
+      apisix-models-cpa-target:
+        ipv4_address: 172.30.36.3
+
+  apisix-models-enricher-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:8090,bind=172.30.27.3,reuseaddr,fork", "TCP4:172.30.28.2:8090,connect-timeout=10"]
+    depends_on:
+      models-enricher: {condition: service_started}
+    networks:
+      apisix-models-enricher-source:
+        aliases: [models-enricher]
+        ipv4_address: 172.30.27.3
+      apisix-models-enricher-target:
+        ipv4_address: 172.30.28.3
+
+  models-enricher-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "cpa:172.30.29.3"
+      - "enricher-egress-relay:172.30.31.3"
+    networks:
+      apisix-models-enricher-target:
+        ipv4_address: 172.30.28.2
+      enricher-cpa-source:
+        ipv4_address: 172.30.29.2
+      enricher-squid-source:
+        ipv4_address: 172.30.31.2
+
+  models-enricher:
+    build:
+      context: ./models-enricher
+    image: ${MODELS_ENRICHER_IMAGE:-models-enricher:v0.5.1}
+    pull_policy: build
+    network_mode: service:models-enricher-netns
+    restart: unless-stopped
+    depends_on:
+      models-enricher-netns: {condition: service_started, restart: true}
+      enricher-cpa-relay: {condition: service_started, restart: true}
+      enricher-squid-relay: {condition: service_started, restart: true}
+    pids_limit: 64
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    read_only: true
+    cap_drop: [ALL]
+    logging: *default-logging
+    security_opt: [no-new-privileges:true]
+    environment:
+      LISTEN_ADDR: :8090
+      CONFIG_PATH: /app/config.yaml
+      CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY:?Set CPA_MANAGEMENT_KEY in .env}
+      CPA_CLIENT_KEY: ${CPA_CLIENT_KEY:-${CPA_API_KEY:?Set CPA_CLIENT_KEY or CPA_API_KEY in .env}}
+      HTTP_PROXY: http://enricher-egress-relay:3128
+      HTTPS_PROXY: http://enricher-egress-relay:3128
+      NO_PROXY: 127.0.0.1,localhost,cpa,enricher-egress-relay
+      SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
+    volumes:
+      - ./models-enricher/config.yaml:/app/config.yaml:ro,Z
+      - ./data/egress-proxy/ca-bundle.pem:/etc/ssl/certs/ai-gateway-ca-bundle.pem:ro,z
+
+  enricher-cpa-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:8317,bind=172.30.29.3,reuseaddr,fork", "TCP4:172.30.30.2:8317,connect-timeout=10"]
+    depends_on:
+      cli-proxy-api: {condition: service_started}
+    networks:
+      enricher-cpa-source:
+        aliases: [cpa]
+        ipv4_address: 172.30.29.3
+      enricher-cpa-target:
+        ipv4_address: 172.30.30.3
+
+  apisix-models-wsalias-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:8090,bind=172.30.37.3,reuseaddr,fork", "TCP4:172.30.38.2:8090,connect-timeout=10"]
+    depends_on:
+      ws-alias-proxy: {condition: service_started}
+    networks:
+      apisix-models-wsalias-source:
+        aliases: [ws-alias-proxy]
+        ipv4_address: 172.30.37.3
+      apisix-models-wsalias-target:
+        ipv4_address: 172.30.38.3
+
+  wsalias-netns:
+    <<: *netns-owner
+    extra_hosts:
+      - "cpa:172.30.39.3"
+    networks:
+      apisix-models-wsalias-target:
+        ipv4_address: 172.30.38.2
+      wsalias-cpa-source:
+        ipv4_address: 172.30.39.2
+
+  ws-alias-proxy:
+    build:
+      context: ./ws-alias-proxy
+    image: ${WS_ALIAS_PROXY_IMAGE:-ws-alias-proxy:v0.2.0}
+    pull_policy: build
+    network_mode: service:wsalias-netns
+    restart: unless-stopped
+    depends_on:
+      wsalias-netns: {condition: service_started, restart: true}
+      wsalias-cpa-relay: {condition: service_started, restart: true}
+    pids_limit: 64
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    read_only: true
+    cap_drop: [ALL]
+    logging: *default-logging
+    security_opt: [no-new-privileges:true]
+    environment:
+      WS_ALIAS_CONFIG: /app/config.yaml
+    volumes:
+      - ./ws-alias-proxy/config.yaml:/app/config.yaml:ro,Z
+
+  wsalias-cpa-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:8317,bind=172.30.39.3,reuseaddr,fork", "TCP4:172.30.40.2:8317,connect-timeout=10"]
+    depends_on:
+      cli-proxy-api: {condition: service_started}
+    networks:
+      wsalias-cpa-source:
+        aliases: [cpa]
+        ipv4_address: 172.30.39.3
+      wsalias-cpa-target:
+        ipv4_address: 172.30.40.3
+
+  enricher-squid-relay:
+    <<: *socat-relay
+    command: ["TCP4-LISTEN:3128,bind=172.30.31.3,reuseaddr,fork", "TCP4:172.30.32.2:3128,connect-timeout=10"]
+    depends_on:
+      egress-proxy: {condition: service_started}
+    networks:
+      enricher-squid-source:
+        aliases: [enricher-egress-relay]
+        ipv4_address: 172.30.31.3
+      enricher-squid-target:
+        ipv4_address: 172.30.32.3
+
+  model-catalog-sidecar:
+    image: ${MODEL_CATALOG_SIDECAR_IMAGE:-docker.io/nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6}
+    restart: unless-stopped
+    user: "101:101"
+    pids_limit: 64
+    mem_limit: 32m
+    memswap_limit: 32m
+    cpus: 0.2
+    read_only: true
+    cap_drop: [ALL]
+    logging: *default-logging
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - "/etc/nginx/conf.d:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101"
+      - "/var/cache/nginx:rw,noexec,nosuid,nodev,size=8m,uid=101,gid=101"
+      - "/var/run:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101"
+      - "/tmp:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101"
+    volumes:
+      - ./model-catalog-sidecar/templates:/etc/nginx/templates:ro,Z
+    networks:
+      apisix-catalog-source:
+        ipv4_address: 172.30.41.3
+      apisix-catalog-target:
+        ipv4_address: 172.30.42.3
+
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared:2026.8.3}
     restart: unless-stopped
@@ -644,5 +906,52 @@ networks:
   ai-sse-sub2api-target:
     internal: true
     ipam: {config: [{subnet: 172.30.26.0/29}]}
+  apisix-models-host-source:
+    ipam: {config: [{subnet: 172.30.33.0/29}]}
+  host-apisix-models-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.34.0/29}]}
+  apisix-models-cpa-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.35.0/29}]}
+  apisix-models-cpa-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.36.0/29}]}
+  apisix-models-enricher-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.27.0/29}]}
+  apisix-models-enricher-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.28.0/29}]}
+  enricher-cpa-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.29.0/29}]}
+  enricher-cpa-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.30.0/29}]}
+  enricher-squid-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.31.0/29}]}
+  enricher-squid-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.32.0/29}]}
+  apisix-models-wsalias-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.37.0/29}]}
+  apisix-models-wsalias-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.38.0/29}]}
+  wsalias-cpa-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.39.0/29}]}
+  wsalias-cpa-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.40.0/29}]}
+  apisix-catalog-source:
+    internal: true
+    ipam: {config: [{subnet: 172.30.41.0/29}]}
+  apisix-catalog-target:
+    internal: true
+    ipam: {config: [{subnet: 172.30.42.0/29}]}
   proxy-egress:
   cloudflare-egress:

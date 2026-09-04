@@ -1,69 +1,108 @@
 {
-  "services": {
-    "cpa": {
-      "listen": "172.30.18.2:3128",
-      "client": "172.30.18.3/32",
-      "destinations": [
-        {
-          "domain": "api.github.com",
-          "tls": "bump",
-          "methods": ["GET"],
-          "paths": [
-            "^/repos/router-for-me/CLIProxyAPI/releases/latest$",
-            "^/repos/router-for-me/Cli-Proxy-API-Management-Center/releases/latest$"
-          ]
-        },
-        {
-          "domain": "github.com",
-          "tls": "bump",
-          "methods": ["GET"],
-          "paths": [
-            "^/router-for-me/Cli-Proxy-API-Management-Center/releases/download/[^/]+/management\\.html$"
-          ]
-        },
-        {
-          "domain": "release-assets.githubusercontent.com",
-          "tls": "bump",
-          "methods": ["GET"],
-          "paths": [
-            "^/github-production-release-asset/1051566067/"
-          ]
-        },
-        {
-          "domain": "raw.githubusercontent.com",
-          "tls": "bump",
-          "methods": ["GET"],
-          "paths": [
-            "^/router-for-me/models/refs/heads/main/models\\.json$",
-            "^/router-for-me/models/refs/heads/main/codex_client_models\\.json$"
-          ]
-        }
-      ]
+ "services": {
+  "cpa": {
+   "listen": "172.30.18.2:3128",
+   "client": "172.30.18.3/32",
+   "destinations": [
+    {
+     "domain": "api.github.com",
+     "tls": "bump",
+     "methods": [
+      "GET"
+     ],
+     "paths": [
+      "^/repos/router-for-me/CLIProxyAPI/releases/latest$",
+      "^/repos/router-for-me/Cli-Proxy-API-Management-Center/releases/latest$"
+     ]
     },
-    "sub2api": {
-      "listen": "172.30.20.2:3128",
-      "client": "172.30.20.3/32",
-      "destinations": [
-        {
-          "domain": "api.github.com",
-          "tls": "bump",
-          "methods": ["GET"],
-          "paths": [
-            "^/repos/Wei-Shaw/sub2api/releases/latest$",
-            "^/repos/openai/codex/releases/latest$",
-            "^/repos/openai/codex/releases\\?per_page=30$"
-          ]
-        },
-        {
-          "domain": "raw.githubusercontent.com",
-          "tls": "bump",
-          "methods": ["GET"],
-          "paths": [
-            "^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\\.json$",
-            "^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\\.sha256$"
-          ]
-        }
-      ]
+    {
+     "domain": "github.com",
+     "tls": "bump",
+     "methods": [
+      "GET"
+     ],
+     "paths": [
+      "^/router-for-me/Cli-Proxy-API-Management-Center/releases/download/[^/]+/management\\.html$"
+     ]
+    },
+    {
+     "domain": "release-assets.githubusercontent.com",
+     "tls": "bump",
+     "methods": [
+      "GET"
+     ],
+     "paths": [
+      "^/github-production-release-asset/1051566067/"
+     ]
+    },
+    {
+     "domain": "raw.githubusercontent.com",
+     "tls": "bump",
+     "methods": [
+      "GET"
+     ],
+     "paths": [
+      "^/router-for-me/models/refs/heads/main/models\\.json$",
+      "^/router-for-me/models/refs/heads/main/codex_client_models\\.json$"
+     ]
     }
+   ]
+  },
+  "sub2api": {
+   "listen": "172.30.20.2:3128",
+   "client": "172.30.20.3/32",
+   "destinations": [
+    {
+     "domain": "api.github.com",
+     "tls": "bump",
+     "methods": [
+      "GET"
+     ],
+     "paths": [
+      "^/repos/Wei-Shaw/sub2api/releases/latest$",
+      "^/repos/openai/codex/releases/latest$",
+      "^/repos/openai/codex/releases\\?per_page=30$"
+     ]
+    },
+    {
+     "domain": "raw.githubusercontent.com",
+     "tls": "bump",
+     "methods": [
+      "GET"
+     ],
+     "paths": [
+      "^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\\.json$",
+      "^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\\.sha256$"
+     ]
+    }
+   ]
+  },
+  "enricher": {
+   "listen": "172.30.32.2:3128",
+   "client": "172.30.32.3/32",
+   "_comment": "client = relay 容器在 target 侧网络的 IP（squid 实际看到的源），不是 listener 侧 .31.3",
+   "destinations": [
+    {
+     "domain": "modelparams.dev",
+     "methods": [
+      "GET"
+     ],
+     "paths": [
+      "^/api/v1/models\\.json($|[?])"
+     ],
+     "tls": "bump"
+    },
+    {
+     "domain": "models.dev",
+     "methods": [
+      "GET"
+     ],
+     "paths": [
+      "^/(api\\.json|catalog\\.json)($|[?])"
+     ],
+     "tls": "bump"
+    }
+   ]
   }
+ }
 }
