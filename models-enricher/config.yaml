@@ -11,7 +11,6 @@ http_concurrency: 8
 channels:
   axis:
     source_priority: [models.dev/openai, modelparams.dev/openai/api_key, modelparams.dev/openai/subscription]
-    include: ["^gpt-"]
     models:
       gpt-5.6-sol:
         overrides: { display_name: "GPT-5.6 Sol" }
@@ -42,10 +41,8 @@ channels:
           models.dev/deepseek: deepseek-v4-flash
         overrides: { max_tokens: 8192 }
   nim:
-    include: ["^(minimaxai/minimax-m3|moonshotai/kimi-k3|deepseek-ai/deepseek-v4-flash-0731)$"]
     source_priority: [models.dev/nvidia]
   shuaiapi:
-    include: ["^claude(?:-|$)"]
     source_priority: [models.dev/anthropic, modelparams.dev/anthropic/api_key, modelparams.dev/anthropic/subscription]
   commandcode:
     # 该上游 /v1/models 当前被 egress 策略 403，富化实际不生效；
