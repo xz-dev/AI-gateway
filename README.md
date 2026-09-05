@@ -283,9 +283,19 @@ Validation keeps three durable security contracts. First, the tracked fresh-inst
 
 ### Optional models gateway (apisix-models + models-enricher)
 
-A dedicated second APISIX instance (`apisix-models`, config in `apisix-models/`) sits between Sub2API and CPA. It transparently proxies all CPA-bound traffic (SSE streaming and Codex WebSocket enabled on the catch-all route) and splits `GET /v1/models` requests carrying a non-empty `client_version` query to `models-enricher`.
+A dedicated second APISIX instance (`apisix-models`, config in `apisix-models/`) sits between Sub2API and CPA. It transparently proxies all CPA-bound traffic (SSE streaming and Codex WebSocket enabled on the catch-all route) and routes **every** `GET /v1/models` to `models-enricher` (route `codex-models`; no `client_version` gate — CPA is not the models manager, and the enricher rejects a missing `client_version` with a 400 JSON `client_version_required` instead of falling through to CPA's native list).
 
-`models-enricher` (Go service in `models-enricher/`) answers Codex manifest requests: it discovers enabled key-type CPA channels via the management API (`CPA_MANAGEMENT_KEY`), fetches each channel's live models through CPA `api-call` (credentials never leave CPA), fills missing metadata from models.dev/modelparams.dev (10-minute cache), applies YAML overrides and include/exclude regexes, drops unprefixed slugs, and merges into CPA's native manifest (fill-gaps; explicit overrides win). The client-facing CPA key comes from `CPA_CLIENT_KEY` (defaults to `CPA_API_KEY`). Future inference model routing lands on this APISIX instance natively (`ai-proxy-multi`, chash).
+`models-enricher` (Go service in `models-enricher/`) answers Codex manifest requests. The CPA **native manifest** (`GET /v1/models?client_version=...` with the client key) is the authoritative baseline for OAuth/native models: if it fails, the enricher returns 502 `native_manifest_failed` and synthesizes nothing (fail-closed, no partial catalog). It then discovers enabled key-type CPA channels via the management API (`CPA_MANAGEMENT_KEY`), fetches each channel's live models through CPA `api-call` (credentials never leave CPA), and enriches from explicitly configured sources. All outbound HTTP (CPA calls, source fetches, ollama lookups) shares one bounded pool (`http_concurrency`, default 8); channels are fetched concurrently with deterministic ordering, and a single channel/source failure degrades with a WARN instead of failing the request.
+
+Source configuration is fully explicit (`models-enricher/config.yaml`):
+
+- **Channel identity = CPA `prefix`.** CPA only exposes `name` for openai-compatibility channels; other kinds have no name at all, and unprefixed channels are unusable (the pipeline drops unprefixed models). Every discovered enabled key channel MUST have an exact `channels.<prefix>` entry with a non-empty `source_priority`; missing/empty config or duplicate/empty prefixes fail the catalog request with a non-2xx JSON error (`catalog_configuration_missing` / `catalog_configuration_conflict`).
+- **Provider-qualified chain tokens only**: `models.dev/<provider>`, `modelparams.dev/<provider>/api_key|subscription`, and channel-native `ollama_cloud`. Exact per-namespace lookup; no provider ranking, no global/default chain, no ID variants (case/date/tag transforms are never tried). Per-model `lookup_ids` map a source token to its exact query ID; colon tags stay literal otherwise.
+- **`ollama_cloud`** issues `POST /api/show` (`{"model": id}` via the api-call `data` field) against the channel's explicitly configured `ollama_native_base_url`, reading `model_info`'s `.context_length`-suffixed keys. Miss/error = no hit, chain continues.
+- **`custom_channels`** are hidden internal metadata pools (bulk sources only, no `ollama_cloud`): their models never appear in the manifest directly; `static_models` materialize them via ordinary pool-slug `inherit` (first ref wins field-by-field). The legacy `id@` inherit form is rejected at config load.
+- Null capability fields are **kept** as `null` (observable via `/models-table`) — filtering them out would silently hide data gaps.
+
+The enricher keeps **no** cross-request caches. Response caching belongs to APISIX: the `codex-models` route carries `proxy-cache` (key = `$uri` + `$arg_client_version`, TTL 120s, 200-only), so the catalog may be at most ~2 minutes stale after a CPA channel change. The client-facing CPA key comes from `CPA_CLIENT_KEY` (defaults to `CPA_API_KEY`). Future inference model routing lands on this APISIX instance natively (`ai-proxy-multi`, chash).
 
 Cutover: point the Sub2API CPA hop at the `apisix-models` relay and remove the legacy `sub2api-cpa-relay` (see change `add-apisix-models-gateway` tasks 4.x).
 
@@ -293,15 +303,17 @@ Cutover: point the Sub2API CPA hop at the `apisix-models` relay and remove the l
 
 Parameterized Codex catalog requests (`GET /v1/models?client_version=...`) are answered by the **front** APISIX via `lua/model_list_intersection.lua` (route `ai-api-models-intersect`, priority 200): it serially fetches (1) Sub2API's own response with the client's key and original query — the slug set of that response is the group's entitlement (mapping union ∩ group models list; its hardcoded metadata is discarded) — and (2) the enriched live manifest through `model-catalog-sidecar`, then returns the intersection with metadata taken from the enricher. Sub2API errors pass through verbatim (implicit auth); enricher failure is a hard 502 by design (no fallback to wrong data).
 
-`model-catalog-sidecar` (nginx-unprivileged, read-only, non-root) is a single-purpose bridge: it accepts only `GET /v1/models` (everything else 444) and forwards to `apisix-models` with no credential attached (the codex-models route requires none; the enricher holds its own CPA key). The sidecar joins both `apisix-catalog-source` (front side) and `apisix-catalog-target` (apisix-models side) /29 nets, same one-way shape as the socat relays.
+`model-catalog-sidecar` (nginx-unprivileged, read-only, non-root) is a two-path bridge: `GET /v1/models` forwards to `apisix-models` with no credential attached (the codex-models route requires none; the enricher holds its own CPA key), and `GET /models-table` serves a static diagnostic page that renders the manifest as a bordered table with `null` cells shown literally. Everything else gets 444. The sidecar joins both `apisix-catalog-source` (front side) and `apisix-catalog-target` (apisix-models side) /29 nets, same one-way shape as the socat relays. `/models-table` is published only on Tailscale and localhost via `models-table-host-netns` + `models-table-relay` (`<tailscale-ip>:9083` / `127.0.0.1:9083`) — containers attached solely to `internal` networks cannot publish ports directly, so the netns-owner + socat pattern carries the exposure.
 
 Ops notes:
 
-- Unparameterized `/v1/models` keeps going straight to Sub2API (route `ai-api-models-get`, unchanged behavior).
+- Unparameterized `/v1/models` on the **front** door keeps going straight to Sub2API (route `ai-api-models-get`, unchanged behavior); on **apisix-models** it now gets the enricher's 400 `client_version_required` (no CPA passthrough).
 - The Sub2API "sync models" button failing for CPA accounts is known-harmless: catalog data comes from the enricher, not from Sub2API's sync.
 - Never write model metadata into Sub2API's DB (e.g. `extra.upstream_model_metadata` snapshots) — they go stale by construction; the intersection makes them unnecessary.
 - Group models lists (`ModelsListConfig.enabled=true`) are the sole catalog entitlement source; request-path gating stays on account `model_mapping`.
 - Account DB writes require `docker restart ai-gateway-sub2api-1` (account cache).
+- Troubleshoot catalog metadata via `http://127.0.0.1:9083/models-table` (or the Tailscale bind): every null capability cell is rendered as `null` there; enricher WARN logs name the failing channel `prefix`.
+- Egress policy must allow the enricher/CPA to reach `models.dev` (`api.json`/`catalog.json`/`models.json`), `modelparams.dev`, and any channel-native endpoints (e.g. ollama.com `POST /api/show`); denied egress degrades that source to a WARN, never a catalog failure.
 
 ## Layout
 

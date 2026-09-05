@@ -238,13 +238,21 @@ routes:
       - ["http_upgrade", "==", "websocket"]
     enable_websocket: true
     upstream_id: wsalias
+  # 富清单经 enricher 合成；APISIX proxy-cache 承载热目录缓存（TTL 120s，
+  # 缓存键含 client_version），enricher 自身不再维护跨请求缓存。
+  # 路由不设 client_version 门槛：/v1/models 任何参数都进 enricher
+  # （CPA 不再是 models 管理者，缺失 cv 由 enricher 返回 400 明确错误）。
   - id: codex-models
     uri: /v1/models
     methods:
       - GET
-    vars:
-      - ["arg_client_version", "~~", ".+"]
     priority: 20
+    plugins:
+      proxy-cache:
+        cache_ttl: 120
+        cache_key: ["$uri", "$arg_client_version"]
+        cache_method: ["GET"]
+        response_codes: [200]
     upstream_id: enricher
   - id: catch-all
     uri: /*

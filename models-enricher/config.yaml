@@ -1,78 +1,126 @@
+# models-enricher 配置
+# 身份唯一锚点：channels.<key> 必须精确等于 CPA 渠道的 prefix（无前缀渠道的模型
+# 会被本管线全部过滤，即不可用；name 仅作展示元数据）。
+# 源 token 只允许 provider-qualified 形式：
+#   models.dev/<provider> | modelparams.dev/<provider>/api_key|subscription | ollama_cloud
+# 无全局链、无 provider rank、无 ID 变体猜测。custom_channels 是隐藏 metadata pool，
+# 只供 static_models 继承，不直接出现在输出。
 cpa_base_url: http://cpa:8317
-source_ttl: 10m
-channel_timeout: 8s
-overall_deadline: 25s
-# Optional per-channel path / regex / field overrides. Keys match CPA name or prefix.
-channels: {}
+http_concurrency: 8
 
-# 公开裸别名（fallback 链公开名，APISIX ai-proxy-multi 承载路由）
-# 有序链式继承：codex（暂停，缺失=空模板）→ axis → overrides 盖顶。
+channels:
+  axis:
+    source_priority: [models.dev/openai, modelparams.dev/openai/api_key, modelparams.dev/openai/subscription]
+    include: ["^gpt-"]
+    models:
+      gpt-5.6-sol:
+        overrides: { display_name: "GPT-5.6 Sol" }
+  xl:
+    # 上游 models 已由渠道方校准；不在本地做模型白名单过滤。
+    source_priority: [models.dev/google, models.dev/openai, models.dev/xai, modelparams.dev/openai/api_key, modelparams.dev/openai/subscription, modelparams.dev/xai/api_key, modelparams.dev/xai/subscription]
+    models:
+      gemini-3.8-flash-high:
+        lookup_ids: { models.dev/google: gemini-3.8-flash }
+      grok-4.6:
+        metadata_from: supergrok/grok-4.6
+  zcode:
+    source_priority: [models.dev/zai, models.dev/zhipuai, modelparams.dev/zai/subscription, modelparams.dev/zhipuai/subscription]
+    models:
+      glm-5.1:
+        overrides: { display_name: "GLM 5.1" }
+      glm-4.7:
+        overrides: { display_name: "GLM 4.7" }
+      glm-4.6:
+        overrides: { display_name: "GLM 4.6" }
+  ollama-cloud:
+    # ollama_cloud 源必须显式配置 Ollama 原生 endpoint（不接受从 /v1 基址推导）
+    ollama_native_base_url: https://ollama.com
+    source_priority: [ollama_cloud, models.dev/deepseek, modelparams.dev/deepseek/api_key, modelparams.dev/deepseek/subscription]
+    models:
+      deepseek-v4-flash:0731:
+        lookup_ids:
+          models.dev/deepseek: deepseek-v4-flash
+        overrides: { max_tokens: 8192 }
+  nim:
+    include: ["^(minimaxai/minimax-m3|moonshotai/kimi-k3|deepseek-ai/deepseek-v4-flash-0731)$"]
+    source_priority: [models.dev/nvidia]
+  shuaiapi:
+    include: ["^claude(?:-|$)"]
+    source_priority: [models.dev/anthropic, modelparams.dev/anthropic/api_key, modelparams.dev/anthropic/subscription]
+  commandcode:
+    # 该上游 /v1/models 当前被 egress 策略 403，富化实际不生效；
+    # 链仅为显式配置占位，放行后应按实际模型 provider 修正。
+    source_priority: [models.dev/openai]
+  gmicloud:
+    # 仅一个 MiniMaxAI/MiniMax-M3（来自 CPA native）；命名空间若 miss 只是无富化。
+    source_priority: [models.dev/minimax, modelparams.dev/minimax/api_key]
+
+custom_channels:
+  openai-catalog:
+    source_priority: [models.dev/openai, modelparams.dev/openai/api_key, modelparams.dev/openai/subscription]
+    models:
+      gpt-5.6-sol: {}
+      gpt-5.6-terra:
+        overrides: { display_name: "GPT-5.6 Terra" }
+      gpt-5.6-luna:
+        overrides: { display_name: "GPT-5.6 Luna" }
+  zai-catalog:
+    source_priority: [models.dev/zai, models.dev/zhipuai, modelparams.dev/zai/api_key, modelparams.dev/zhipuai/api_key, modelparams.dev/zai/subscription, modelparams.dev/zhipuai/subscription]
+    models:
+      glm-5.3:
+        overrides: { display_name: "GLM 5.3" }
+      glm-5.2: {}
+      glm-5.1: {}
+      glm-4.7: {}
+      glm-4.6: {}
+  moonshot-catalog:
+    source_priority: [models.dev/moonshotai, modelparams.dev/moonshotai/api_key, modelparams.dev/moonshotai/subscription]
+    models:
+      kimi-k2.5:
+        overrides: { display_name: "Kimi K2.5" }
+      kimi-k3:
+        overrides: { display_name: "Kimi K3" }
+      kimi-k2.6:
+        overrides: { display_name: "Kimi K2.6" }
+      kimi-k2: {}
+  deepseek-catalog:
+    source_priority: [models.dev/deepseek, modelparams.dev/deepseek/api_key, modelparams.dev/deepseek/subscription]
+    models:
+      deepseek-v4-flash: {}
+  nvidia-catalog:
+    source_priority: [models.dev/nvidia]
+    models:
+      minimaxai/minimax-m3: {}
+      moonshotai/kimi-k3: {}
+      deepseek-ai/deepseek-v4-flash-0731: {}
+  minimax-catalog:
+    source_priority: [models.dev/minimax]
+    models:
+      MiniMax-M3: {}
+
+# statics：只物化当前使用的裸模型；能力字段全部来自 inherit/source chain。
+# inherit 列表首命中逐字段胜出，顺序 [custom 池, 公开池]。
 static_models:
   - slug: gpt-5.6-sol
-    inherit: [id@gpt-5.6-sol, axis/gpt-5.6-sol]
-    overrides:
-      display_name: GPT-5.6 Sol
-      description: 公开别名；fallback 链 codex(暂停)→axis
+    inherit: [openai-catalog/gpt-5.6-sol, axis/gpt-5.6-sol]
   - slug: gpt-5.6-terra
-    inherit: [id@gpt-5.6-terra, axis/gpt-5.6-terra]
-    overrides:
-      display_name: GPT-5.6 Terra
-      description: 公开别名；fallback 链 codex(暂停)→axis
-  - slug: team-a/gpt-5.6-sol
-    inherit: [id@gpt-5.6-sol]
-    overrides:
-      display_name: Team-A GPT-5.6 Sol
-      description: 含斜杠别名 drill；池 axis
-  - slug: grok-4.6
-    inherit: [xl/grok-4.6]
-    overrides:
-      display_name: Grok 4.6
-      description: 公开别名；LB 池 grok-oauth+xl
+    inherit: [openai-catalog/gpt-5.6-terra, axis/gpt-5.6-terra]
   - slug: gpt-5.6-luna
-    inherit: [id@gpt-5.6-luna, axis/gpt-5.6-luna]
-    overrides:
-      display_name: GPT-5.6 Luna
-      description: 公开别名；fallback 链 codex(暂停)→axis
-  # GLM-5.3：官方（docs.z.ai）1M ctx / 128K out 由源填充；推理恒开，effort low/high/max。
-  - slug: zcode/glm-5.3
-    overrides:
-      supported_reasoning_levels: [{effort: low}, {effort: high}, {effort: max}]
-      default_reasoning_level: max
-  # Sub2API 目录裸名条目：继承带前缀池条目（已剥模板+源填充），
-  # 让 Sub2API 本地目录的元数据查找命中真值而不是硬编码 272000 兜底。
+    inherit: [openai-catalog/gpt-5.6-luna, axis/gpt-5.6-luna]
   - slug: glm-5.3
-    inherit: [id@zcode/glm-5.3, zcode/glm-5.3]
-  - slug: glm-5.2
-    inherit: [id@zcode/glm-5.2, zcode/glm-5.2]
-  - slug: glm-5.1
-    inherit: [id@zcode/glm-5.1, zcode/glm-5.1]
-  - slug: glm-5
-    inherit: [id@zcode/glm-5, zcode/glm-5]
-  - slug: glm-5-turbo
-    inherit: [id@zcode/glm-5-turbo, zcode/glm-5-turbo]
-  - slug: glm-5v-turbo
-    inherit: [id@zcode/glm-5v-turbo, zcode/glm-5v-turbo]
-  - slug: glm-4.7
-    inherit: [id@zcode/glm-4.7, zcode/glm-4.7]
-  - slug: glm-4.6
-    inherit: [id@zcode/glm-4.6, zcode/glm-4.6]
-  - slug: glm-4.6v
-    inherit: [id@zcode/glm-4.6v, zcode/glm-4.6v]
-  - slug: glm-4.5-air
-    inherit: [id@zcode/glm-4.5-air, zcode/glm-4.5-air]
-  - slug: kimi-k3
-    inherit: [id@kimi-coding/kimi-k3, kimi-coding/kimi-k3]
-  - slug: kimi-k3-256k
-    inherit: [id@kimi-coding/kimi-k3-256k, kimi-coding/kimi-k3-256k]
-  - slug: kimi-k2.7-code
-    inherit: [id@kimi-coding/kimi-k2.7-code, kimi-coding/kimi-k2.7-code]
-  - slug: kimi-k2.7-code-highspeed
-    inherit: [id@kimi-coding/kimi-k2.7-code-highspeed, kimi-coding/kimi-k2.7-code-highspeed]
-  - slug: kimi-k2.6
-    inherit: [id@kimi-coding/kimi-k2.6, kimi-coding/kimi-k2.6]
-  - slug: kimi-k2.5
-    inherit: [id@kimi-coding/kimi-k2.5, kimi-coding/kimi-k2.5]
-  - slug: kimi-k2-thinking
-    inherit: [id@kimi-coding/kimi-k2-thinking, kimi-coding/kimi-k2-thinking]
-  - slug: kimi-k2
-    inherit: [id@kimi-coding/kimi-k2, kimi-coding/kimi-k2]
+    inherit: [zai-catalog/glm-5.3, zcode/glm-5.3]
+  - slug: grok-4.6
+    inherit: [supergrok/grok-4.6]
+  - slug: deepseek-v4-flash
+    inherit: [ollama-cloud/deepseek-v4-flash:0731, deepseek-catalog/deepseek-v4-flash]
+  - slug: gemini-3.8-flash
+    inherit: [xl/gemini-3.8-flash-high]
+  # bare OAuth/native 注册的对话模型：能力字段经数据链补全（无手写数值）
+  - slug: MiniMaxAI/MiniMax-M3
+    inherit: [minimax-catalog/MiniMax-M3]
+  - slug: minimaxai/minimax-m3
+    inherit: [nvidia-catalog/minimaxai/minimax-m3]
+  - slug: moonshotai/kimi-k3
+    inherit: [nvidia-catalog/moonshotai/kimi-k3]
+  - slug: deepseek-ai/deepseek-v4-flash-0731
+    inherit: [nvidia-catalog/deepseek-ai/deepseek-v4-flash-0731]

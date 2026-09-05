@@ -10,15 +10,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 type CPAClient struct {
-	base     string
-	mgmtKey  string
+	base      string
+	mgmtKey   string
 	clientKey string
-	http     *http.Client
-	log      *slog.Logger
+	pool      *httpPool
+	log       *slog.Logger
 }
 
 type Channel struct {
@@ -32,15 +31,15 @@ type Channel struct {
 type apiCallResponse struct {
 	StatusCode int                 `json:"status_code"`
 	Header     map[string][]string `json:"header"`
-	Body       string              `json:"body"`
+	Body       json.RawMessage     `json:"body"`
 }
 
-func newCPAClient(base, mgmtKey, clientKey string, timeout time.Duration, log *slog.Logger) *CPAClient {
+func newCPAClient(base, mgmtKey, clientKey string, pool *httpPool, log *slog.Logger) *CPAClient {
 	return &CPAClient{
 		base:      strings.TrimRight(base, "/"),
 		mgmtKey:   mgmtKey,
 		clientKey: clientKey,
-		http:      &http.Client{Timeout: timeout},
+		pool:      pool,
 		log:       log,
 	}
 }
@@ -65,7 +64,7 @@ func (c *CPAClient) NativeManifest(ctx context.Context, clientVersion string) (*
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.clientKey)
-	resp, err := c.http.Do(req)
+	resp, err := c.pool.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -84,11 +83,17 @@ func (c *CPAClient) NativeManifest(ctx context.Context, clientVersion string) (*
 	return &m, nil
 }
 
-func (c *CPAClient) APICall(ctx context.Context, ch Channel, method, absURL string, header map[string]string) ([]byte, int, error) {
+// APICall 经 CPA /v0/management/api-call 转发渠道请求；凭证不出 CPA（$TOKEN$ 由 CPA
+// 依 auth_index 替换）。data 为非空时作为上游请求 body 原样携带（CPA api-call 的
+// data 字段），调用方需自设 header Content-Type。
+func (c *CPAClient) APICall(ctx context.Context, ch Channel, method, absURL string, header map[string]string, data []byte) ([]byte, int, error) {
 	payload := map[string]any{
 		"method": method,
 		"url":    absURL,
 		"header": header,
+	}
+	if len(data) > 0 {
+		payload["data"] = string(data)
 	}
 	if ch.AuthIndex != "" {
 		payload["auth_index"] = ch.AuthIndex
@@ -103,7 +108,7 @@ func (c *CPAClient) APICall(ctx context.Context, ch Channel, method, absURL stri
 	}
 	req.Header.Set("Authorization", "Bearer "+c.mgmtKey)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
+	resp, err := c.pool.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -122,7 +127,12 @@ func (c *CPAClient) APICall(ctx context.Context, ch Channel, method, absURL stri
 	if parsed.StatusCode < 200 || parsed.StatusCode >= 300 {
 		return nil, parsed.StatusCode, fmt.Errorf("upstream status %d", parsed.StatusCode)
 	}
-	return []byte(parsed.Body), parsed.StatusCode, nil
+	// body 可能是 string（原样文本）或直接 JSON 对象，两种都接受
+	var s string
+	if err := json.Unmarshal(parsed.Body, &s); err == nil {
+		return []byte(s), parsed.StatusCode, nil
+	}
+	return parsed.Body, parsed.StatusCode, nil
 }
 
 type channelSource struct {
@@ -147,7 +157,7 @@ func (c *CPAClient) listKind(ctx context.Context, src channelSource) ([]Channel,
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.mgmtKey)
-	resp, err := c.http.Do(req)
+	resp, err := c.pool.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -180,17 +190,12 @@ func parseChannels(typ, wrapper string, body []byte) ([]Channel, error) {
 		if asBool(e["disabled"]) {
 			continue
 		}
+		// name 仅作展示/日志元数据；配置身份统一为 prefix（见 validateRuntime）。
 		name := asString(e["name"])
 		prefix := asString(e["prefix"])
 		base := asString(e["base-url"])
 		if base == "" {
 			base = asString(e["base_url"])
-		}
-		if name == "" {
-			name = prefix
-			if name == "" {
-				name = typ
-			}
 		}
 		auth := asString(e["auth-index"])
 		if auth == "" {

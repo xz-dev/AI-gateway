@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>models-table · catalog diagnostics</title>
+<style>
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 16px; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  #meta { color: #555; font-size: 12px; margin-bottom: 12px; }
+  table { border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #888; padding: 4px 8px; text-align: left; vertical-align: top; }
+  th { background: #eee; position: sticky; top: 0; }
+  td.null { color: #b00020; font-style: italic; }
+  tr:nth-child(even) td { background: #fafafa; }
+  #err { color: #b00020; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>models-table</h1>
+<div id="meta">loading…</div>
+<div id="err"></div>
+<table id="tbl" hidden>
+  <thead>
+    <tr>
+      <th>slug</th>
+      <th>display_name</th>
+      <th>context_window</th>
+      <th>max_input_tokens</th>
+      <th>max_output_tokens</th>
+      <th>reasoning_levels</th>
+      <th>default_reasoning</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+<script>
+// 诊断页：从同源 /v1/models 拉取清单并原样渲染；null 显示字面量 null，不隐藏行。
+const CLIENT_VERSION = "v0.65.0";
+
+function cell(tbody, value) {
+  const td = document.createElement("td");
+  if (value === null || value === undefined) {
+    td.textContent = "null";
+    td.className = "null";
+  } else if (Array.isArray(value)) {
+    td.textContent = value.map(v => (v && typeof v === "object" && "effort" in v) ? v.effort : JSON.stringify(v)).join(", ");
+  } else {
+    td.textContent = String(value);
+  }
+  tbody.appendChild(td);
+}
+
+async function main() {
+  const meta = document.getElementById("meta");
+  let resp;
+  try {
+    resp = await fetch("/v1/models?client_version=" + encodeURIComponent(CLIENT_VERSION));
+  } catch (e) {
+    meta.textContent = "fetch failed";
+    document.getElementById("err").textContent = String(e);
+    return;
+  }
+  if (!resp.ok) {
+    meta.textContent = "HTTP " + resp.status;
+    document.getElementById("err").textContent = await resp.text();
+    return;
+  }
+  const data = await resp.json();
+  const models = data.models || [];
+  models.sort((a, b) => {
+    const left = String(a.slug ?? "");
+    const right = String(b.slug ?? "");
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+  const tbody = document.querySelector("#tbl tbody");
+  for (const m of models) {
+    const tr = document.createElement("tr");
+    cell(tr, m.slug);
+    cell(tr, m.display_name);
+    cell(tr, m.context_window);
+    cell(tr, m.max_input_tokens);
+    cell(tr, m.max_output_tokens ?? m.max_tokens);
+    cell(tr, m.supported_reasoning_levels);
+    cell(tr, m.default_reasoning_level);
+    tbody.appendChild(tr);
+  }
+  document.getElementById("tbl").hidden = false;
+  meta.textContent = models.length + " models · client_version=" + CLIENT_VERSION + " · " + new Date().toISOString();
+}
+main();
+</script>
+</body>
+</html>

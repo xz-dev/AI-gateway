@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -14,7 +15,9 @@ type ReasoningLevel struct {
 	Effort string `json:"effort"`
 }
 
-func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, sources *SourceCache) *Manifest {
+// mergeManifest：native（权威基线，含 OAuth）+ 渠道抓取 + sources/ollama 富化
+// + custom 隐藏池 + static 组合。输入均假定已过 validateRuntime。
+func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables *SourceTables, ollama map[string]map[string]sourceHit) *Manifest {
 	bySlug := map[string]map[string]any{}
 	order := []string{}
 	put := func(m map[string]any) {
@@ -31,9 +34,9 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, sources
 	}
 	if base != nil {
 		for _, m := range base.Models {
-			// 入口过滤：CPA 传来的裸名模型直接丢弃，不进合并池。
-			// 这是全管线唯一的 "/" 检查；之后（含 static 输出）不再检查。
-			if !strings.Contains(asString(m["slug"]), "/") {
+			slug := asString(m["slug"])
+			// CPA native manifest 的裸名模型不进合并池。
+			if !strings.Contains(slug, "/") {
 				continue
 			}
 			c := cloneMap(m)
@@ -41,11 +44,59 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, sources
 			put(c)
 		}
 	}
+	metadataRefs := map[string]string{}
+	clearCapabilityFields := func(entry map[string]any) {
+		for _, key := range []string{"context_window", "max_input_tokens", "max_tokens", "input_modalities", "supported_reasoning_levels", "default_reasoning_level"} {
+			delete(entry, key)
+		}
+	}
+	copyMetadata := func(dst, src map[string]any) {
+		if value, ok := src["display_name"]; ok {
+			dst["display_name"] = value
+		}
+		for _, key := range []string{"context_window", "max_input_tokens", "max_tokens", "input_modalities", "supported_reasoning_levels", "default_reasoning_level"} {
+			if value, ok := src[key]; ok {
+				dst[key] = value
+			} else {
+				delete(dst, key)
+			}
+		}
+	}
+	// enrichModel：渠道/源/overrides 三段式富化，渠道与 custom 共用。
+	enrichModel := func(entry map[string]any, chCfg ChannelConfig, name, channelName string) {
+		chain := sourceChain(chCfg, name)
+		if len(chain) > 0 {
+			clearCapabilityFields(entry)
+		}
+		lookupIDs := chCfg.modelLookupIDs(name)
+		for _, token := range chain {
+			if token == "ollama_cloud" {
+				if hits, ok := ollama[channelName]; ok {
+					if h, hit := hits[name]; hit {
+						applySource(entry, h)
+					}
+				}
+				continue
+			}
+			id := name
+			if v := lookupIDs[token]; v != "" {
+				id = v
+			}
+			if h, ok := tables.lookupOne(token, id); ok {
+				applySource(entry, h)
+			}
+		}
+		if ov := chCfg.modelOverrides(name); ov != nil {
+			for k, v := range ov {
+				entry[k] = v
+			}
+		}
+	}
 	for _, pack := range fetched {
-		chCfg := cfg.channelConfig(pack.Channel.Name, pack.Channel.Prefix, pack.Channel.Type)
+		chCfg := cfg.Channels[pack.Channel.Prefix] // validateRuntime 已保证存在
 		prefix := pack.Channel.Prefix
 		for _, pm := range pack.Models {
-			name := stripKnownPrefix(pm.ID, prefix)
+			name := stripExactPrefix(pm.ID, prefix)
 			if !allowModel(name, chCfg) {
 				continue
 			}
@@ -55,16 +106,14 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, sources
 			}
 			entry := map[string]any{"slug": slug}
 			applyParsed(entry, pm)
-			chain := cfg.sourceChain(chCfg, name)
-			for _, h := range sources.LookupChain(chain, name, pm.ID) {
-				applySource(entry, h)
-			}
-			if ov := chCfg.modelOverrides(name); ov != nil {
-				for k, v := range ov {
-					entry[k] = v
-				}
+			enrichModel(entry, chCfg, name, pack.Channel.Prefix)
+			if ref := chCfg.modelMetadataFrom(name); ref != "" {
+				metadataRefs[slug] = ref
 			}
 			if existing, ok := bySlug[slug]; ok {
+				if len(sourceChain(chCfg, name)) > 0 {
+					clearCapabilityFields(existing)
+				}
 				fillGaps(existing, entry)
 				if ov := chCfg.modelOverrides(name); ov != nil {
 					for k, v := range ov {
@@ -76,57 +125,60 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, sources
 			put(entry)
 		}
 	}
-	models := make([]map[string]any, 0, len(order))
-	for _, slug := range order {
-		m := bySlug[slug]
-		ensureDefaults(m)
-		models = append(models, m)
+	for slug, ref := range metadataRefs {
+		dst, dstOK := bySlug[slug]
+		src, srcOK := bySlug[ref]
+		if !dstOK || !srcOK {
+			slog.Warn("metadata reference missing", "slug", slug, "source", ref)
+			if dstOK {
+				clearCapabilityFields(dst)
+			}
+			continue
+		}
+		copyMetadata(dst, src)
 	}
-	// static_models：管线最后一步。按 YAML 顺序处理，每个算完即入池，
-	// 后续 static 可以 inherit 它（顺序解析天然防环）。
-	// inherit 有序分层：空模板起步，按列表顺序逐字段覆盖，缺失=跳过+WARN；
-	// overrides 永远最后盖顶。
+	// custom_channels：内部隐藏 metadata pool。只进 customPool，不进公开输出；
+	// 供 static_models 以普通 pool slug 继承。
+	customPool := map[string]map[string]any{}
+	for cname, chCfg := range cfg.CustomChannels {
+		for modelID := range chCfg.Models {
+			if !allowModel(modelID, chCfg) {
+				continue
+			}
+			entry := map[string]any{}
+			enrichModel(entry, chCfg, modelID, "")
+			customPool[cname+"/"+modelID] = entry
+		}
+	}
+	// static_models：合并池内原位物化（输出构建之前）。按 YAML 顺序处理，
+	// 每个算完即入池，后续 static 可 inherit 它（顺序解析天然防环）。
+	// inherit 目标解析顺序：公开池 → custom 隐藏池；缺失=跳过+WARN；
+	// overrides 永远最后盖顶。id@ 已在 loadConfig 拒绝。
+	// 命中已有 slug（如 native 裸条目）时原位替换：每个 slug 输出一行。
 	for _, sm := range cfg.StaticModels {
 		slug := asString(sm["slug"])
 		if slug == "" {
 			continue
 		}
 		entry := map[string]any{}
-		// static 级 source_priority：id@ 源直查用的链；缺省走全局默认。
-		smChain := cfg.SourcePriority
-		if sp := stringList(sm["source_priority"]); len(sp) > 0 {
-			smChain = sp
-		}
-		if len(smChain) == 0 {
-			smChain = defaultSourcePriority
-		}
 		for _, ref := range inheritList(sm["inherit"]) {
-			if modelID, isID := strings.CutPrefix(ref, "id@"); isID {
-				// 源直查层：与渠道模型同语义（链内首命中逐字段胜出），
-				// 整层按 inherit 顺序覆盖先前的层。与渠道存活解耦。
-				layer := map[string]any{}
-				for _, h := range sources.LookupChain(smChain, modelID) {
-					applySource(layer, h)
-				}
-				if len(layer) == 0 {
-					slog.Warn("static inherit id@ miss", "slug", slug, "target", ref)
-					continue
-				}
-				for k, v := range layer {
-					entry[k] = v
-				}
-				continue
-			}
 			src, ok := bySlug[ref]
+			if !ok {
+				src, ok = customPool[ref]
+			}
 			if !ok {
 				slog.Warn("static inherit target missing", "slug", slug, "target", ref)
 				continue
 			}
+			// 与源链一致的首命中逐字段胜出：列表越靠前优先级越高，
+			// 后续 ref 仅填补空缺。列表序应排为 [custom 池, 公开池]。
 			for k, v := range src {
 				if k == "slug" {
 					continue
 				}
-				entry[k] = v
+				if missing(entry, k) {
+					entry[k] = v
+				}
 			}
 		}
 		if ov, ok := sm["overrides"].(map[string]any); ok {
@@ -141,11 +193,18 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, sources
 		}
 		ensureDefaults(entry)
 		bySlug[slug] = entry
-		models = append(models, entry)
+		if !slices.Contains(order, slug) {
+			order = append(order, slug)
+		}
+	}
+	models := make([]map[string]any, 0, len(order))
+	for _, slug := range order {
+		m := bySlug[slug]
+		ensureDefaults(m)
+		models = append(models, m)
 	}
 	return &Manifest{Models: models}
 }
-
 
 // codexCatalogSlugs 是 CPA codex 目录真实型号（按 slug 末段匹配）。
 // 这些型号的模板字段即真值，豁免 stripCodexTemplateJunk。
@@ -177,7 +236,7 @@ func stripCodexTemplateJunk(m map[string]any) {
 		return
 	}
 	delete(m, "context_window")
-	delete(m, "max_context_window")
+	delete(m, "max_input_tokens")
 	delete(m, "max_tokens")
 	delete(m, "supported_reasoning_levels")
 	delete(m, "default_reasoning_level")
@@ -230,10 +289,8 @@ func applyParsed(dst map[string]any, pm ParsedModel) {
 	if pm.ContextWindow > 0 {
 		dst["context_window"] = pm.ContextWindow
 	}
-	if pm.MaxContextWindow > 0 {
-		dst["max_context_window"] = pm.MaxContextWindow
-	} else if pm.ContextWindow > 0 {
-		dst["max_context_window"] = pm.ContextWindow
+	if pm.MaxInputTokens > 0 {
+		dst["max_input_tokens"] = pm.MaxInputTokens
 	}
 	if pm.MaxTokens > 0 {
 		dst["max_tokens"] = pm.MaxTokens
@@ -249,6 +306,8 @@ func applyParsed(dst map[string]any, pm ParsedModel) {
 	}
 }
 
+// applySource 使用 source chain 作为 capability 真值；渠道返回的 capability
+// 可能是错误模板值，因此 source 命中时覆盖已有字段，未命中则保持原值。
 func applySource(dst map[string]any, h sourceHit) {
 	if h.DisplayName != "" && missing(dst, "display_name") {
 		dst["display_name"] = h.DisplayName
@@ -256,8 +315,8 @@ func applySource(dst map[string]any, h sourceHit) {
 	if h.ContextWindow > 0 && missing(dst, "context_window") {
 		dst["context_window"] = h.ContextWindow
 	}
-	if h.ContextWindow > 0 && missing(dst, "max_context_window") {
-		dst["max_context_window"] = h.ContextWindow
+	if h.MaxInputTokens > 0 && missing(dst, "max_input_tokens") {
+		dst["max_input_tokens"] = h.MaxInputTokens
 	}
 	if h.MaxTokens > 0 && missing(dst, "max_tokens") {
 		dst["max_tokens"] = h.MaxTokens
@@ -335,13 +394,11 @@ func anyMatch(res []*regexp.Regexp, name string) bool {
 	return false
 }
 
-func stripKnownPrefix(id, prefix string) string {
+// stripExactPrefix：仅在精确命中 "<prefix>/" 前缀时剥除；不做末段猜测。
+func stripExactPrefix(id, prefix string) string {
 	id = strings.TrimSpace(id)
 	if prefix != "" && strings.HasPrefix(id, prefix+"/") {
 		return strings.TrimPrefix(id, prefix+"/")
-	}
-	if i := strings.LastIndex(id, "/"); i >= 0 {
-		return id[i+1:]
 	}
 	return id
 }

@@ -6,13 +6,19 @@ apisix:
   enable_ipv6: false
   dns_resolver:
     - 127.0.0.11
+  proxy_cache:
+    zones:
+      - name: disk_cache_one
+        memory_size: 64m
+        disk_size: 256m
+        disk_path: /tmp/apisix-proxy-cache
+        cache_levels: "1:2"
 
 nginx_config:
   worker_processes: 1
   error_log_level: warn
   http:
     client_max_body_size: 16m
-
 deployment:
   role: data_plane
   role_data_plane:

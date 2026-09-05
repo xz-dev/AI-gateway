@@ -2,13 +2,23 @@ server {
     listen 8080;
     server_name _;
 
-    # 唯一可用 path：/v1/models（查询原样透传）
+    # 边车仅暴露两个 path：/v1/models 与 /models-table；其余一律 444。
+
+    # 清单转发（查询原样透传；无凭证注入，边界=网络隔离）
     location = /v1/models {
         proxy_pass http://172.30.42.2:9080;
         proxy_http_version 1.1;
         proxy_set_header Host "apisix-models";
         proxy_set_header Connection "";
         proxy_read_timeout 60s;
+        # 3MB+ 清单禁写磁盘缓冲：/tmp tmpfs 仅 16m，并发缓冲文件会 ENOSPC 截断响应
+        proxy_max_temp_file_size 0;
+    }
+
+    # 诊断单页：静态 HTML，页面内同源拉 /v1/models 渲染
+    location = /models-table {
+        root /usr/share/nginx/html;
+        try_files /models-table.html =404;
     }
 
     location / {

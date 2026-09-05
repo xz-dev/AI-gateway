@@ -2,29 +2,31 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 )
 
 type ParsedModel struct {
-	ID               string
-	DisplayName      string
-	ContextWindow    int
-	MaxContextWindow int
-	MaxTokens        int
-	InputModalities  []string
-	ReasoningEfforts []string
-	DefaultReasoning string
+	ID                string
+	DisplayName       string
+	ContextWindow     int
+	MaxInputTokens    int
+	MaxTokens         int
+	InputModalities   []string
+	ReasoningEfforts  []string
+	DefaultReasoning  string
 	SupportsReasoning bool
 }
 
 type adapter struct {
-	auth    map[string]string
-	path    func(clientVersion string) string
-	parse   func([]byte) ([]ParsedModel, error)
+	auth  map[string]string
+	path  func(clientVersion string) string
+	parse func([]byte) ([]ParsedModel, error)
 }
 
-func adapterFor(typ string) adapter {
+// adapterFor 按渠道类型返回显式适配器；未知类型报错（不再静默按 OpenAI 处理）。
+func adapterFor(typ string) (adapter, error) {
 	switch typ {
 	case "claude-api-key":
 		return adapter{
@@ -34,13 +36,13 @@ func adapterFor(typ string) adapter {
 			},
 			path:  func(string) string { return "/v1/models" },
 			parse: parseClaude,
-		}
+		}, nil
 	case "gemini-api-key", "interactions-api-key":
 		return adapter{
 			auth:  map[string]string{"x-goog-api-key": "$TOKEN$"},
 			path:  func(string) string { return "/v1beta/models" },
 			parse: parseGemini,
-		}
+		}, nil
 	case "codex-api-key":
 		return adapter{
 			auth: map[string]string{"Authorization": "Bearer $TOKEN$"},
@@ -48,8 +50,8 @@ func adapterFor(typ string) adapter {
 				return "/v1/models?client_version=" + url.QueryEscape(v)
 			},
 			parse: parseOpenAI,
-		}
-	default:
+		}, nil
+	case "openai-compatibility", "xai-api-key", "vertex-api-key":
 		return adapter{
 			auth: map[string]string{"Authorization": "Bearer $TOKEN$"},
 			path: func(v string) string {
@@ -59,15 +61,16 @@ func adapterFor(typ string) adapter {
 				return "/v1/models"
 			},
 			parse: parseOpenAI,
-		}
+		}, nil
 	}
+	return adapter{}, fmt.Errorf("unknown channel type %q", typ)
 }
 
 func parseOpenAI(body []byte) ([]ParsedModel, error) {
 	var envelope struct {
-		Data    []map[string]any `json:"data"`
-		Models  []map[string]any `json:"models"`
-		Object  string           `json:"object"`
+		Data   []map[string]any `json:"data"`
+		Models []map[string]any `json:"models"`
+		Object string           `json:"object"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, err
@@ -83,9 +86,11 @@ func parseOpenAI(body []byte) ([]ParsedModel, error) {
 			continue
 		}
 		m := ParsedModel{ID: id, DisplayName: firstString(row, "display_name", "name")}
-		if n := intFrom(row, "context_window", "context_length", "max_context_window"); n > 0 {
+		if n := intFrom(row, "context_window", "context_length"); n > 0 {
 			m.ContextWindow = n
-			m.MaxContextWindow = n
+		}
+		if n := intFrom(row, "max_input_tokens", "input_token_limit"); n > 0 {
+			m.MaxInputTokens = n
 		}
 		if n := nestedInt(row, "top_provider", "max_completion_tokens"); n > 0 {
 			m.MaxTokens = n
@@ -148,7 +153,7 @@ func parseGemini(body []byte) ([]ParsedModel, error) {
 		}
 		if n := intFrom(row, "inputTokenLimit"); n > 0 {
 			m.ContextWindow = n
-			m.MaxContextWindow = n
+			m.MaxInputTokens = n
 		}
 		if n := intFrom(row, "outputTokenLimit"); n > 0 {
 			m.MaxTokens = n

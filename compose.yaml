@@ -606,15 +606,8 @@ services:
   apisix-models:
     image: ${APISIX_MODELS_IMAGE:-${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}}
     network_mode: service:apisix-models-netns
-    entrypoint: [/bin/bash, -ec]
-    command:
-      - >-
-        case "$$CPA_API_KEY" in *[\&/\\]*) echo "CPA_API_KEY has unsafe chars for sed"; exit 1;; esac;
-        sed "s|__CPA_API_KEY__|$$CPA_API_KEY|g" /opt/apisix.yaml.tpl > /usr/local/apisix/conf/apisix.yaml;
-        while awk 'NR > 1 && $$2 == "00000000" && $$8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
-        awk '$$1 == "00000000000000000000000000000000" && $$2 == "00" && $$10 != "lo" {found=1} END {exit(found ? 0 : 1)}' /proc/net/ipv6_route;
-        do sleep 0.05; done;
-        exec /docker-entrypoint.sh docker-start
+    entrypoint: [/usr/local/bin/start-apisix-models]
+    command: []
     restart: unless-stopped
     pids_limit: 128
     mem_limit: 128m
@@ -635,6 +628,7 @@ services:
     volumes:
       - ./apisix-models/config.yaml:/usr/local/apisix/conf/config.yaml:ro,Z
       - ./apisix-models/apisix.yaml:/opt/apisix.yaml.tpl:ro,Z
+      - ./scripts/start-apisix-models.sh:/usr/local/bin/start-apisix-models:ro,Z
     healthcheck:
       test: [CMD, /bin/bash, -ec, "exec 3<>/dev/tcp/127.0.0.1/9080; printf 'GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3; IFS= read -r line <&3; true"]
       interval: 15s
@@ -691,8 +685,9 @@ services:
       enricher-cpa-relay: {condition: service_started, restart: true}
       enricher-squid-relay: {condition: service_started, restart: true}
     pids_limit: 64
-    mem_limit: 128m
-    memswap_limit: 128m
+    # 单飞合并后单次构建峰值 << 128m；256m 为并发余量（6 并发构建曾触发 128m cgroup OOM）
+    mem_limit: 256m
+    memswap_limit: 256m
     cpus: 0.5
     read_only: true
     cap_drop: [ALL]
@@ -809,13 +804,36 @@ services:
       - "/var/cache/nginx:rw,noexec,nosuid,nodev,size=8m,uid=101,gid=101"
       - "/var/run:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101"
       - "/tmp:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101"
+    # /models-table 诊断页的对外发布由 models-table-host-netns/relay 承担
+    # （internal-only 网络上的容器端口发布会被 Docker 静默跳过）
     volumes:
       - ./model-catalog-sidecar/templates:/etc/nginx/templates:ro,Z
+      - ./model-catalog-sidecar/html:/usr/share/nginx/html:ro,Z
     networks:
       apisix-catalog-source:
         ipv4_address: 172.30.41.3
       apisix-catalog-target:
         ipv4_address: 172.30.42.3
+
+  # /models-table 对外发布：netns 持有 Tailscale/localhost 双绑定，socat 单向转发到边车
+  models-table-host-netns:
+    <<: *netns-owner
+    ports:
+      - "100.94.238.35:9083:9080"
+      - "127.0.0.1:9083:9080"
+    networks:
+      models-table-host-source:
+        ipv4_address: 172.30.43.2
+      apisix-catalog-source:
+        ipv4_address: 172.30.41.4
+
+  models-table-relay:
+    <<: *socat-relay
+    network_mode: service:models-table-host-netns
+    command: ["TCP4-LISTEN:9080,reuseaddr,fork", "TCP4:172.30.41.3:8080,connect-timeout=10"]
+    depends_on:
+      models-table-host-netns: {condition: service_started, restart: true}
+      model-catalog-sidecar: {condition: service_started}
 
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared:2026.8.3}
@@ -953,5 +971,7 @@ networks:
   apisix-catalog-target:
     internal: true
     ipam: {config: [{subnet: 172.30.42.0/29}]}
+  models-table-host-source:
+    ipam: {config: [{subnet: 172.30.43.0/29}]}
   proxy-egress:
   cloudflare-egress:
