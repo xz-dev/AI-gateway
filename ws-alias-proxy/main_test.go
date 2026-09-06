@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -64,11 +65,36 @@ func TestStickyPick(t *testing.T) {
 }
 
 func TestRewriteBody(t *testing.T) {
-	out := rewriteBody([]byte(`{"type":"response.create","model":"fast-model"}`), "t1/fast")
+	in := []byte(`{
+		"type":"response.create",
+		"model":"fast-model",
+		"input":[{"role":"user","content":"hi"}],
+		"tools":[{"type":"function","name":"read"}],
+		"reasoning":{"effort":"xhigh"},
+		"previous_response_id":"resp_prev"
+	}`)
+	out := rewriteBody(in, "t1/fast")
 	var m map[string]any
 	json.Unmarshal(out, &m)
-	if m["model"] != "t1/fast" || m["type"] != "response.create" || m["stream"] != true {
+	if m["model"] != "t1/fast" || m["stream"] != true {
 		t.Fatalf("bad rewrite: %v", m)
+	}
+	if _, ok := m["type"]; ok {
+		t.Fatalf("WebSocket envelope type must not reach HTTP Responses body: %v", m)
+	}
+	wantInput := []any{map[string]any{"role": "user", "content": "hi"}}
+	if !reflect.DeepEqual(m["input"], wantInput) {
+		t.Fatalf("input changed: got %v, want %v", m["input"], wantInput)
+	}
+	wantTools := []any{map[string]any{"type": "function", "name": "read"}}
+	if !reflect.DeepEqual(m["tools"], wantTools) {
+		t.Fatalf("tools changed: got %v, want %v", m["tools"], wantTools)
+	}
+	if reasoning, ok := m["reasoning"].(map[string]any); !ok || reasoning["effort"] != "xhigh" {
+		t.Fatalf("reasoning changed: %v", m)
+	}
+	if m["previous_response_id"] != "resp_prev" {
+		t.Fatalf("previous_response_id changed: %v", m)
 	}
 }
 

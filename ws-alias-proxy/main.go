@@ -141,6 +141,7 @@ func rewriteBody(data []byte, target string) []byte {
 	}
 	m["model"] = target
 	m["stream"] = true
+	delete(m, "type")
 	out, err := json.Marshal(m)
 	if err != nil {
 		return data
