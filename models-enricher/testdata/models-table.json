@@ -1,0 +1,13 @@
+{"models":[
+{"slug":"10-hostile","display_name":"<img src=x onerror=\"window.__executed=1\"><script>window.__executed=1</script>","input_modalities":["<svg onload=\"window.__executed=1\">"],"output_modalities":{"declared":false}},
+{"slug":"09-video","output_modalities":["video"]},
+{"slug":"08-audio","output_modalities":["audio"]},
+{"slug":"07-image","output_modalities":["image"]},
+{"slug":"06-vision","input_modalities":["text","image"],"output_modalities":["text"]},
+{"slug":"05","input_modalities":"","output_modalities":""},
+{"slug":"04","input_modalities":0,"output_modalities":0},
+{"slug":"03","input_modalities":false,"output_modalities":false},
+{"slug":"02","input_modalities":[],"output_modalities":[]},
+{"slug":"01","input_modalities":null,"output_modalities":null,"context_window":null},
+{"slug":"00","max_tokens":999}
+]}

@@ -8,15 +8,8 @@ import (
 )
 
 type ParsedModel struct {
-	ID                string
-	DisplayName       string
-	ContextWindow     int
-	MaxInputTokens    int
-	MaxTokens         int
-	InputModalities   []string
-	ReasoningEfforts  []string
-	DefaultReasoning  string
-	SupportsReasoning bool
+	ID       string
+	Metadata map[string]any
 }
 
 type adapter struct {
@@ -72,7 +65,7 @@ func parseOpenAI(body []byte) ([]ParsedModel, error) {
 		Models []map[string]any `json:"models"`
 		Object string           `json:"object"`
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	if err := decodeJSON(body, &envelope); err != nil {
 		return nil, err
 	}
 	rows := envelope.Data
@@ -85,29 +78,15 @@ func parseOpenAI(body []byte) ([]ParsedModel, error) {
 		if id == "" {
 			continue
 		}
-		m := ParsedModel{ID: id, DisplayName: firstString(row, "display_name", "name")}
-		if n := intFrom(row, "context_window", "context_length"); n > 0 {
-			m.ContextWindow = n
-		}
-		if n := intFrom(row, "max_input_tokens", "input_token_limit"); n > 0 {
-			m.MaxInputTokens = n
-		}
-		if n := nestedInt(row, "top_provider", "max_completion_tokens"); n > 0 {
-			m.MaxTokens = n
-		} else if n := intFrom(row, "max_tokens", "max_output_tokens"); n > 0 {
-			m.MaxTokens = n
-		}
-		if mods := nestedStringSlice(row, "architecture", "input_modalities"); len(mods) > 0 {
-			m.InputModalities = mods
-		}
-		if params, ok := row["supported_parameters"].([]any); ok {
-			for _, p := range params {
-				if s, _ := p.(string); s == "reasoning" || s == "include_reasoning" {
-					m.SupportsReasoning = true
-				}
-			}
-		}
-		out = append(out, m)
+		m := cloneMap(row)
+		mapDeclaredField(m, "display_name", row["name"])
+		mapDeclaredField(m, "context_window", row["context_length"])
+		mapDeclaredField(m, "max_input_tokens", row["input_token_limit"])
+		mapDeclaredField(m, "max_output_tokens", declaredNested(row, "top_provider", "max_completion_tokens"), row["max_tokens"])
+		mapDeclaredField(m, "input_modalities", declaredNested(row, "architecture", "input_modalities"))
+		mapDeclaredField(m, "output_modalities", declaredNested(row, "architecture", "output_modalities"))
+		syncOutputAliases(m)
+		out = append(out, ParsedModel{ID: id, Metadata: m})
 	}
 	return out, nil
 }
@@ -116,7 +95,7 @@ func parseClaude(body []byte) ([]ParsedModel, error) {
 	var envelope struct {
 		Data []map[string]any `json:"data"`
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	if err := decodeJSON(body, &envelope); err != nil {
 		return nil, err
 	}
 	out := make([]ParsedModel, 0, len(envelope.Data))
@@ -125,10 +104,10 @@ func parseClaude(body []byte) ([]ParsedModel, error) {
 		if id == "" {
 			continue
 		}
-		out = append(out, ParsedModel{
-			ID:          id,
-			DisplayName: firstString(row, "display_name", "name"),
-		})
+		m := cloneMap(row)
+		mapDeclaredField(m, "display_name", row["name"])
+		syncOutputAliases(m)
+		out = append(out, ParsedModel{ID: id, Metadata: m})
 	}
 	return out, nil
 }
@@ -137,30 +116,41 @@ func parseGemini(body []byte) ([]ParsedModel, error) {
 	var envelope struct {
 		Models []map[string]any `json:"models"`
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	if err := decodeJSON(body, &envelope); err != nil {
 		return nil, err
 	}
 	out := make([]ParsedModel, 0, len(envelope.Models))
 	for _, row := range envelope.Models {
-		name := firstString(row, "name", "id")
-		name = strings.TrimPrefix(name, "models/")
+		name := strings.TrimPrefix(firstString(row, "name", "id"), "models/")
 		if name == "" {
 			continue
 		}
-		m := ParsedModel{
-			ID:          name,
-			DisplayName: firstString(row, "displayName", "display_name"),
-		}
-		if n := intFrom(row, "inputTokenLimit"); n > 0 {
-			m.ContextWindow = n
-			m.MaxInputTokens = n
-		}
-		if n := intFrom(row, "outputTokenLimit"); n > 0 {
-			m.MaxTokens = n
-		}
-		out = append(out, m)
+		m := cloneMap(row)
+		mapDeclaredField(m, "display_name", row["displayName"])
+		mapDeclaredField(m, "max_input_tokens", row["inputTokenLimit"])
+		mapDeclaredField(m, "max_output_tokens", row["outputTokenLimit"], row["max_tokens"])
+		syncOutputAliases(m)
+		out = append(out, ParsedModel{ID: name, Metadata: m})
 	}
 	return out, nil
+}
+
+// 显式适配边界调用：已有 canonical 非 null 值优先，0/false/空值不是缺失。
+func mapDeclaredField(dst map[string]any, key string, values ...any) {
+	if dst[key] != nil {
+		return
+	}
+	for _, value := range values {
+		if value != nil {
+			dst[key] = cloneJSONValue(value)
+			return
+		}
+	}
+}
+
+func declaredNested(record map[string]any, object, key string) any {
+	inner, _ := record[object].(map[string]any)
+	return inner[key]
 }
 
 func joinURL(base, path string) string {

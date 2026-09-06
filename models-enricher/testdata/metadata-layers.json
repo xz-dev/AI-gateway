@@ -1,0 +1,40 @@
+[
+  {
+    "name": "nested fields and modalities",
+    "layers": [
+      {"vendor":{"input":["text"],"output":["text"]},"input_modalities":["text","image"]},
+      {"vendor":{"output":["image"]},"output_modalities":["text"]}
+    ],
+    "want": {"vendor":{"input":["text"],"output":["image"]},"input_modalities":["text","image"],"output_modalities":["text"]}
+  },
+  {
+    "name": "null does not overwrite or create",
+    "layers": [{"context_window":100,"max_input_tokens":null},{"context_window":null,"max_input_tokens":null}],
+    "want": {"context_window":100}
+  },
+  {
+    "name": "explicit empty values",
+    "layers": [{"enabled":true,"limit":100,"label":"old","items":[1]},{"enabled":false,"limit":0,"label":"","items":[]}],
+    "want": {"enabled":false,"limit":0,"label":"","items":[]}
+  },
+  {
+    "name": "arrays are atomic including null elements",
+    "layers": [{"values":["text","image"]},{"values":[null,"audio"]}],
+    "want": {"values":[null,"audio"]}
+  },
+  {
+    "name": "empty object and type changes",
+    "layers": [{"keep":{"child":1},"replace":5,"scalar":{"old":true}},{"keep":{},"replace":{},"scalar":false}],
+    "want": {"keep":{"child":1},"replace":{},"scalar":false}
+  },
+  {
+    "name": "object replaces scalar and skips null children",
+    "layers": [{"vendor":7},{"vendor":{"unknown":null,"actual":{"n":0}}}],
+    "want": {"vendor":{"actual":{"n":0}}}
+  },
+  {
+    "name": "unknown metadata and large integers",
+    "layers": [{"vendor":{"sequence":9007199254740993,"future":[{"x":false}]}},{}],
+    "want": {"vendor":{"sequence":9007199254740993,"future":[{"x":false}]}}
+  }
+]

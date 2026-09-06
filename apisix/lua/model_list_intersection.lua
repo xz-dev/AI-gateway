@@ -1,5 +1,8 @@
 local core = require("apisix.core")
 local http = require("resty.http")
+local record_json = require("cjson.safe").new()
+record_json.decode_array_with_array_mt(true)
+record_json.decode_invalid_numbers(false)
 
 local ngx = ngx
 local getmetatable = getmetatable
@@ -193,7 +196,9 @@ local function catalog(document)
 
     local key = has_data and "data" or "models"
     local items = document[key]
-    if type(items) ~= "table" or getmetatable(items) ~= core.json.array_mt then
+    if type(items) ~= "table" or
+       (getmetatable(items) ~= core.json.array_mt and
+        getmetatable(items) ~= record_json.array_mt) then
         return nil, "catalog model collection is not an array"
     end
     return {
@@ -239,25 +244,106 @@ local function allowed_ids(document)
     return allowed
 end
 
-local function filter_original(document, allowed)
+-- 输入已由 JSON decoder 验证；这里只定位原文边界，不把元数据数字转回 Lua 数值。
+local function skip_space(body, pos)
+    return body:find("%S", pos) or (#body + 1)
+end
+
+local function string_end(body, pos)
+    while true do
+        pos = assert(body:find('[\\"]', pos + 1))
+        if body:sub(pos, pos) == '"' then
+            return pos + 1
+        end
+        pos = pos + 1 -- 跳过转义字符；语法已经验证。
+    end
+end
+
+local function value_end(body, pos)
+    local first = body:sub(pos, pos)
+    if first == '"' then
+        return string_end(body, pos)
+    end
+    if first ~= "{" and first ~= "[" then
+        return body:find("[,%]%}%s]", pos) or (#body + 1)
+    end
+    local depth = 1
+    pos = pos + 1
+    while depth > 0 do
+        pos = assert(body:find('[%[%]{}"]', pos))
+        local token = body:sub(pos, pos)
+        if token == '"' then
+            pos = string_end(body, pos)
+        else
+            depth = depth + ((token == "{" or token == "[") and 1 or -1)
+            pos = pos + 1
+        end
+    end
+    return pos
+end
+
+local function object_fields(body, start)
+    local pos = skip_space(body, start + 1)
+    return function()
+        if body:sub(pos, pos) == "}" then
+            return
+        end
+        local finish = string_end(body, pos)
+        local key = record_json.decode(body:sub(pos, finish - 1))
+        local first = skip_space(body, skip_space(body, finish) + 1)
+        local last = value_end(body, first)
+        pos = skip_space(body, last)
+        if body:sub(pos, pos) == "," then
+            pos = skip_space(body, pos + 1)
+        end
+        return key, first, last
+    end
+end
+
+local function filter_original(document, allowed, raw)
     local source, err = catalog(document)
     if not source then
         return nil, err
     end
+    local first, last
+    for key, start, finish in object_fields(raw, skip_space(raw, 1)) do
+        if key == source.key then
+            if first then
+                return nil, "duplicate model collection"
+            end
+            first, last = start, finish
+        end
+    end
+    if not first then
+        return nil, "model collection boundary missing"
+    end
 
-    local filtered = setmetatable({}, core.json.array_mt)
+    local filtered = {}
+    local pos = skip_space(raw, first + 1)
     for _, item in ipairs(source.items) do
         local id, id_err = model_id(item, source.id_field)
         if not id then
             return nil, id_err
         end
+        local finish = value_end(raw, pos)
+        local seen = {}
+        for key in object_fields(raw, pos) do
+            if key == "id" or key == "slug" then
+                if seen[key] then
+                    return nil, "duplicate model identity"
+                end
+                seen[key] = true
+            end
+        end
         if allowed[id] then
-            table_insert(filtered, item)
+            table_insert(filtered, raw:sub(pos, finish - 1))
+        end
+        pos = skip_space(raw, finish)
+        if raw:sub(pos, pos) == "," then
+            pos = skip_space(raw, pos + 1)
         end
     end
-
-    document[source.key] = filtered
-    return document
+    return raw:sub(1, first) .. table_concat(filtered, ",") .. raw:sub(last - 1)
 end
 
 local function apply_upstream_headers(headers)
@@ -414,7 +500,7 @@ function _M.run(_, ctx)
         return gateway_error("invalid basic catalog: " .. tostring(basic_decode_err))
     end
 
-    local original_document, original_decode_err = core.json.decode(original.body)
+    local original_document, original_decode_err = record_json.decode(original.body)
     if not original_document then
         return gateway_error("invalid original catalog: " .. tostring(original_decode_err))
     end
@@ -424,14 +510,9 @@ function _M.run(_, ctx)
         return gateway_error("invalid basic catalog: " .. tostring(allowed_err))
     end
 
-    local filtered, filter_err = filter_original(original_document, allowed)
-    if not filtered then
-        return gateway_error("invalid original catalog: " .. tostring(filter_err))
-    end
-
-    local body, encode_err = core.json.encode(filtered)
+    local body, filter_err = filter_original(original_document, allowed, original.body)
     if not body then
-        return gateway_error("failed encoding filtered catalog: " .. tostring(encode_err))
+        return gateway_error("invalid original catalog: " .. tostring(filter_err))
     end
     if #body > FINAL_MAX_BYTES then
         return gateway_error("filtered catalog exceeds limit")

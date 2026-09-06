@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -69,7 +68,7 @@ func (c *CPAClient) NativeManifest(ctx context.Context, clientVersion string) (*
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	body, err := readBoundedBody(resp.Body, 32<<20)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +76,7 @@ func (c *CPAClient) NativeManifest(ctx context.Context, clientVersion string) (*
 		return nil, fmt.Errorf("native manifest status %d", resp.StatusCode)
 	}
 	var m Manifest
-	if err := json.Unmarshal(body, &m); err != nil {
+	if err := decodeJSON(body, &m); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -113,7 +112,7 @@ func (c *CPAClient) APICall(ctx context.Context, ch Channel, method, absURL stri
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	body, err := readBoundedBody(resp.Body, 32<<20)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -162,7 +161,7 @@ func (c *CPAClient) listKind(ctx context.Context, src channelSource) ([]Channel,
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := readBoundedBody(resp.Body, 8<<20)
 	if err != nil {
 		return nil, err
 	}

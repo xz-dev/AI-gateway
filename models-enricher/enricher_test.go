@@ -273,10 +273,10 @@ func TestIndexModelsDevNamespaced(t *testing.T) {
 		"zhipuai": {"models": {"glm-5.3": {"id":"glm-5.3","limit":{"context":1000000,"output":131072}}}}
 	}`)
 	out := indexModelsDev(raw)
-	if h := out["zhipuai"]["glm-5.3"]; h.ContextWindow != 1000000 || h.MaxTokens != 131072 {
+	if h := out["zhipuai"]["glm-5.3"]; toInt(h["context_window"]) != 1000000 || toInt(h["max_tokens"]) != 131072 {
 		t.Fatalf("zhipuai namespace: %+v", h)
 	}
-	if h := out["digitalocean"]["glm-5.3"]; h.ContextWindow != 1048576 {
+	if h := out["digitalocean"]["glm-5.3"]; toInt(h["context_window"]) != 1048576 {
 		t.Fatalf("digitalocean namespace: %+v", h)
 	}
 }
@@ -285,7 +285,7 @@ func TestIndexModelsDevFlat(t *testing.T) {
 	raw := []byte(`{"openai/gpt-5.6-sol": {"limit":{"context":1050000,"input":922000,"output":128000}}, "bare-key": {"limit":{"context":1}}}`)
 	out := indexModelsDevFlat(raw)
 	h := out["openai"]["gpt-5.6-sol"]
-	if h.ContextWindow != 1050000 || h.MaxInputTokens != 922000 || h.MaxTokens != 128000 {
+	if toInt(h["context_window"]) != 1050000 || toInt(h["max_input_tokens"]) != 922000 || toInt(h["max_tokens"]) != 128000 {
 		t.Fatalf("flat provider/model key fields: %+v", h)
 	}
 	if _, ok := out["bare-key"]; ok {
@@ -296,18 +296,16 @@ func TestIndexModelsDevFlat(t *testing.T) {
 func TestMergeSourceMapsPreservesFirstSourceFields(t *testing.T) {
 	dst := map[string]map[string]sourceHit{}
 	mergeSourceMaps(dst, map[string]map[string]sourceHit{
-		"openai": {"m": {ContextWindow: 1050000, MaxInputTokens: 922000, MaxTokens: 128000, InputModalities: []string{"text", "image"}}},
+		"openai": {"m": {"context_window": 1050000, "max_input_tokens": 922000, "max_tokens": 128000, "input_modalities": []string{"text", "image"}}},
 	})
 	mergeSourceMaps(dst, map[string]map[string]sourceHit{
-		"openai": {"m": {ContextWindow: 272000, MaxInputTokens: 1, MaxTokens: 1, ReasoningEfforts: []string{"high"}}},
+		"openai": {"m": {"context_window": 272000, "max_input_tokens": 1, "max_tokens": 1, "supported_reasoning_levels": effortsToLevels([]any{"high"})}},
 	})
 	h := dst["openai"]["m"]
-	if h.ContextWindow != 1050000 || h.MaxInputTokens != 922000 || h.MaxTokens != 128000 {
+	if h["context_window"] != 1050000 || h["max_input_tokens"] != 922000 || h["max_tokens"] != 128000 {
 		t.Fatalf("first source fields must win: %+v", h)
 	}
-	if len(h.ReasoningEfforts) != 1 || h.ReasoningEfforts[0] != "high" {
-		t.Fatalf("later source should only fill a missing field: %+v", h)
-	}
+	assertMetadataJSON(t, h["supported_reasoning_levels"], `[{"effort":"high"}]`)
 }
 
 func TestIndexModelparamsAuthTypeSplitAndProviderRequired(t *testing.T) {
@@ -341,10 +339,10 @@ func TestIndexModelparamsAuthTypeSplitAndProviderRequired(t *testing.T) {
 
 func TestLookupOneExactOnly(t *testing.T) {
 	tables := emptySourceTables()
-	tables.dev["openai"] = map[string]sourceHit{"gpt-5.6-sol": {ContextWindow: 1050000}}
-	tables.dev["openrouter"] = map[string]sourceHit{"openai/gpt-5.6-sol": {ContextWindow: 999}}
+	tables.dev["openai"] = map[string]sourceHit{"gpt-5.6-sol": {"context_window": 1050000}}
+	tables.dev["openrouter"] = map[string]sourceHit{"openai/gpt-5.6-sol": {"context_window": 999}}
 
-	if h, ok := tables.lookupOne("models.dev/openai", "gpt-5.6-sol"); !ok || h.ContextWindow != 1050000 {
+	if h, ok := tables.lookupOne("models.dev/openai", "gpt-5.6-sol"); !ok || h["context_window"] != 1050000 {
 		t.Fatalf("exact lookup: %+v ok=%v", h, ok)
 	}
 	// 无变体：大写不命中
@@ -363,14 +361,16 @@ func TestLookupOneExactOnly(t *testing.T) {
 
 func TestOllamaContextLengthParse(t *testing.T) {
 	body := []byte(`{"model_info": {"deepseek.context_length": 262144, "other.field": "x"}}`)
-	if got := parseOllamaContextLength(body); got != 262144 {
-		t.Fatalf("context_length suffix scan: %d", got)
+	hit, err := parseOllamaMetadata(body)
+	if err != nil || toInt(hit["context_window"]) != 262144 {
+		t.Fatalf("context_length suffix scan: %+v, %v", hit, err)
 	}
-	if got := parseOllamaContextLength([]byte(`{"model_info": {}}`)); got != 0 {
-		t.Fatalf("missing context_length must be miss: %d", got)
+	hit, err = parseOllamaMetadata([]byte(`{"model_info": {}}`))
+	if err != nil || hit["context_window"] != nil {
+		t.Fatalf("missing context_length must stay missing: %+v, %v", hit, err)
 	}
-	if got := parseOllamaContextLength([]byte(`not json`)); got != 0 {
-		t.Fatalf("bad json must be miss: %d", got)
+	if _, err := parseOllamaMetadata([]byte(`not json`)); err == nil {
+		t.Fatal("bad json must fail parsing")
 	}
 }
 
@@ -380,34 +380,34 @@ func chanCfg(chain ...string) ChannelConfig { return ChannelConfig{SourcePriorit
 
 func TestMergeProviderChainPrecedence(t *testing.T) {
 	tables := emptySourceTables()
-	setHit(tables.mpS, "zhipuai", "m", sourceHit{MaxTokens: 200, ContextWindow: 2000})
-	setHit(tables.mpK, "zhipuai", "m", sourceHit{MaxTokens: 100})
-	setHit(tables.dev, "zhipuai", "m", sourceHit{DisplayName: "DevName", ContextWindow: 9999})
+	setHit(tables.mpS, "zhipuai", "m", sourceHit{"max_tokens": 200, "context_window": 2000})
+	setHit(tables.mpK, "zhipuai", "m", sourceHit{"max_tokens": 100})
+	setHit(tables.dev, "zhipuai", "m", sourceHit{"display_name": "DevName", "context_window": 9999})
 	cfg := &Config{Channels: map[string]ChannelConfig{
 		"c": chanCfg("modelparams.dev/zhipuai/subscription", "modelparams.dev/zhipuai/api_key", "models.dev/zhipuai"),
 	}}
 	fetched := []channelModels{{
 		Channel: Channel{Name: "c", Prefix: "c", Type: "openai-compatibility"},
-		Models:  []ParsedModel{{ID: "m", DisplayName: "Parsed", ContextWindow: 272000, MaxInputTokens: 200000}},
+		Models:  []ParsedModel{{ID: "m", Metadata: map[string]any{"display_name": "Parsed", "context_window": 272000, "max_input_tokens": 200000}}},
 	}}
 	out := mergeManifest(nil, fetched, cfg, tables, nil)
 	m := out.Models[0]
-	if m["slug"] != "c/m" || m["display_name"] != "Parsed" {
-		t.Fatalf("parsed display name must beat sources: %+v", m)
+	if m["slug"] != "c/m" || m["display_name"] != "DevName" {
+		t.Fatalf("explicit source metadata must overlay the channel: %+v", m)
 	}
 	if m["max_tokens"] != 200 || m["context_window"] != 2000 {
 		t.Fatalf("subscription must precede api_key and override channel capability: %+v", m)
 	}
-	if _, ok := m["max_input_tokens"]; ok {
-		t.Fatalf("source miss must not retain the channel max_input_tokens: %+v", m)
+	if m["max_input_tokens"] != 200000 {
+		t.Fatalf("source miss must retain the channel max_input_tokens: %+v", m)
 	}
 }
 
 func TestMergeSourceAuthoritativeAndMetadataReference(t *testing.T) {
 	tables := emptySourceTables()
 	setHit(tables.dev, "xai", "grok-4.6", sourceHit{
-		ContextWindow: 500000, MaxInputTokens: 400000, MaxTokens: 500000,
-		InputModalities: []string{"text", "image"}, ReasoningEfforts: []string{"low", "high"},
+		"context_window": 500000, "max_input_tokens": 400000, "max_tokens": 500000,
+		"input_modalities": []string{"text", "image"}, "supported_reasoning_levels": effortsToLevels([]any{"low", "high"}),
 	})
 	cfg := &Config{Channels: map[string]ChannelConfig{
 		"xl": {
@@ -419,10 +419,10 @@ func TestMergeSourceAuthoritativeAndMetadataReference(t *testing.T) {
 	}}
 	fetched := []channelModels{{
 		Channel: Channel{Name: "XL", Prefix: "xl"},
-		Models:  []ParsedModel{{ID: "grok-4.6", ContextWindow: 272000, MaxInputTokens: 272000, MaxTokens: 65536}},
+		Models:  []ParsedModel{{ID: "grok-4.6", Metadata: map[string]any{"context_window": 272000, "max_input_tokens": 272000, "max_tokens": 65536}}},
 	}, {
 		Channel: Channel{Name: "Super", Prefix: "supergrok"},
-		Models:  []ParsedModel{{ID: "grok-4.6", ContextWindow: 500000, MaxInputTokens: 400000, MaxTokens: 65536, DisplayName: "Grok 4.6"}},
+		Models:  []ParsedModel{{ID: "grok-4.6", Metadata: map[string]any{"context_window": 500000, "max_input_tokens": 400000, "max_tokens": 65536, "display_name": "Grok 4.6"}}},
 	}}
 	out := mergeManifest(nil, fetched, cfg, tables, nil)
 	by := map[string]map[string]any{}
@@ -438,7 +438,7 @@ func TestMergeSourceAuthoritativeAndMetadataReference(t *testing.T) {
 	}
 }
 
-func TestMergeMissingMetadataReferenceClearsCapabilities(t *testing.T) {
+func TestMergeMissingMetadataReferencePreservesCapabilities(t *testing.T) {
 	cfg := &Config{Channels: map[string]ChannelConfig{
 		"xl": {
 			SourcePriority: []string{"models.dev/xai"},
@@ -449,21 +449,21 @@ func TestMergeMissingMetadataReferenceClearsCapabilities(t *testing.T) {
 	}}
 	fetched := []channelModels{{
 		Channel: Channel{Name: "XL", Prefix: "xl"},
-		Models:  []ParsedModel{{ID: "grok-4.6", ContextWindow: 272000, MaxInputTokens: 272000, MaxTokens: 65536}},
+		Models:  []ParsedModel{{ID: "grok-4.6", Metadata: map[string]any{"context_window": 272000, "max_input_tokens": 272000, "max_tokens": 65536}}},
 	}}
 	out := mergeManifest(nil, fetched, cfg, emptySourceTables(), nil)
 	m := out.Models[0]
-	for _, key := range []string{"context_window", "max_input_tokens", "max_tokens"} {
-		if _, ok := m[key]; ok {
-			t.Fatalf("missing metadata reference must clear %s: %+v", key, m)
+	for key, want := range map[string]int{"context_window": 272000, "max_input_tokens": 272000, "max_tokens": 65536} {
+		if m[key] != want {
+			t.Fatalf("missing metadata reference must retain %s: %+v", key, m)
 		}
 	}
 }
 
 func TestMergeModelLevelChainReplacesChannel(t *testing.T) {
 	tables := emptySourceTables()
-	setHit(tables.mpS, "zhipuai", "m", sourceHit{MaxTokens: 200})
-	setHit(tables.mpK, "zhipuai", "m", sourceHit{MaxTokens: 100})
+	setHit(tables.mpS, "zhipuai", "m", sourceHit{"max_tokens": 200})
+	setHit(tables.mpK, "zhipuai", "m", sourceHit{"max_tokens": 100})
 	cfg := &Config{Channels: map[string]ChannelConfig{
 		"c": {SourcePriority: []string{"modelparams.dev/zhipuai/subscription"},
 			Models: map[string]ModelConfig{
@@ -483,8 +483,8 @@ func TestMergeModelLevelChainReplacesChannel(t *testing.T) {
 
 func TestMergeLookupIDsPerSource(t *testing.T) {
 	tables := emptySourceTables()
-	setHit(tables.dev, "deepseek", "deepseek-v4-flash", sourceHit{ContextWindow: 128000})
-	setHit(tables.mpK, "deepseek", "deepseek-v4-flash:preview", sourceHit{MaxTokens: 8192})
+	setHit(tables.dev, "deepseek", "deepseek-v4-flash", sourceHit{"context_window": 128000})
+	setHit(tables.mpK, "deepseek", "deepseek-v4-flash:preview", sourceHit{"max_tokens": 8192})
 	cfg := &Config{Channels: map[string]ChannelConfig{
 		"oc": {SourcePriority: []string{"models.dev/deepseek", "modelparams.dev/deepseek/api_key"},
 			Models: map[string]ModelConfig{
@@ -511,9 +511,9 @@ func TestMergeLookupIDsPerSource(t *testing.T) {
 
 func TestMergeOllamaHit(t *testing.T) {
 	tables := emptySourceTables()
-	setHit(tables.dev, "deepseek", "m", sourceHit{ContextWindow: 999999, MaxTokens: 8192})
+	setHit(tables.dev, "deepseek", "m", sourceHit{"context_window": 999999, "max_tokens": 8192})
 	ollama := map[string]map[string]sourceHit{
-		"oc": {"m": {ContextWindow: 262144}},
+		"oc": {"m": {"context_window": 262144}},
 	}
 	cfg := &Config{Channels: map[string]ChannelConfig{
 		"oc": chanCfg("ollama_cloud", "models.dev/deepseek"),
@@ -534,7 +534,7 @@ func TestMergeOllamaHit(t *testing.T) {
 
 func TestMergeCustomPoolHiddenAndStaticInherit(t *testing.T) {
 	tables := emptySourceTables()
-	setHit(tables.dev, "openai", "gpt-5.6-sol", sourceHit{ContextWindow: 1050000, MaxTokens: 128000})
+	setHit(tables.dev, "openai", "gpt-5.6-sol", sourceHit{"context_window": 1050000, "max_tokens": 128000})
 	cfg := &Config{
 		Channels: map[string]ChannelConfig{
 			"c": chanCfg("models.dev/openai"),
@@ -555,7 +555,7 @@ func TestMergeCustomPoolHiddenAndStaticInherit(t *testing.T) {
 	}
 	fetched := []channelModels{{
 		Channel: Channel{Name: "c", Prefix: "c"},
-		Models:  []ParsedModel{{ID: "m", ContextWindow: 777}},
+		Models:  []ParsedModel{{ID: "m", Metadata: map[string]any{"context_window": 777}}},
 	}}
 	out := mergeManifest(nil, fetched, cfg, tables, nil)
 	slugs := map[string]map[string]any{}
@@ -590,7 +590,7 @@ func TestMergeStaticInheritPublicPoolAndMiss(t *testing.T) {
 	}
 	fetched := []channelModels{{
 		Channel: Channel{Name: "c", Prefix: "c"},
-		Models:  []ParsedModel{{ID: "m", ContextWindow: 1234}},
+		Models:  []ParsedModel{{ID: "m", Metadata: map[string]any{"context_window": 1234}}},
 	}}
 	out := mergeManifest(nil, fetched, cfg, emptySourceTables(), nil)
 	by := map[string]map[string]any{}
@@ -626,13 +626,14 @@ func TestStripExactPrefixOnly(t *testing.T) {
 	}
 }
 
-func TestStripCodexTemplateJunk(t *testing.T) {
+func TestNativeMetadataPreservedWithExplicitSourceOverride(t *testing.T) {
 	tables := emptySourceTables()
-	setHit(tables.dev, "zhipuai", "glm-5.3", sourceHit{ContextWindow: 1000000, MaxTokens: 131072})
+	setHit(tables.dev, "zhipuai", "glm-5.3", sourceHit{"context_window": 1000000, "max_tokens": 131072})
 	base := &Manifest{Models: []map[string]any{
 		{"slug": "zcode/glm-5.3", "context_window": 272000,
 			"max_tokens": 120000, "supported_reasoning_levels": []any{map[string]any{"effort": "medium"}},
 			"default_reasoning_level": "medium", "shell_type": "shell"},
+		{"slug": "codex/gpt-6-astra", "context_window": 272000, "max_tokens": 128000},
 		{"slug": "codex/gpt-5.5", "context_window": 272000, "max_tokens": 128000},
 		{"slug": "axis/gpt-5.6-sol", "context_window": 1050000, "max_tokens": 128000},
 	}}
@@ -652,10 +653,13 @@ func TestStripCodexTemplateJunk(t *testing.T) {
 		t.Fatalf("glm-5.3 should be refilled from source: %+v", g)
 	}
 	if _, ok := got["zcode/glm-5.3"]["shell_type"]; !ok {
-		t.Fatal("client-contract fields must survive the strip")
+		t.Fatal("client-contract fields must survive source overlay")
 	}
 	if c := got["codex/gpt-5.5"]; c["context_window"] != 272000 {
-		t.Fatalf("codex catalog slug exempt: %+v", c)
+		t.Fatalf("native declared limits must survive: %+v", c)
+	}
+	if c := got["codex/gpt-6-astra"]; c["context_window"] != 272000 || c["max_tokens"] != 128000 {
+		t.Fatalf("gpt-6 declared limits must survive: %+v", c)
 	}
 	if a := got["axis/gpt-5.6-sol"]; a["context_window"] != 1050000 {
 		t.Fatalf("channel-declared value must survive: %+v", a)
@@ -675,7 +679,7 @@ func TestAdapterForUnknownType(t *testing.T) {
 // 只能输出一行且取 static 补全值（回归：曾输出两行，Pi 读到无 limits 的第一行）。
 func TestMergeStaticReplacesNativeBareInPlace(t *testing.T) {
 	tables := emptySourceTables()
-	setHit(tables.dev, "minimax", "MiniMax-M3", sourceHit{ContextWindow: 1048576, MaxTokens: 512000})
+	setHit(tables.dev, "minimax", "MiniMax-M3", sourceHit{"context_window": 1048576, "max_tokens": 512000})
 	base := &Manifest{Models: []map[string]any{
 		{"slug": "MiniMaxAI/MiniMax-M3"}, // native 裸条目，无 capability
 	}}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,16 +19,8 @@ var (
 	modelparamsURL   = "https://modelparams.dev/api/v1/models.json"
 )
 
-type sourceHit struct {
-	DisplayName       string
-	ContextWindow     int
-	MaxInputTokens    int
-	MaxTokens         int
-	InputModalities   []string
-	ReasoningEfforts  []string
-	DefaultReasoning  string
-	SupportsReasoning bool
-}
+// provider / id 由外层索引持有，值仅为公开模型记录。
+type sourceHit = map[string]any
 
 // SourceTables：每请求重建一次的源索引，无跨请求缓存。
 // 所有表按 provider 命名空间隔离：provider -> 精确模型 id -> hit。
@@ -128,40 +119,11 @@ func mergeSourceMaps(dst, src map[string]map[string]sourceHit) {
 			dst[provider] = map[string]sourceHit{}
 		}
 		for id, hit := range models {
-			if current, ok := dst[provider][id]; ok {
-				mergeSourceHit(&current, hit)
-				dst[provider][id] = current
-			} else {
-				dst[provider][id] = hit
-			}
+			merged := map[string]any{}
+			applyModelLayer(merged, hit)
+			applyModelLayer(merged, dst[provider][id])
+			dst[provider][id] = merged
 		}
-	}
-}
-
-func mergeSourceHit(dst *sourceHit, src sourceHit) {
-	if dst.DisplayName == "" {
-		dst.DisplayName = src.DisplayName
-	}
-	if dst.ContextWindow == 0 {
-		dst.ContextWindow = src.ContextWindow
-	}
-	if dst.MaxInputTokens == 0 {
-		dst.MaxInputTokens = src.MaxInputTokens
-	}
-	if dst.MaxTokens == 0 {
-		dst.MaxTokens = src.MaxTokens
-	}
-	if len(dst.InputModalities) == 0 {
-		dst.InputModalities = src.InputModalities
-	}
-	if len(dst.ReasoningEfforts) == 0 {
-		dst.ReasoningEfforts = src.ReasoningEfforts
-	}
-	if dst.DefaultReasoning == "" {
-		dst.DefaultReasoning = src.DefaultReasoning
-	}
-	if !dst.SupportsReasoning {
-		dst.SupportsReasoning = src.SupportsReasoning
 	}
 }
 
@@ -180,7 +142,7 @@ func sourceGet(ctx context.Context, pool *httpPool, url string) ([]byte, error) 
 		io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("%s: status %d", url, resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	return readBoundedBody(resp.Body, 16<<20)
 }
 
 // indexModelsDev：api.json 天然按 provider 分命名空间；
@@ -190,7 +152,7 @@ func indexModelsDev(raw []byte) map[string]map[string]sourceHit {
 		Models map[string]map[string]any `json:"models"`
 	}
 	out := map[string]map[string]sourceHit{}
-	if json.Unmarshal(raw, &providers) != nil {
+	if decodeJSON(raw, &providers) != nil {
 		return out
 	}
 	for name, p := range providers {
@@ -212,7 +174,7 @@ func indexModelsDev(raw []byte) map[string]map[string]sourceHit {
 func indexModelsDevFlat(raw []byte) map[string]map[string]sourceHit {
 	var models map[string]map[string]any
 	out := map[string]map[string]sourceHit{}
-	if json.Unmarshal(raw, &models) != nil {
+	if decodeJSON(raw, &models) != nil {
 		return out
 	}
 	for key, m := range models {
@@ -230,26 +192,34 @@ func indexModelsDevFlat(raw []byte) map[string]map[string]sourceHit {
 }
 
 func hitFromModelsDev(m map[string]any) sourceHit {
-	h := sourceHit{DisplayName: firstString(m, "name")}
-	if limit, _ := m["limit"].(map[string]any); limit != nil {
-		h.ContextWindow = toInt(limit["context"])
-		h.MaxInputTokens = toInt(limit["input"])
-		h.MaxTokens = toInt(limit["output"])
-	}
-	if mods, _ := m["modalities"].(map[string]any); mods != nil {
-		h.InputModalities = toStringSlice(mods["input"])
-	}
-	h.SupportsReasoning, _ = m["reasoning"].(bool)
+	h := cloneMap(m)
+	mapDeclaredField(h, "display_name", m["name"])
+	mapDeclaredField(h, "context_window", declaredNested(m, "limit", "context"))
+	mapDeclaredField(h, "max_input_tokens", declaredNested(m, "limit", "input"))
+	mapDeclaredField(h, "max_output_tokens", declaredNested(m, "limit", "output"))
+	mapDeclaredField(h, "input_modalities", declaredNested(m, "modalities", "input"))
+	mapDeclaredField(h, "output_modalities", declaredNested(m, "modalities", "output"))
 	if opts, ok := m["reasoning_options"].([]any); ok {
 		for _, opt := range opts {
-			om, _ := opt.(map[string]any)
-			if firstString(om, "type") != "effort" {
-				continue
+			option, _ := opt.(map[string]any)
+			if firstString(option, "type") == "effort" {
+				if values, ok := option["values"].([]any); ok {
+					mapDeclaredField(h, "supported_reasoning_levels", effortsToLevels(values))
+				}
 			}
-			h.ReasoningEfforts = toStringSlice(om["values"])
 		}
 	}
+	syncOutputAliases(h)
 	return h
+}
+
+// 显式 effort 列表的结构转换，不从 reasoning boolean 推导等级。
+func effortsToLevels(values []any) []any {
+	out := make([]any, len(values))
+	for i, value := range values {
+		out[i] = map[string]any{"effort": cloneJSONValue(value)}
+	}
+	return out
 }
 
 // indexModelparams：provider 必填（缺失则跳过并计数 WARN——无命名空间不入索引，
@@ -260,7 +230,7 @@ func indexModelparams(raw []byte, log *slog.Logger) (apiKeyOut, subOut map[strin
 	var envelope struct {
 		Models []map[string]any `json:"models"`
 	}
-	if json.Unmarshal(raw, &envelope) != nil {
+	if decodeJSON(raw, &envelope) != nil {
 		return
 	}
 	skipped := 0
@@ -274,26 +244,21 @@ func indexModelparams(raw []byte, log *slog.Logger) (apiKeyOut, subOut map[strin
 			skipped++
 			continue
 		}
-		h := sourceHit{}
+		h := cloneMap(m)
 		params, _ := m["params"].([]any)
 		for _, p := range params {
 			pm, _ := p.(map[string]any)
 			switch firstString(pm, "path") {
 			case "max_completion_tokens", "max_tokens", "max_output_tokens":
-				if rng, _ := pm["range"].(map[string]any); rng != nil {
-					if n := toInt(rng["max"]); n > 0 {
-						h.MaxTokens = n
-					}
-				}
-				if h.MaxTokens == 0 {
-					h.MaxTokens = toInt(pm["default"])
-				}
+				mapDeclaredField(h, "max_output_tokens", declaredNested(pm, "range", "max"))
 			case "reasoning_effort":
-				h.SupportsReasoning = true
-				h.ReasoningEfforts = toStringSlice(pm["values"])
-				h.DefaultReasoning = firstString(pm, "default")
+				if values, ok := pm["values"].([]any); ok {
+					mapDeclaredField(h, "supported_reasoning_levels", effortsToLevels(values))
+				}
+				mapDeclaredField(h, "default_reasoning_level", pm["default"])
 			}
 		}
+		syncOutputAliases(h)
 		put := func(table map[string]map[string]sourceHit) {
 			if table[prov] == nil {
 				table[prov] = map[string]sourceHit{}

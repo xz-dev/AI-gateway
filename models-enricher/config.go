@@ -65,24 +65,11 @@ type ChannelConfig struct {
 	exclude []*regexp.Regexp
 }
 
-// modelOverrides：legacy 扁平 overrides 与 models.<name>.overrides 的并集，
-// 后者逐 key 优先（models 块是 legacy 的超集语法）。
+// modelOverrides：模型配置在 legacy 平铺配置之上叠层，null 不清除下层。
 func (ch ChannelConfig) modelOverrides(name string) map[string]any {
-	legacy := ch.Overrides[name]
-	mc, ok := ch.Models[name]
-	if !ok {
-		return legacy
-	}
-	if len(legacy) == 0 {
-		return mc.Overrides
-	}
-	out := make(map[string]any, len(legacy)+len(mc.Overrides))
-	for k, v := range legacy {
-		out[k] = v
-	}
-	for k, v := range mc.Overrides {
-		out[k] = v
-	}
+	out := map[string]any{}
+	applyModelLayer(out, ch.Overrides[name])
+	applyModelLayer(out, ch.Models[name].Overrides)
 	return out
 }
 
