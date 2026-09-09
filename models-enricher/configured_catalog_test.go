@@ -19,13 +19,12 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	if len(cfg.CustomChannels) != 1 || !exists {
 		t.Fatalf("static parent pool must be the only custom channel: %v", cfg.CustomChannels)
 	}
-	if !reflect.DeepEqual(pool.SourcePriority, []string{"models.dev/openai", "models.dev/xai", "models.dev/zai-coding-plan", "modelparams.dev/z-ai/subscription", "models.dev/zai"}) ||
-		len(pool.Models) != 7 || len(pool.Overrides) != 0 || len(pool.providerPrefixes) != 0 {
-		t.Fatalf("static parent pool must use only the declared subscription sources: %+v", pool)
+	if len(pool.SourcePriority) != 0 || len(pool.Models) != 7 || len(pool.Overrides) != 0 || len(pool.providerPrefixes) != 0 {
+		t.Fatalf("static parent pool must be source-free void definitions: %+v", pool)
 	}
 	for name, model := range pool.Models {
-		if len(model.SourcePriority) != 0 || len(model.LookupIDs) != 0 || len(model.Overrides) != 0 || model.MetadataFrom != "" {
-			t.Fatalf("static parent %s must stay a plain virtual entry", name)
+		if len(model.SourcePriority) != 0 || len(model.LookupIDs) != 0 || model.MetadataFrom != "" || len(model.Overrides) == 0 {
+			t.Fatalf("static parent %s must be void-created from inline overrides only", name)
 		}
 	}
 	for name, want := range map[string][]string{
@@ -136,19 +135,8 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	if !reflect.DeepEqual(bare, seen) {
 		t.Fatal("the explicit static models changed")
 	}
-	// 虚空池成员不进公开清单，但必须能用真实来源补齐静态元数据。
-	tables := emptySourceTables()
-	tables.setModelsDev(indexModelsDev([]byte(`{"openai":{"models":{
-		"gpt-5.6-terra":{"name":"GPT-5.6 Terra","limit":{"context":1050000,"input":922000,"output":128000}},
-		"gpt-5.6-luna":{"name":"GPT-5.6 Luna","limit":{"context":1050000,"input":922000,"output":128000}},
-		"gpt-6-astra":{"name":"GPT-6 Astra","limit":{"context":1050000,"input":922000,"output":128000}}}
-	},"xai":{"models":{"grok-4.6":{"name":"Grok 4.6","limit":{"context":500000,"output":500000}}}},
-	"zai-coding-plan":{"models":{
-		"glm-5.2":{"name":"GLM-5.2","limit":{"context":1000000,"output":131072}},
-		"glm-5.3":{"name":"GLM-5.3","limit":{"context":1000000,"output":131072}},
-		"glm-5.3-flash":{"name":"GLM-5.3-Flash","limit":{"context":1000000,"output":131072}}}}
-	}`)), nil)
-	out = mergeManifest(base, nil, cfg, tables, nil)
+	// 虚空池成员不进公开清单；元数据全部来自池内内联声明（虚空创造），不查询外部来源。
+	out = mergeManifest(base, nil, cfg, emptySourceTables(), nil)
 	if len(out.Models) != len(seen) {
 		t.Fatalf("enriched pass changed membership: %v", out.Models)
 	}
@@ -156,18 +144,21 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 		slug := asString(model["slug"])
 		if slug == "grok-4.6" {
 			if toInt(model["context_window"]) != 500000 || model["display_name"] != "Grok 4.6" {
-				t.Fatalf("grok-4.6 must inherit xai source: %v", model)
+				t.Fatalf("grok-4.6 must use its inline values: %v", model)
 			}
 			continue
 		}
 		if strings.HasPrefix(slug, "glm-") {
 			if toInt(model["context_window"]) != 1000000 || toInt(model["max_output_tokens"]) != 131072 || model["display_name"] == nil {
-				t.Fatalf("glm static %s must inherit the zai-coding-plan source: %v", slug, model)
+				t.Fatalf("glm static %s must use its inline values: %v", slug, model)
+			}
+			if slug == "glm-5.2" && model["default_reasoning_level"] != "max" {
+				t.Fatalf("glm-5.2 must carry its inline default: %v", model)
 			}
 			continue
 		}
 		if toInt(model["context_window"]) != 372000 || toInt(model["max_input_tokens"]) != 922000 || toInt(model["max_output_tokens"]) != 128000 || model["display_name"] == nil {
-			t.Fatalf("static %s must override context to 372000 and inherit the rest: %v", slug, model)
+			t.Fatalf("static %s must override context to 372000 and inherit the inline rest: %v", slug, model)
 		}
 	}
 }

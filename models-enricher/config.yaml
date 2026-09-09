@@ -47,19 +47,79 @@ channels:
   gmicloud: {}
 
 # CPA原始裸名在入口过滤；static用虚空池取数，不依赖真实渠道成员。
-# static-parents 是订阅型数据链：成员仅存在于本池，从models.dev取真实厂商声明。
-# statics层用overrides把gpt四项的context压到372k（真实供应商限额），池内保持来源原值。
+# static-parents 是纯虚空创造池：成员仅存在于本池，全部字段内联声明，不查询外部来源。
+# statics层用overrides把gpt三项的context压到372k（真实供应商限额），池内保持厂商最大值。
 custom_channels:
   static-parents:
-    source_priority: [models.dev/openai, models.dev/xai, models.dev/zai-coding-plan, modelparams.dev/z-ai/subscription, models.dev/zai]
     models:
-      gpt-5.6-terra: {}
-      gpt-5.6-luna: {}
-      gpt-6-astra: {}
-      grok-4.6: {}
-      glm-5.2: {}
-      glm-5.3: {}
-      glm-5.3-flash: {}
+      gpt-5.6-terra:
+        overrides:
+          display_name: GPT-5.6 Terra
+          input_modalities: [text, image, pdf]
+          output_modalities: [text]
+          context_window: 1048000
+          max_context_window: 1048000
+          max_input_tokens: 922000
+          max_output_tokens: 128000
+          supported_reasoning_levels: [{effort: none}, {effort: low}, {effort: medium}, {effort: high}, {effort: xhigh}, {effort: max}]
+      gpt-5.6-luna:
+        overrides:
+          display_name: GPT-5.6 Luna
+          input_modalities: [text, image, pdf]
+          output_modalities: [text]
+          context_window: 1048000
+          max_context_window: 1048000
+          max_input_tokens: 922000
+          max_output_tokens: 128000
+          supported_reasoning_levels: [{effort: none}, {effort: low}, {effort: medium}, {effort: high}, {effort: xhigh}, {effort: max}]
+      gpt-6-astra:
+        overrides:
+          display_name: GPT-6 Astra
+          input_modalities: [text, image, pdf]
+          output_modalities: [text]
+          context_window: 1048000
+          max_context_window: 1048000
+          max_input_tokens: 922000
+          max_output_tokens: 128000
+          supported_reasoning_levels: [{effort: low}, {effort: medium}, {effort: high}, {effort: xhigh}, {effort: max}]
+      grok-4.6:
+        overrides:
+          display_name: Grok 4.6
+          input_modalities: [text, image, pdf]
+          output_modalities: [text]
+          context_window: 500000
+          max_context_window: 500000
+          max_output_tokens: 500000
+          supported_reasoning_levels: [{effort: low}, {effort: medium}, {effort: high}, {effort: xhigh}]
+      glm-5.2:
+        overrides:
+          display_name: GLM-5.2
+          input_modalities: [text]
+          output_modalities: [text]
+          context_window: 1000000
+          max_context_window: 1000000
+          max_tokens: 131072
+          max_output_tokens: 131072
+          supported_reasoning_levels: [{effort: high}, {effort: max}]
+          default_reasoning_level: max
+      glm-5.3:
+        overrides:
+          display_name: GLM-5.3
+          input_modalities: [text]
+          output_modalities: [text]
+          context_window: 1000000
+          max_context_window: 1000000
+          max_output_tokens: 131072
+          supported_reasoning_levels: [{effort: low}, {effort: high}, {effort: max}]
+      glm-5.3-flash:
+        overrides:
+          display_name: GLM-5.3-Flash
+          input_modalities: [text, image, video, pdf]
+          output_modalities: [text]
+          context_window: 1000000
+          max_context_window: 1000000
+          max_output_tokens: 131072
+          supported_reasoning_levels: [{effort: low}, {effort: high}, {effort: max}]
 
 static_models:
   - slug: gpt-5.6-terra

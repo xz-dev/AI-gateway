@@ -180,7 +180,12 @@ func loadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("custom_channels: empty channel key")
 		}
 		if len(ch.SourcePriority) == 0 {
-			return nil, fmt.Errorf("custom_channels.%s: source_priority must be non-empty", name)
+			// 虚空创造池：无来源合法，但每个成员必须内联声明完整元数据。
+			for modelName, model := range ch.Models {
+				if len(model.Overrides) == 0 {
+					return nil, fmt.Errorf("custom_channels.%s.%s: source-free pool members must declare inline overrides", name, modelName)
+				}
+			}
 		}
 		ch, err := finishChannelConfig("custom_channels."+name, ch, true)
 		if err != nil {

@@ -138,14 +138,25 @@ custom_channels:
 }
 
 func TestLoadConfigRejectsEmptyCustomChain(t *testing.T) {
+	// 无来源的成员必须内联声明元数据；纯空成员拒绝。
 	_, err := loadConfig(writeConfig(t, `
 cpa_base_url: http://cpa
 custom_channels:
   pool:
     models: {m: {}}
 `))
-	if err == nil || !strings.Contains(err.Error(), "non-empty") {
-		t.Fatalf("empty custom chain must be rejected: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "inline overrides") {
+		t.Fatalf("source-free member without inline overrides must be rejected: %v", err)
+	}
+	// 带内联声明的无来源成员合法（虚空创造）。
+	cfg, err := loadConfig(writeConfig(t, `
+cpa_base_url: http://cpa
+custom_channels:
+  pool:
+    models: {m: {overrides: {display_name: M}}}
+`))
+	if err != nil || len(cfg.CustomChannels["pool"].Models) != 1 {
+		t.Fatalf("void-created member must load: %v", err)
 	}
 }
 
