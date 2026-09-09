@@ -8,6 +8,29 @@ permissions:
   contents: read
 
 jobs:
+  model-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - name: Check Rust model synchronization
+        working-directory: cpa-model-sync
+        run: |
+          cargo fmt --check
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: models-enricher/go.mod
+          cache-dependency-path: models-enricher/go.sum
+      - name: Check Go metadata boundary
+        working-directory: models-enricher
+        run: |
+          go test -race ./...
+          go vet ./...
   template:
     runs-on: ubuntu-latest
     steps:

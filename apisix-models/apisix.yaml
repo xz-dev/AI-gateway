@@ -238,21 +238,23 @@ routes:
       - ["http_upgrade", "==", "websocket"]
     enable_websocket: true
     upstream_id: wsalias
-  # 富清单经 enricher 合成；APISIX proxy-cache 承载热目录缓存（TTL 120s，
-  # 缓存键含 client_version），enricher 自身不再维护跨请求缓存。
-  # 路由不设 client_version 门槛：/v1/models 任何参数都进 enricher
-  # （CPA 不再是 models 管理者，缺失 cv 由 enricher 返回 400 明确错误）。
+  # HTML只接收目录边车的真实连接来源，不信任转发头中的地址。
+  - id: models-table
+    uri: /models-table
+    methods: [GET]
+    priority: 20
+    vars:
+      - ["realip_remote_addr", "==", "172.30.42.3"]
+    upstream_id: enricher
+  # 仅带非空client_version的目录请求交给enricher；最终富目录不缓存。
+  # 其余请求沿catch-all直接送CPA。
   - id: codex-models
     uri: /v1/models
     methods:
       - GET
     priority: 20
-    plugins:
-      proxy-cache:
-        cache_ttl: 120
-        cache_key: ["$uri", "$arg_client_version"]
-        cache_method: ["GET"]
-        response_codes: [200]
+    vars:
+      - ["arg_client_version", "~~", ".+"]
     upstream_id: enricher
   - id: catch-all
     uri: /*

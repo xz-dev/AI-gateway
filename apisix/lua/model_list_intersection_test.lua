@@ -15,6 +15,7 @@ local function run(original, options)
     options = options or {}
     local calls = {}
     local active = options.active or 0
+    local clock = {t = 0}
     local dict = {
         incr = function(_, _, delta) active = active + delta; return active end,
         expire = function() return true end,
@@ -26,6 +27,8 @@ local function run(original, options)
         req = {get_method = function() return "GET" end,
             get_headers = function() return {Authorization = "Bearer fixture-only"} end},
         header = {}, shared = {["model-list-intersection"] = dict}, md5 = real_ngx.md5,
+        now = function() return clock.t end,
+        sleep = function(s) clock.t = clock.t + (s or 0) end,
     }
     package.loaded["apisix.core"] = {json = json, log = {error = function() end, warn = function() end}}
     package.loaded["resty.http"] = {new = function()
@@ -36,7 +39,7 @@ local function run(original, options)
                 calls[#calls + 1] = {host = self.host, request = request}
                 local basic = self.host == "ai-sse-keepalive-ingress-relay"
                 local body = basic and (options.basic or '{"models":[{"slug":"c/allowed"}]}') or original
-                local headers = basic and {} or (options.headers or {})
+                local headers = basic and (options.basic_headers or {}) or (options.headers or {})
                 local status = basic and (options.basic_status or 200) or (options.original_status or 200)
                 local sent = false
                 return {status = status, headers = headers, body_reader = function()
@@ -118,11 +121,17 @@ test("ambiguous routing identities and collections fail closed", function()
     end
 end)
 
-test("existing admission and byte limits remain enforced", function()
-    local status, _, headers, calls = run(original, {active = 2})
+test("admission queue and byte limits remain enforced", function()
+    -- 阈值内直接放行；占满时短暂排队后仍拒绝，且不触达上游。
+    local status = run(original, {active = 2})
+    assert(status == 200, "in-threshold request must be admitted")
+    local headers, calls
+    status, _, headers, calls = run(original, {active = 3})
     assert(status == 503 and headers["Retry-After"] == "1" and #calls == 0)
     status = run(original, {headers = {["Content-Length"] = tostring(16 * 1024 * 1024 + 1)}})
     assert(status == 502, "original response size limit widened")
+    status, _, _, calls = run(original, {basic_headers = {["Content-Length"] = tostring(16 * 1024 * 1024 + 1)}})
+    assert(status == 502 and #calls == 1, "basic response limit changed or original requested")
 end)
 
 print("PASS all " .. total .. " front JSON contract checks")

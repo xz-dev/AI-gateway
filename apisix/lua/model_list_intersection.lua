@@ -37,7 +37,11 @@ local READ_CHUNK_BYTES = 64 * 1024
 local ACTIVE_DICT_NAME = "model-list-intersection"
 local ACTIVE_KEY = "active"
 local ACTIVE_LEASE_SECONDS = 120
-local MAX_INFLIGHT = 2
+local MAX_INFLIGHT = 3
+-- 槽位占满时短暂排队等待：构建已被边车缓存加速，占用窗口通常<2s，
+-- 瞬时并发的请求等一拍比直接503重试更省一次往返。
+local ACQUIRE_WAIT_SECONDS = 4
+local ACQUIRE_RETRY_DELAY = 0.1
 
 local ERROR_BODY =
     '{"error":{"code":"model_catalog_intersection_failed",' ..
@@ -375,13 +379,20 @@ local function acquire(ctx)
         return nil, "shared admission dictionary is unavailable"
     end
 
-    local active, err = dict:incr(ACTIVE_KEY, 1, 0)
-    if not active then
-        return nil, "failed acquiring admission slot: " .. tostring(err)
-    end
-    if active > MAX_INFLIGHT then
+    local deadline = ngx.now() + ACQUIRE_WAIT_SECONDS
+    while true do
+        local active, err = dict:incr(ACTIVE_KEY, 1, 0)
+        if not active then
+            return nil, "failed acquiring admission slot: " .. tostring(err)
+        end
+        if active <= MAX_INFLIGHT then
+            break
+        end
         dict:incr(ACTIVE_KEY, -1)
-        return nil, "concurrency limit reached"
+        if ngx.now() >= deadline then
+            return nil, "concurrency limit reached"
+        end
+        ngx.sleep(ACQUIRE_RETRY_DELAY)
     end
 
     dict:expire(ACTIVE_KEY, ACTIVE_LEASE_SECONDS)

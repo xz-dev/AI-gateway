@@ -351,6 +351,24 @@ sub2api_environment = services.get("sub2api", {}).get("environment") or {}
 if sub2api_environment.get("UPDATE_PROXY_URL") != "http://sub2api-egress-relay:3128":
     raise SystemExit("Sub2API update and pricing clients must use the fail-closed egress relay")
 
+# The synchronizer is deliberately a direct, private CPA management peer, not
+# another source/target relay chain. It cannot reach an external network.
+sync = services.get("cpa-model-sync", {})
+if service_networks(sync) != {"model-sync-cpa"} or network_members.get("model-sync-cpa") != {"cpa-model-sync", "cpa-netns"}:
+    raise SystemExit("model synchronization must have a dedicated direct CPA pair")
+if str(sync.get("user")) != "65534:65534" or not sync.get("read_only") or sync.get("ports") or sync.get("healthcheck"):
+    raise SystemExit("model synchronization must be non-root/read-only without ports or healthcheck timers")
+if {str(cap).upper() for cap in sync.get("cap_drop", [])} != {"ALL"} or sync.get("cap_add"):
+    raise SystemExit("model synchronization must drop all capabilities")
+cpa_ip = services["cpa-netns"]["networks"]["model-sync-cpa"]["ipv4_address"]
+hosts = sync.get("extra_hosts") or {}
+if isinstance(hosts, dict):
+    direct = hosts.get("cli-proxy-api") == cpa_ip
+else:
+    direct = any(host in (f"cli-proxy-api:{cpa_ip}", f"cli-proxy-api={cpa_ip}") for host in hosts)
+if not direct:
+    raise SystemExit("model synchronization must resolve cli-proxy-api directly to CPA")
+
 key_holders = {service for service, config in services.items() if "/etc/squid/ca.key" in volume_targets(config)}
 if key_holders != {"egress-proxy"}:
     raise SystemExit(f"private egress CA key holders: {sorted(key_holders)}")

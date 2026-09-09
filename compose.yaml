@@ -130,9 +130,11 @@ services:
         ipv4_address: 172.30.30.2
       wsalias-cpa-target:
         ipv4_address: 172.30.40.2
+      model-sync-cpa:
+        ipv4_address: 172.30.44.2
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api:v7.2.146-xz.1}
+    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:v7.2.152}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -297,7 +299,7 @@ services:
         ipv4_address: 172.30.19.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/wei-shaw/sub2api:0.1.185}
+    image: ${SUB2API_IMAGE:-docker.io/weishaw/sub2api:0.2.1}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
@@ -673,6 +675,32 @@ services:
       enricher-squid-source:
         ipv4_address: 172.30.31.2
 
+  cpa-model-sync:
+    build:
+      context: ./cpa-model-sync
+    image: ${CPA_MODEL_SYNC_IMAGE:-cpa-model-sync:v0.1.0}
+    user: "65534:65534"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    logging: *default-logging
+    environment:
+      CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY:?Set CPA_MANAGEMENT_KEY in .env}
+    volumes:
+      - ${CPA_MODEL_SYNC_CONFIG:-./cpa-model-sync/config.example.json}:/app/config.json:ro,Z
+    extra_hosts:
+      - "cli-proxy-api:172.30.44.2"
+    networks:
+      model-sync-cpa:
+        ipv4_address: 172.30.44.3
+    depends_on:
+      cli-proxy-api: {condition: service_started}
+
   models-enricher:
     build:
       context: ./models-enricher
@@ -685,7 +713,7 @@ services:
       enricher-cpa-relay: {condition: service_started, restart: true}
       enricher-squid-relay: {condition: service_started, restart: true}
     pids_limit: 64
-    # 单飞合并后单次构建峰值 << 128m；256m 为并发余量（6 并发构建曾触发 128m cgroup OOM）
+    # 上游文件缓存也计入256m预算；32m缓存加原子替换临时文件最多64m。
     mem_limit: 256m
     memswap_limit: 256m
     cpus: 0.5
@@ -693,6 +721,8 @@ services:
     cap_drop: [ALL]
     logging: *default-logging
     security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     environment:
       LISTEN_ADDR: :8090
       CONFIG_PATH: /app/config.yaml
@@ -808,7 +838,6 @@ services:
     # （internal-only 网络上的容器端口发布会被 Docker 静默跳过）
     volumes:
       - ./model-catalog-sidecar/templates:/etc/nginx/templates:ro,Z
-      - ./model-catalog-sidecar/html:/usr/share/nginx/html:ro,Z
     networks:
       apisix-catalog-source:
         ipv4_address: 172.30.41.3
@@ -861,6 +890,9 @@ services:
         gw_priority: 1
 
 networks:
+  model-sync-cpa:
+    internal: true
+    ipam: {config: [{subnet: 172.30.44.0/29}]}
   cpa-host-source:
     ipam: {config: [{subnet: 172.30.1.0/29}]}
   host-cpa-target:

@@ -15,10 +15,14 @@ server {
         proxy_max_temp_file_size 0;
     }
 
-    # 诊断单页：静态 HTML，页面内同源拉 /v1/models 渲染
+    # 诊断页由Go完整渲染；浏览器不再请求JSON或执行页面脚本。
     location = /models-table {
-        root /usr/share/nginx/html;
-        try_files /models-table.html =404;
+        proxy_pass http://172.30.42.2:9080;
+        proxy_http_version 1.1;
+        proxy_set_header Host "apisix-models";
+        proxy_set_header Connection "";
+        proxy_read_timeout 60s;
+        proxy_max_temp_file_size 0;
     }
 
     location / {
