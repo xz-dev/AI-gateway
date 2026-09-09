@@ -1,8 +1,13 @@
 # models-enricher 配置；channels.<key> 精确匹配 CPA prefix。
 # 未配置的渠道保留CPA基线；已配置渠道默认获取自身目录。
-# 无 source_priority 时不请求外部补全来源。
+# 全局 source_priority 是兜底链：模型级 > 渠道级 > 全局；显式 [] 关闭。
+# bare_models_takeover 开启后，CPA manifest 里的裸模型（主人手设，无渠道前缀）
+# 不再被入口过滤，改用全局链动态补全；static/custom 显式声明仍覆盖动态结果。
 # 已启用步骤无可用缓存且失败时，整个渠道退回纯CPA记录。
 cpa_base_url: http://cpa:8317
+
+bare_models_takeover: true
+source_priority: [models.dev/zai, models.dev/openai, models.dev/anthropic]
 http_concurrency: 8
 channels:
   axis:

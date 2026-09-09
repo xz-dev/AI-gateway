@@ -45,6 +45,12 @@ type Config struct {
 	StaticModels      []map[string]any         `yaml:"static_models"`
 	ProviderPrefixMap yaml.Node                `yaml:"provider_prefix_map"`
 
+	// BareModelsTakeover 开启后，CPA manifest 中无前缀的裸模型（主人手设）
+	// 不再被入口过滤，改用全局链动态补全；显式声明（static/custom）仍然覆盖动态结果。
+	BareModelsTakeover bool `yaml:"bare_models_takeover"`
+	// GlobalSourcePriority 是全局兜底链：模型级 > 渠道级 > 全局。
+	GlobalSourcePriority []string `yaml:"source_priority"`
+
 	providerPrefixes providerPrefixes
 }
 
@@ -66,6 +72,10 @@ type ChannelConfig struct {
 	OllamaNativeBase  string                    `yaml:"ollama_native_base_url"`
 	Models            map[string]ModelConfig    `yaml:"models"`
 	ProviderPrefixMap yaml.Node                 `yaml:"provider_prefix_map"`
+
+	// globalChain 是 loadConfig 注入的全局兜底链（yaml:"-"）；仅当模型级与渠道级均未
+	// 显式配置时生效。显式 source_priority: [] 关闭继承。
+	globalChain []string `yaml:"-"`
 
 	providerPrefixes providerPrefixes
 	include          []*regexp.Regexp
@@ -100,13 +110,16 @@ func (ch ChannelConfig) modelMetadataFrom(name string) string {
 	return ""
 }
 
-// sourceChain：两级整体替换 — 模型 > 渠道。无全局/内置默认；
-// 空链表示不启用外部来源；显式模型空链可以关闭渠道继承的来源。
+// sourceChain：三级整体替换 — 模型 > 渠道 > 全局（globalChain，loadConfig 注入）。
+// 空链表示不启用外部来源；显式模型/渠道空链（`[]`）可以关闭全局兜底。
 func sourceChain(ch ChannelConfig, model string) []string {
 	if mc, ok := ch.Models[model]; ok && mc.SourcePriority != nil {
 		return mc.SourcePriority
 	}
-	return ch.SourcePriority
+	if ch.SourcePriority != nil {
+		return ch.SourcePriority
+	}
+	return ch.globalChain
 }
 
 func chainHas(chain []string, token string) bool {
@@ -162,6 +175,12 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.OverallDeadline <= 0 {
 		cfg.OverallDeadline = 25 * time.Second
 	}
+	// 全局链 token 校验与渠道链同规则；ollama_cloud 只能在具体渠道声明。
+	for _, token := range cfg.GlobalSourcePriority {
+		if !validSourceToken(token) || token == "ollama_cloud" {
+			return nil, fmt.Errorf("source_priority: invalid global source token %q", token)
+		}
+	}
 	for key := range cfg.Channels {
 		if _, dup := cfg.CustomChannels[key]; dup {
 			return nil, fmt.Errorf("channels.%s: also defined as custom channel", key)
@@ -173,6 +192,7 @@ func loadConfig(path string) (*Config, error) {
 			return nil, err
 		}
 		ch.providerPrefixes = mergeProviderPrefixes(cfg.providerPrefixes, ch.providerPrefixes)
+		ch.globalChain = cfg.GlobalSourcePriority
 		cfg.Channels[name] = ch
 	}
 	for name, ch := range cfg.CustomChannels {
@@ -192,6 +212,7 @@ func loadConfig(path string) (*Config, error) {
 			return nil, err
 		}
 		ch.providerPrefixes = mergeProviderPrefixes(cfg.providerPrefixes, ch.providerPrefixes)
+		ch.globalChain = cfg.GlobalSourcePriority
 		cfg.CustomChannels[name] = ch
 	}
 	for i, sm := range cfg.StaticModels {

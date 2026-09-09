@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // 身份证据只决定如何筛选当前公开成员，管理列表从不直接添加公开记录。
@@ -127,6 +128,13 @@ func (ids *catalogIdentities) filter(base *Manifest, cfg *Config) (*Manifest, in
 	fallbackCount := 0
 	for _, model := range base.Models {
 		id := asString(model["slug"])
+		if cfg.BareModelsTakeover && !strings.Contains(id, "/") && !static[id] && !ids.qualified[id] {
+			// 裸模型接管：主人手设的裸名不再被入口过滤，进入动态补全；
+			// 无源命中时保留 CPA 原始字段（fail-open，与 unavailable 同语义）。
+			out.admitted[id] = true
+			out.Models = append(out.Models, model)
+			continue
+		}
 		switch {
 		case ids.qualified[id]: // 同名也有已声明路由时，保留该路由。
 			out.preserveNative[id] = ids.nativeOnly[id] && !static[id]

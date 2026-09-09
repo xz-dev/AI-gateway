@@ -108,6 +108,8 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 		bySlug[slug] = entry
 	}
 	if base != nil {
+		// bareCfg 是裸模型动态补全的链配置：全局链经 loadConfig 注入，无渠道/模型覆盖。
+		bareCfg := ChannelConfig{globalChain: cfg.GlobalSourcePriority}
 		for _, model := range base.Models {
 			slug := asString(model["slug"])
 			if baselineSlug(slug) {
@@ -120,6 +122,15 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 			overlayMetadata(entry, model)
 			// 重复 native slug 保持前项优先。
 			overlayMetadata(entry, bySlug[slug])
+			// 裸模型接管：动态补全后无源命中时保留 CPA 原始字段（fail-open）。
+			if cfg.BareModelsTakeover && !strings.Contains(slug, "/") && len(cfg.GlobalSourcePriority) > 0 {
+				queries := sourceQueries(bareCfg, slug)
+				for i := len(queries) - 1; i >= 0; i-- {
+					if hit, ok := tables.lookupQuery(queries[i]); ok {
+						overlayMetadata(entry, hit)
+					}
+				}
+			}
 			put(slug, entry)
 		}
 	}

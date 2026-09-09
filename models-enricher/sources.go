@@ -151,6 +151,15 @@ func requiredSources(cfg *Config, base *Manifest, fetched []channelModels) map[s
 			add(ch, name)
 		}
 	}
+	// 裸模型接管：裸名需要的全局链来源也计入拉取集合。
+	if cfg.BareModelsTakeover && base != nil && len(cfg.GlobalSourcePriority) > 0 {
+		bare := ChannelConfig{globalChain: cfg.GlobalSourcePriority}
+		for _, model := range base.Models {
+			if slug := asString(model["slug"]); !strings.Contains(slug, "/") && base.admitted[slug] && !base.preserveNative[slug] {
+				add(bare, slug)
+			}
+		}
+	}
 	return needed
 }
 
