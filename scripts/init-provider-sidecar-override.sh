@@ -68,7 +68,11 @@ services:
     cpus: 0.5
     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=4m"]
     cap_drop: [ALL]
-    cap_add: [NET_ADMIN]
+    # DAC_OVERRIDE: after docker restart/boot the daemon re-mounts /etc/resolv.conf
+    # read-only and tun2proxy falls back to directly rewriting it; without this
+    # capability root gets EACCES on open(O_WRONLY) and the tunnel crash-loops
+    # until the container is recreated. Verified by bisect on the running host.
+    cap_add: [NET_ADMIN, DAC_OVERRIDE]
     devices: [/dev/net/tun:/dev/net/tun]
     security_opt: [no-new-privileges:true]
     sysctls:
