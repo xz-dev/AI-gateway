@@ -2,6 +2,8 @@
 
 Scope: `simplify-layered-model-metadata`, including the explicitly authorized minimal front-intersection JSON fidelity correction. This report describes local implementation and fixtures, **not deployment, live inference, or an independent review**. The attempted subagent could not start; the checks below were run by the implementing agent.
 
+Output-alias equality and nine-column results below describe the earlier implementation. The current output-field contract and browser checker use independent keys and eleven columns; see [output-token verification](output-token-field-semantics-verification.md). Historical measurements below are not new validation results.
+
 ## Behavior and evidence
 
 - The shared structural merge recursively overlays objects, atomically replaces arrays, ignores null object properties, and preserves explicit false/zero/empty values. Public unknown fields remain ordinary metadata.
@@ -48,7 +50,7 @@ podman run --rm --network none --pull=never \
   -test.run '^TestCatalogHTTPFixture$' -test.v -test.timeout=60s
 ```
 
-For the existing Playwright tool, intercept only `http://catalog-fixture.test/**`: fulfill `/models-table` with the absolute path to `model-catalog-sidecar/html/models-table.html`, and `/v1/models?client_version=v0.65.0` with `models-enricher/testdata/models-table.json` as `application/json`. Navigate to the page, then run `models-enricher/testdata/models-table-check.js` with the tool's `filename` argument. The checker returns the actual cells and request list, then exercises HTTP and transport errors. Use `route.fulfill({path: ...})`; the tool sandbox does not expose Node imports.
+The former static-HTML/browser-fetch setup is historical. The current checker consumes actual Go-rendered HTTP HTML with JavaScript disabled; use [the SSR fixture procedure](models-table-ssr-verification.md#reproduce). Do not serve the raw template as a rendered document or synthesize a second renderer in the browser harness.
 
 Apply-baseline scope audit: 11 existing files changed and eight files added, all within the authorized code/page/test/documentation paths. No baseline file is missing; protected WS and closeout files and deployment configurations retain their baseline hashes. The existing middleware gitlink is unchanged (it is not a newly added file). HEAD remains `b59a7598fcca864d62fcabe46492bd587c15b6f2`; nothing is staged.
 

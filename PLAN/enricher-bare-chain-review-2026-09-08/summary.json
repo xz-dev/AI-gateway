@@ -1,0 +1,781 @@
+{
+  "fixed_code_comparison": {
+    "queries_changed": 94,
+    "source_layer_changes": 78,
+    "record_changes": 21,
+    "record_operations": {
+      "add": 236,
+      "replace": 65,
+      "remove": 43
+    },
+    "id_presence_changed": 8,
+    "id_added": [
+      "congee/gpt-5.5",
+      "congee/gpt-5.6",
+      "congee/gpt-5.6-luna",
+      "congee/gpt-5.6-sol",
+      "congee/gpt-5.6-terra",
+      "congee/gpt-6-astra",
+      "xl/hy4-preview"
+    ],
+    "id_removed": [
+      "xl/omen-alpha"
+    ],
+    "before": {
+      "queries": 222,
+      "query_results": {
+        "miss": 31,
+        "hit": 94,
+        "ambiguous": 78,
+        "native input not in bulk fixture": 19
+      },
+      "source_output": 60
+    },
+    "after": {
+      "queries": 415,
+      "query_results": {
+        "miss": 227,
+        "hit": 169,
+        "native input not in bulk fixture": 19
+      },
+      "source_output": 135
+    },
+    "bare76_missing_source_output": [],
+    "bare76_source_changed": 76,
+    "qualified_changes": [],
+    "native_gaps": [
+      "ollama-cloud/deepseek-v4-flash:0731",
+      "ollama-cloud/deepseek-v4-pro:0813",
+      "ollama-cloud/gemma4:31b",
+      "ollama-cloud/glm-5.1",
+      "ollama-cloud/glm-5.2",
+      "ollama-cloud/glm-5.3",
+      "ollama-cloud/glm-5.3-flash",
+      "ollama-cloud/gpt-oss:120b",
+      "ollama-cloud/gpt-oss:20b",
+      "ollama-cloud/kimi-k2.6",
+      "ollama-cloud/kimi-k2.7-code",
+      "ollama-cloud/kimi-k3",
+      "ollama-cloud/minimax-m2.7",
+      "ollama-cloud/minimax-m3",
+      "ollama-cloud/mistral-large-3:675b",
+      "ollama-cloud/nemotron-3-nano:30b",
+      "ollama-cloud/nemotron-3-super",
+      "ollama-cloud/nemotron-3-ultra",
+      "ollama-cloud/qwen3.5:397b"
+    ],
+    "missing_static_parent": true,
+    "record_changed_by_channel": {
+      "congee": 6,
+      "ollama-cloud": 2,
+      "xl": 5,
+      "zcode": 8
+    }
+  },
+  "fixed_config_comparison": {
+    "queries_changed": 1,
+    "source_layer_changes": 0,
+    "record_changes": 0,
+    "record_operations": {},
+    "id_presence_changed": 0,
+    "id_added": [],
+    "id_removed": [],
+    "after": {
+      "queries": 415,
+      "query_results": {
+        "miss": 227,
+        "hit": 169,
+        "native input not in bulk fixture": 19
+      },
+      "source_output": 135
+    },
+    "cleanup": {
+      "queries": 415,
+      "query_results": {
+        "miss": 227,
+        "hit": 169,
+        "native input not in bulk fixture": 19
+      },
+      "source_output": 135
+    },
+    "bare76_missing_source_output": [],
+    "bare76_source_changed": 0,
+    "qualified_changes": [],
+    "native_gaps": [
+      "ollama-cloud/deepseek-v4-flash:0731",
+      "ollama-cloud/deepseek-v4-pro:0813",
+      "ollama-cloud/gemma4:31b",
+      "ollama-cloud/glm-5.1",
+      "ollama-cloud/glm-5.2",
+      "ollama-cloud/glm-5.3",
+      "ollama-cloud/glm-5.3-flash",
+      "ollama-cloud/gpt-oss:120b",
+      "ollama-cloud/gpt-oss:20b",
+      "ollama-cloud/kimi-k2.6",
+      "ollama-cloud/kimi-k2.7-code",
+      "ollama-cloud/kimi-k3",
+      "ollama-cloud/minimax-m2.7",
+      "ollama-cloud/minimax-m3",
+      "ollama-cloud/mistral-large-3:675b",
+      "ollama-cloud/nemotron-3-nano:30b",
+      "ollama-cloud/nemotron-3-super",
+      "ollama-cloud/nemotron-3-ultra",
+      "ollama-cloud/qwen3.5:397b"
+    ],
+    "missing_static_parent": true,
+    "record_changed_by_channel": {}
+  },
+  "stage1_live": {
+    "before_members": 187,
+    "after_members": 187,
+    "changed_records": 130,
+    "record_operations": {
+      "add": 1363,
+      "replace": 374,
+      "remove": 43
+    },
+    "id_added": [
+      "xl/deepseek-v4-flash",
+      "xl/glm-5.3",
+      "xl/glm-5.3-flash",
+      "axis/gpt-5.3-codex-spark",
+      "xl/gpt-5.3-codex-spark",
+      "axis/gpt-5.5",
+      "congee/gpt-5.5",
+      "axis/gpt-5.6",
+      "congee/gpt-5.6",
+      "axis/gpt-5.6-luna",
+      "congee/gpt-5.6-luna",
+      "xl/gpt-5.6-luna",
+      "axis/gpt-5.6-sol",
+      "congee/gpt-5.6-sol",
+      "xl/gpt-5.6-sol",
+      "axis/gpt-5.6-terra",
+      "congee/gpt-5.6-terra",
+      "xl/gpt-5.6-terra",
+      "axis/gpt-6-astra",
+      "congee/gpt-6-astra",
+      "xl/gpt-6-astra",
+      "xl/gpt-image-2",
+      "xl/grok-4.5",
+      "xl/grok-4.6",
+      "xl/grok-build-0.1",
+      "xl/hy4-preview",
+      "xl/kimi-k3"
+    ],
+    "id_removed": [
+      "xl/omen-alpha"
+    ],
+    "field_added": {
+      "display_name": [],
+      "context_window": [],
+      "max_input_tokens": [
+        "commandcode/gpt-5.3-codex",
+        "axis/gpt-5.3-codex-spark",
+        "xl/gpt-5.3-codex-spark",
+        "commandcode/gpt-5.4",
+        "commandcode/gpt-5.4-mini",
+        "axis/gpt-5.5",
+        "commandcode/gpt-5.5",
+        "congee/gpt-5.5",
+        "axis/gpt-5.6",
+        "congee/gpt-5.6",
+        "axis/gpt-5.6-luna",
+        "commandcode/gpt-5.6-luna",
+        "congee/gpt-5.6-luna",
+        "xl/gpt-5.6-luna",
+        "axis/gpt-5.6-sol",
+        "commandcode/gpt-5.6-sol",
+        "congee/gpt-5.6-sol",
+        "xl/gpt-5.6-sol",
+        "axis/gpt-5.6-terra",
+        "commandcode/gpt-5.6-terra",
+        "congee/gpt-5.6-terra",
+        "xl/gpt-5.6-terra",
+        "axis/gpt-6-astra",
+        "congee/gpt-6-astra",
+        "xl/gpt-6-astra",
+        "xl/gpt-image-2"
+      ],
+      "max_tokens": [],
+      "max_completion_tokens": [],
+      "max_output_tokens": [
+        "commandcode/claude-fable-5",
+        "shuaiapi/claude-fable-5",
+        "commandcode/claude-fable-5-1",
+        "shuaiapi/claude-fable-5-1",
+        "shuaiapi/claude-haiku-4-5",
+        "commandcode/claude-haiku-4-5-20251001",
+        "shuaiapi/claude-haiku-4-5-20251001",
+        "shuaiapi/claude-opus-4-5",
+        "shuaiapi/claude-opus-4-5-20251101",
+        "shuaiapi/claude-opus-4-6",
+        "commandcode/claude-opus-4-7",
+        "shuaiapi/claude-opus-4-7",
+        "commandcode/claude-opus-4-8",
+        "shuaiapi/claude-opus-4-8",
+        "commandcode/claude-opus-5",
+        "shuaiapi/claude-opus-5",
+        "shuaiapi/claude-sonnet-4-5-20250929",
+        "commandcode/claude-sonnet-4-6",
+        "shuaiapi/claude-sonnet-4-6",
+        "commandcode/claude-sonnet-5",
+        "shuaiapi/claude-sonnet-5",
+        "xl/deepseek-v4-flash",
+        "zcode/glm-4.5-air",
+        "zcode/glm-4.6",
+        "zcode/glm-4.6v",
+        "zcode/glm-4.7",
+        "zcode/glm-5",
+        "zcode/glm-5-turbo",
+        "ollama-cloud/glm-5.1",
+        "zcode/glm-5.1",
+        "ollama-cloud/glm-5.2",
+        "zcode/glm-5.2",
+        "ollama-cloud/glm-5.3",
+        "xl/glm-5.3",
+        "zcode/glm-5.3",
+        "ollama-cloud/glm-5.3-flash",
+        "xl/glm-5.3-flash",
+        "zcode/glm-5v-turbo",
+        "commandcode/gpt-5.3-codex",
+        "axis/gpt-5.3-codex-spark",
+        "xl/gpt-5.3-codex-spark",
+        "commandcode/gpt-5.4",
+        "commandcode/gpt-5.4-mini",
+        "axis/gpt-5.5",
+        "commandcode/gpt-5.5",
+        "congee/gpt-5.5",
+        "axis/gpt-5.6",
+        "congee/gpt-5.6",
+        "axis/gpt-5.6-luna",
+        "commandcode/gpt-5.6-luna",
+        "congee/gpt-5.6-luna",
+        "xl/gpt-5.6-luna",
+        "axis/gpt-5.6-sol",
+        "commandcode/gpt-5.6-sol",
+        "congee/gpt-5.6-sol",
+        "xl/gpt-5.6-sol",
+        "axis/gpt-5.6-terra",
+        "commandcode/gpt-5.6-terra",
+        "congee/gpt-5.6-terra",
+        "xl/gpt-5.6-terra",
+        "axis/gpt-6-astra",
+        "congee/gpt-6-astra",
+        "xl/gpt-6-astra",
+        "xl/gpt-image-2",
+        "ollama-cloud/gpt-oss:120b",
+        "xl/grok-4.5",
+        "xl/grok-4.6",
+        "xl/grok-build-0.1",
+        "xl/hy4-preview",
+        "ollama-cloud/kimi-k2.6",
+        "ollama-cloud/kimi-k2.7-code",
+        "ollama-cloud/kimi-k3",
+        "xl/kimi-k3",
+        "ollama-cloud/minimax-m2.7",
+        "ollama-cloud/minimax-m3",
+        "ollama-cloud/nemotron-3-ultra"
+      ],
+      "input_modalities": [],
+      "output_modalities": [
+        "commandcode/claude-fable-5",
+        "shuaiapi/claude-fable-5",
+        "commandcode/claude-fable-5-1",
+        "shuaiapi/claude-fable-5-1",
+        "shuaiapi/claude-haiku-4-5",
+        "commandcode/claude-haiku-4-5-20251001",
+        "shuaiapi/claude-haiku-4-5-20251001",
+        "shuaiapi/claude-opus-4-5",
+        "shuaiapi/claude-opus-4-5-20251101",
+        "shuaiapi/claude-opus-4-6",
+        "commandcode/claude-opus-4-7",
+        "shuaiapi/claude-opus-4-7",
+        "commandcode/claude-opus-4-8",
+        "shuaiapi/claude-opus-4-8",
+        "commandcode/claude-opus-5",
+        "shuaiapi/claude-opus-5",
+        "shuaiapi/claude-sonnet-4-5-20250929",
+        "commandcode/claude-sonnet-4-6",
+        "shuaiapi/claude-sonnet-4-6",
+        "commandcode/claude-sonnet-5",
+        "shuaiapi/claude-sonnet-5",
+        "xl/deepseek-v4-flash",
+        "zcode/glm-4.5-air",
+        "zcode/glm-4.6",
+        "zcode/glm-4.6v",
+        "zcode/glm-4.7",
+        "zcode/glm-5",
+        "zcode/glm-5-turbo",
+        "ollama-cloud/glm-5.1",
+        "zcode/glm-5.1",
+        "ollama-cloud/glm-5.2",
+        "zcode/glm-5.2",
+        "ollama-cloud/glm-5.3",
+        "xl/glm-5.3",
+        "zcode/glm-5.3",
+        "ollama-cloud/glm-5.3-flash",
+        "xl/glm-5.3-flash",
+        "zcode/glm-5v-turbo",
+        "commandcode/gpt-5.3-codex",
+        "axis/gpt-5.3-codex-spark",
+        "xl/gpt-5.3-codex-spark",
+        "commandcode/gpt-5.4",
+        "commandcode/gpt-5.4-mini",
+        "axis/gpt-5.5",
+        "commandcode/gpt-5.5",
+        "congee/gpt-5.5",
+        "axis/gpt-5.6",
+        "congee/gpt-5.6",
+        "axis/gpt-5.6-luna",
+        "commandcode/gpt-5.6-luna",
+        "congee/gpt-5.6-luna",
+        "xl/gpt-5.6-luna",
+        "axis/gpt-5.6-sol",
+        "commandcode/gpt-5.6-sol",
+        "congee/gpt-5.6-sol",
+        "xl/gpt-5.6-sol",
+        "axis/gpt-5.6-terra",
+        "commandcode/gpt-5.6-terra",
+        "congee/gpt-5.6-terra",
+        "xl/gpt-5.6-terra",
+        "axis/gpt-6-astra",
+        "congee/gpt-6-astra",
+        "xl/gpt-6-astra",
+        "xl/gpt-image-2",
+        "ollama-cloud/gpt-oss:120b",
+        "xl/grok-4.5",
+        "xl/grok-4.6",
+        "xl/grok-build-0.1",
+        "xl/hy4-preview",
+        "ollama-cloud/kimi-k2.6",
+        "ollama-cloud/kimi-k2.7-code",
+        "ollama-cloud/kimi-k3",
+        "xl/kimi-k3",
+        "ollama-cloud/minimax-m2.7",
+        "ollama-cloud/minimax-m3",
+        "ollama-cloud/nemotron-3-ultra"
+      ],
+      "supported_reasoning_levels": [],
+      "default_reasoning_level": []
+    },
+    "field_removed": {
+      "display_name": [],
+      "context_window": [],
+      "max_input_tokens": [],
+      "max_tokens": [],
+      "max_completion_tokens": [],
+      "max_output_tokens": [
+        "xl/omen-alpha"
+      ],
+      "input_modalities": [],
+      "output_modalities": [
+        "xl/omen-alpha"
+      ],
+      "supported_reasoning_levels": [],
+      "default_reasoning_level": []
+    },
+    "missing_before": {
+      "display_name": 1,
+      "context_window": 1,
+      "max_input_tokens": 184,
+      "max_tokens": 141,
+      "max_completion_tokens": 187,
+      "max_output_tokens": 127,
+      "input_modalities": 1,
+      "output_modalities": 127,
+      "supported_reasoning_levels": 1,
+      "default_reasoning_level": 1
+    },
+    "missing_after": {
+      "display_name": 1,
+      "context_window": 1,
+      "max_input_tokens": 158,
+      "max_tokens": 141,
+      "max_completion_tokens": 187,
+      "max_output_tokens": 52,
+      "input_modalities": 1,
+      "output_modalities": 52,
+      "supported_reasoning_levels": 1,
+      "default_reasoning_level": 1
+    },
+    "fixed_members_absent_in_fresh_baseline": [
+      "axis/gpt-5.2-2025-12-11",
+      "axis/gpt-5.4-2026-03-05"
+    ],
+    "fresh_members_not_in_fixed": [],
+    "bare76_absent_live": [],
+    "bare76_missing_output": [],
+    "bare76_output_differs_from_fixed_bulk": {},
+    "qualified_records_changed": [
+      "commandcode/MiniMaxAI/MiniMax-M2.5",
+      "commandcode/MiniMaxAI/MiniMax-M2.7",
+      "commandcode/MiniMaxAI/MiniMax-M3",
+      "commandcode/Qwen/Qwen3.6-Max-Preview",
+      "commandcode/Qwen/Qwen3.6-Plus",
+      "commandcode/Qwen/Qwen3.7-Flash",
+      "commandcode/Qwen/Qwen3.7-Max",
+      "commandcode/Qwen/Qwen3.7-Plus",
+      "commandcode/Qwen/Qwen3.8-27B",
+      "commandcode/Qwen/Qwen3.8-Flash",
+      "commandcode/Qwen/Qwen3.8-Max",
+      "commandcode/Qwen/Qwen3.8-Max-0902",
+      "commandcode/deepseek/deepseek-v4-flash",
+      "commandcode/deepseek/deepseek-v4-flash-fast",
+      "commandcode/deepseek/deepseek-v4-flash-vision-exp",
+      "commandcode/deepseek/deepseek-v4-pro",
+      "commandcode/google/gemini-3.1-flash-lite",
+      "commandcode/google/gemini-3.5-flash",
+      "commandcode/google/gemini-3.5-flash-lite",
+      "commandcode/google/gemini-3.6-flash",
+      "commandcode/google/gemini-3.7-flash",
+      "commandcode/google/gemini-3.8-flash",
+      "commandcode/meituan/LongCat-2.0:free",
+      "commandcode/meta/muse-spark-1.1",
+      "commandcode/meta/muse-spark-1.2",
+      "commandcode/meta/muse-spark-1.2-contributor",
+      "commandcode/meta/muse-spark-1.3",
+      "commandcode/meta/muse-spark-1.3-contributor",
+      "commandcode/moonshotai/Kimi-K2.5",
+      "commandcode/moonshotai/Kimi-K2.6",
+      "commandcode/moonshotai/Kimi-K2.7-Code",
+      "commandcode/moonshotai/Kimi-K2.7-Code-Highspeed",
+      "commandcode/moonshotai/Kimi-K3",
+      "commandcode/nvidia/nemotron-3-ultra-550b-a55b",
+      "commandcode/poolside/laguna-s-2.1-free",
+      "commandcode/sakana/fugu-ultra",
+      "commandcode/stepfun/Step-3.5-Flash",
+      "commandcode/stepfun/Step-3.7-Flash",
+      "commandcode/tencent/hy3-paid",
+      "commandcode/tencent/hy4-preview",
+      "commandcode/thinkingmachines/inkling",
+      "commandcode/thinkingmachines/inkling-small",
+      "commandcode/xai/grok-4.5",
+      "commandcode/xai/grok-4.6",
+      "commandcode/xiaomi/mimo-v2.5",
+      "commandcode/xiaomi/mimo-v2.5-pro",
+      "commandcode/z-ai/glm-5.3-flash",
+      "commandcode/zai-org/GLM-5",
+      "commandcode/zai-org/GLM-5.1",
+      "commandcode/zai-org/GLM-5.2",
+      "commandcode/zai-org/GLM-5.2-Fast",
+      "commandcode/zai-org/GLM-5.3"
+    ]
+  },
+  "stage2_live": {
+    "before_members": 187,
+    "after_members": 187,
+    "changed_records": 67,
+    "record_operations": {
+      "replace": 67
+    },
+    "id_added": [],
+    "id_removed": [],
+    "field_added": {
+      "display_name": [],
+      "context_window": [],
+      "max_input_tokens": [],
+      "max_tokens": [],
+      "max_completion_tokens": [],
+      "max_output_tokens": [],
+      "input_modalities": [],
+      "output_modalities": [],
+      "supported_reasoning_levels": [],
+      "default_reasoning_level": []
+    },
+    "field_removed": {
+      "display_name": [],
+      "context_window": [],
+      "max_input_tokens": [],
+      "max_tokens": [],
+      "max_completion_tokens": [],
+      "max_output_tokens": [],
+      "input_modalities": [],
+      "output_modalities": [],
+      "supported_reasoning_levels": [],
+      "default_reasoning_level": []
+    },
+    "missing_before": {
+      "display_name": 1,
+      "context_window": 1,
+      "max_input_tokens": 158,
+      "max_tokens": 141,
+      "max_completion_tokens": 187,
+      "max_output_tokens": 52,
+      "input_modalities": 1,
+      "output_modalities": 52,
+      "supported_reasoning_levels": 1,
+      "default_reasoning_level": 1
+    },
+    "missing_after": {
+      "display_name": 1,
+      "context_window": 1,
+      "max_input_tokens": 158,
+      "max_tokens": 141,
+      "max_completion_tokens": 187,
+      "max_output_tokens": 52,
+      "input_modalities": 1,
+      "output_modalities": 52,
+      "supported_reasoning_levels": 1,
+      "default_reasoning_level": 1
+    },
+    "fixed_members_absent_in_fresh_baseline": [
+      "axis/gpt-5.2-2025-12-11",
+      "axis/gpt-5.4-2026-03-05"
+    ],
+    "fresh_members_not_in_fixed": [],
+    "bare76_absent_live": [],
+    "bare76_missing_output": [],
+    "bare76_output_differs_from_fixed_bulk": {},
+    "qualified_records_changed": [
+      "commandcode/MiniMaxAI/MiniMax-M2.5",
+      "commandcode/MiniMaxAI/MiniMax-M2.7",
+      "commandcode/MiniMaxAI/MiniMax-M3",
+      "commandcode/Qwen/Qwen3.6-Max-Preview",
+      "commandcode/Qwen/Qwen3.6-Plus",
+      "commandcode/Qwen/Qwen3.7-Flash",
+      "commandcode/Qwen/Qwen3.7-Max",
+      "commandcode/Qwen/Qwen3.7-Plus",
+      "commandcode/Qwen/Qwen3.8-27B",
+      "commandcode/Qwen/Qwen3.8-Flash",
+      "commandcode/Qwen/Qwen3.8-Max",
+      "commandcode/Qwen/Qwen3.8-Max-0902",
+      "commandcode/deepseek/deepseek-v4-flash",
+      "commandcode/deepseek/deepseek-v4-flash-fast",
+      "commandcode/deepseek/deepseek-v4-flash-vision-exp",
+      "commandcode/deepseek/deepseek-v4-pro",
+      "commandcode/google/gemini-3.1-flash-lite",
+      "commandcode/google/gemini-3.5-flash",
+      "commandcode/google/gemini-3.5-flash-lite",
+      "commandcode/google/gemini-3.6-flash",
+      "commandcode/google/gemini-3.7-flash",
+      "commandcode/google/gemini-3.8-flash",
+      "commandcode/meituan/LongCat-2.0:free",
+      "commandcode/meta/muse-spark-1.1",
+      "commandcode/meta/muse-spark-1.2",
+      "commandcode/meta/muse-spark-1.2-contributor",
+      "commandcode/meta/muse-spark-1.3",
+      "commandcode/meta/muse-spark-1.3-contributor",
+      "commandcode/moonshotai/Kimi-K2.5",
+      "commandcode/moonshotai/Kimi-K2.6",
+      "commandcode/moonshotai/Kimi-K2.7-Code",
+      "commandcode/moonshotai/Kimi-K2.7-Code-Highspeed",
+      "commandcode/moonshotai/Kimi-K3",
+      "commandcode/nvidia/nemotron-3-ultra-550b-a55b",
+      "commandcode/poolside/laguna-s-2.1-free",
+      "commandcode/sakana/fugu-ultra",
+      "commandcode/stepfun/Step-3.5-Flash",
+      "commandcode/stepfun/Step-3.7-Flash",
+      "commandcode/tencent/hy3-paid",
+      "commandcode/tencent/hy4-preview",
+      "commandcode/thinkingmachines/inkling",
+      "commandcode/thinkingmachines/inkling-small",
+      "commandcode/xai/grok-4.5",
+      "commandcode/xai/grok-4.6",
+      "commandcode/xiaomi/mimo-v2.5",
+      "commandcode/xiaomi/mimo-v2.5-pro",
+      "commandcode/z-ai/glm-5.3-flash",
+      "commandcode/zai-org/GLM-5",
+      "commandcode/zai-org/GLM-5.1",
+      "commandcode/zai-org/GLM-5.2",
+      "commandcode/zai-org/GLM-5.2-Fast",
+      "commandcode/zai-org/GLM-5.3"
+    ]
+  },
+  "original60": {
+    "max_input_tokens": {
+      "historical_missing": 57,
+      "selected_source_can_fill": []
+    },
+    "max_tokens": {
+      "historical_missing": 60,
+      "selected_source_can_fill": []
+    },
+    "max_completion_tokens": {
+      "historical_missing": 60,
+      "selected_source_can_fill": []
+    }
+  },
+  "reasoning_conflicts": [
+    {
+      "slug": "commandcode/deepseek/deepseek-v4-flash",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "commandcode/deepseek/deepseek-v4-flash-vision-exp",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "commandcode/deepseek/deepseek-v4-pro",
+      "default": "medium",
+      "levels": [
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "commandcode/moonshotai/Kimi-K3",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "commandcode/sakana/fugu-ultra",
+      "default": "medium",
+      "levels": [
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "slug": "commandcode/stepfun/Step-3.5-Flash",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "slug": "commandcode/z-ai/glm-5.3-flash",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "commandcode/zai-org/GLM-5.2",
+      "default": "medium",
+      "levels": [
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "commandcode/zai-org/GLM-5.3",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "nim/moonshotai/kimi-k3",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "ollama-cloud/deepseek-v4-flash:0731",
+      "default": "medium",
+      "levels": [
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "ollama-cloud/glm-5.2",
+      "default": "medium",
+      "levels": [
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "ollama-cloud/glm-5.3",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "ollama-cloud/glm-5.3-flash",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "ollama-cloud/kimi-k3",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "xl/deepseek-v4-flash",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "xl/glm-5.3",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "xl/glm-5.3-flash",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "xl/kimi-k3",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "slug": "zcode/glm-5.3",
+      "default": "medium",
+      "levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    }
+  ],
+  "local_private_evidence": "/root/.cache/bare-chain-fix.rkOJzF",
+  "production_private_evidence": "/root/AI-gateway/.bare-chain-20260908T155319Z",
+  "csv_sha256": {
+    "review.csv": "2e2dba0d632a6e706c30ce241bed7d9718ce7a1365e197db827435e20b34c285",
+    "models-table.csv": "ed1c6eab67c11f9261050abeb040ed1fe4b8764e4320121d10a9e2610a21cb44"
+  }
+}

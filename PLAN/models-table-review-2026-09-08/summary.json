@@ -1,0 +1,219 @@
+{
+  "observation": "189 models · client_version=1 · 2026-09-08T14:41:57Z",
+  "source_entry": "11d6fabe",
+  "source_message_sha256": "0ef64e2443e17f931e2bb54b3223664d0001513ccd33331afed64b45306b4023",
+  "table_rows": 189,
+  "unique_slugs": 189,
+  "columns": [
+    "slug",
+    "display_name",
+    "input_modalities",
+    "output_modalities",
+    "context_window",
+    "max_input_tokens",
+    "max_tokens(abandon)",
+    "max_completion_tokens",
+    "max_output_tokens",
+    "reasoning_levels",
+    "default_reasoning"
+  ],
+  "missing_counts_from_user_table": {
+    "display_name": 1,
+    "input_modalities": 1,
+    "output_modalities": 129,
+    "context_window": 1,
+    "max_input_tokens": 186,
+    "max_tokens(abandon)": 143,
+    "max_completion_tokens": 189,
+    "max_output_tokens": 129,
+    "reasoning_levels": 1,
+    "default_reasoning": 1
+  },
+  "classification_counts": {
+    "准确型号未找到，暂留未知": 9,
+    "原来源准确命中，可批量生成逐模型绑定": 76,
+    "原生透传或继承，不新增bulk补全": 37,
+    "主要字段已有值，不强补其他列": 60,
+    "仅其他来源有候选，需单独确认": 3,
+    "自有目录取数失败，先排查获取链": 1,
+    "静态父项缺失，先处理继承关系": 1,
+    "NIM需渠道映射加逐模型完整ID绑定": 2
+  },
+  "classification_by_channel": {
+    "axis": {
+      "准确型号未找到，暂留未知": 2,
+      "原来源准确命中，可批量生成逐模型绑定": 7
+    },
+    "codex": {
+      "原生透传或继承，不新增bulk补全": 9
+    },
+    "commandcode": {
+      "主要字段已有值，不强补其他列": 47,
+      "原来源准确命中，可批量生成逐模型绑定": 15,
+      "准确型号未找到，暂留未知": 3,
+      "仅其他来源有候选，需单独确认": 2
+    },
+    "congee": {
+      "原来源准确命中，可批量生成逐模型绑定": 6,
+      "准确型号未找到，暂留未知": 1
+    },
+    "gmicloud": {
+      "自有目录取数失败，先排查获取链": 1
+    },
+    "static": {
+      "原生透传或继承，不新增bulk补全": 4,
+      "静态父项缺失，先处理继承关系": 1
+    },
+    "kimi-coding": {
+      "原生透传或继承，不新增bulk补全": 8
+    },
+    "nim": {
+      "NIM需渠道映射加逐模型完整ID绑定": 2,
+      "主要字段已有值，不强补其他列": 1
+    },
+    "ollama-cloud": {
+      "主要字段已有值，不强补其他列": 7,
+      "准确型号未找到，暂留未知": 1,
+      "原来源准确命中，可批量生成逐模型绑定": 11
+    },
+    "shuaiapi": {
+      "原来源准确命中，可批量生成逐模型绑定": 13
+    },
+    "supergrok": {
+      "原生透传或继承，不新增bulk补全": 16
+    },
+    "xl": {
+      "原来源准确命中，可批量生成逐模型绑定": 14,
+      "准确型号未找到，暂留未知": 2,
+      "主要字段已有值，不强补其他列": 5,
+      "仅其他来源有候选，需单独确认": 1
+    },
+    "zcode": {
+      "原来源准确命中，可批量生成逐模型绑定": 10
+    }
+  },
+  "exact_existing_source_bindings": 78,
+  "proposed_source_queries_reachability": "passed; in-memory configuration only; not final merge acceptance",
+  "binding_reachability_log": "/root/.cache/models-table-review.7IASpu/binding-reachability.log",
+  "existing_source_candidates_equal_deployment_output_lost_set": true,
+  "candidates_declaring_max_input_tokens": 26,
+  "existing_source_slugs": [
+    "axis/gpt-5.3-codex-spark",
+    "axis/gpt-5.5",
+    "axis/gpt-5.6",
+    "axis/gpt-5.6-luna",
+    "axis/gpt-5.6-sol",
+    "axis/gpt-5.6-terra",
+    "axis/gpt-6-astra",
+    "commandcode/claude-fable-5",
+    "commandcode/claude-fable-5-1",
+    "commandcode/claude-haiku-4-5-20251001",
+    "commandcode/claude-opus-4-7",
+    "commandcode/claude-opus-4-8",
+    "commandcode/claude-opus-5",
+    "commandcode/claude-sonnet-4-6",
+    "commandcode/claude-sonnet-5",
+    "commandcode/gpt-5.3-codex",
+    "commandcode/gpt-5.4",
+    "commandcode/gpt-5.4-mini",
+    "commandcode/gpt-5.5",
+    "commandcode/gpt-5.6-luna",
+    "commandcode/gpt-5.6-sol",
+    "commandcode/gpt-5.6-terra",
+    "congee/gpt-5.5",
+    "congee/gpt-5.6",
+    "congee/gpt-5.6-luna",
+    "congee/gpt-5.6-sol",
+    "congee/gpt-5.6-terra",
+    "congee/gpt-6-astra",
+    "nim/deepseek-ai/deepseek-v4-flash-0731",
+    "nim/minimaxai/minimax-m3",
+    "ollama-cloud/glm-5.1",
+    "ollama-cloud/glm-5.2",
+    "ollama-cloud/glm-5.3",
+    "ollama-cloud/glm-5.3-flash",
+    "ollama-cloud/gpt-oss:120b",
+    "ollama-cloud/kimi-k2.6",
+    "ollama-cloud/kimi-k2.7-code",
+    "ollama-cloud/kimi-k3",
+    "ollama-cloud/minimax-m2.7",
+    "ollama-cloud/minimax-m3",
+    "ollama-cloud/nemotron-3-ultra",
+    "shuaiapi/claude-fable-5",
+    "shuaiapi/claude-fable-5-1",
+    "shuaiapi/claude-haiku-4-5",
+    "shuaiapi/claude-haiku-4-5-20251001",
+    "shuaiapi/claude-opus-4-5",
+    "shuaiapi/claude-opus-4-5-20251101",
+    "shuaiapi/claude-opus-4-6",
+    "shuaiapi/claude-opus-4-7",
+    "shuaiapi/claude-opus-4-8",
+    "shuaiapi/claude-opus-5",
+    "shuaiapi/claude-sonnet-4-5-20250929",
+    "shuaiapi/claude-sonnet-4-6",
+    "shuaiapi/claude-sonnet-5",
+    "xl/deepseek-v4-flash",
+    "xl/glm-5.3",
+    "xl/glm-5.3-flash",
+    "xl/gpt-5.3-codex-spark",
+    "xl/gpt-5.6-luna",
+    "xl/gpt-5.6-sol",
+    "xl/gpt-5.6-terra",
+    "xl/gpt-6-astra",
+    "xl/gpt-image-2",
+    "xl/grok-4.5",
+    "xl/grok-4.6",
+    "xl/grok-build-0.1",
+    "xl/hy4-preview",
+    "xl/kimi-k3",
+    "zcode/glm-4.5-air",
+    "zcode/glm-4.6",
+    "zcode/glm-4.6v",
+    "zcode/glm-4.7",
+    "zcode/glm-5",
+    "zcode/glm-5-turbo",
+    "zcode/glm-5.1",
+    "zcode/glm-5.2",
+    "zcode/glm-5.3",
+    "zcode/glm-5v-turbo"
+  ],
+  "default_reasoning_outside_levels": [
+    "commandcode/deepseek/deepseek-v4-flash",
+    "commandcode/deepseek/deepseek-v4-flash-vision-exp",
+    "commandcode/deepseek/deepseek-v4-pro",
+    "commandcode/moonshotai/Kimi-K3",
+    "commandcode/sakana/fugu-ultra",
+    "commandcode/stepfun/Step-3.5-Flash",
+    "commandcode/z-ai/glm-5.3-flash",
+    "commandcode/zai-org/GLM-5.2",
+    "commandcode/zai-org/GLM-5.3",
+    "nim/moonshotai/kimi-k3",
+    "ollama-cloud/deepseek-v4-flash:0731",
+    "xl/omen-alpha"
+  ],
+  "rows_with_candidate_existing_value_differences": 76,
+  "deployment_before_output_present": 89,
+  "deployment_after_output_present": 60,
+  "deployment_output_lost": 78,
+  "deployment_output_gained": 49,
+  "deployment_id_presence_changed": 29,
+  "fixture_sha256": {
+    "catalog": "f6b10cf8f62f5b2c786a44639ee9cefa3b65e407c8a7b92f35dbc5670a1960f0",
+    "api": "3335e4ab406bcb3fb8519d81ae53c8934c750a3359f75139795049bd7ced0612",
+    "flat": "e52b30487a8e48c6c582c3a3df8cf7608f2cf4f9cd1c0786221863df746c1f37",
+    "params": "10d5494c3eb4ebbe1cbb87b0375c35ad8f1ae627c5742dde72f70d6ff847d9aa"
+  },
+  "evidence": {
+    "fixed_lookup_projection": "/root/.cache/models-table-review.7IASpu/source-candidates.json",
+    "fixed_current_queries": "/root/.cache/provider-config-cleanup.QsWnZP/gap-inventory.json",
+    "projection_log": "/root/.cache/models-table-review.7IASpu/source-projection.log",
+    "source_projection_program": "/root/.cache/models-table-review.7IASpu/probe/table_review_test.go",
+    "review_program": "/root/.cache/models-table-review.7IASpu/review.py"
+  },
+  "csv_roundtrip_equal": true,
+  "files_sha256": {
+    "models-table.csv": "6d4e983120f94a127219769364a9711dd2ba7e46fce00134234b773a33cd8acc",
+    "models-table-review.csv": "34b6297e9f8b85ceb9b4b4d57aac301c000d28f28e414797a8d8a08a63eb7288",
+    "source-candidates.csv": "835022714a70565c7eeb3390eb25c93c744bd784776be1147d11bf485b8bb517"
+  }
+}
