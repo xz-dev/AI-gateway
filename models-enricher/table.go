@@ -20,6 +20,15 @@ var tableHTML string
 
 var modelsTable = template.Must(template.New("models-table").Parse(tableHTML))
 
+// 裸模型（无供应商前缀）在前，组内按slug字母序。
+func slugLess(a, b string) bool {
+	aBare, bBare := !strings.Contains(a, "/"), !strings.Contains(b, "/")
+	if aBare != bBare {
+		return aBare
+	}
+	return a < b
+}
+
 var tableColumns = []struct{ Label, Key string }{
 	{"slug", "slug"},
 	{"display_name", "display_name"},
@@ -71,7 +80,7 @@ func writeModelsTable(w http.ResponseWriter, status int, body []byte) {
 			status, body = errorJSON(http.StatusInternalServerError, "manifest_decode_failed", err.Error())
 		} else {
 			sort.SliceStable(manifest.Models, func(i, j int) bool {
-				return asString(manifest.Models[i]["slug"]) < asString(manifest.Models[j]["slug"])
+				return slugLess(asString(manifest.Models[i]["slug"]), asString(manifest.Models[j]["slug"]))
 			})
 			for _, model := range manifest.Models {
 				row := make([]tableCell, len(tableColumns))

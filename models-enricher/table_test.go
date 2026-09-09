@@ -10,6 +10,16 @@ import (
 	"testing"
 )
 
+// 裸模型排在前，同组内按slug字母序。
+func TestSlugLessBareFirst(t *testing.T) {
+	if !slugLess("glm-5.2", "axis/claude-sonnet-4") || slugLess("zcode/glm-4.6", "gpt-6-astra") {
+		t.Fatal("bare models must sort before provider-prefixed ones")
+	}
+	if !slugLess("glm-5.2", "glm-5.3") || !slugLess("axis/a", "axis/b") || slugLess("axis/b", "axis/a") {
+		t.Fatal("alphabetical order lost within a group")
+	}
+}
+
 // 无需执行JS的HTTP正文即含完整表格；与JSON入口使用同一份已准入数据。
 func TestModelsTableSSR(t *testing.T) {
 	raw, err := os.ReadFile("testdata/models-table.json")
