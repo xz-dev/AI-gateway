@@ -51,18 +51,17 @@ channels:
 # statics层用overrides把gpt四项的context压到372k（真实供应商限额），池内保持来源原值。
 custom_channels:
   static-parents:
-    source_priority: [models.dev/openai, models.dev/xai]
+    source_priority: [models.dev/openai, models.dev/xai, models.dev/zai-coding-plan, modelparams.dev/z-ai/subscription, models.dev/zai]
     models:
-      gpt-5.6-sol: {}
       gpt-5.6-terra: {}
       gpt-5.6-luna: {}
       gpt-6-astra: {}
       grok-4.6: {}
+      glm-5.2: {}
+      glm-5.3: {}
+      glm-5.3-flash: {}
 
 static_models:
-  - slug: gpt-5.6-sol
-    inherit: [static-parents/gpt-5.6-sol]
-    overrides: {context_window: 372000, max_context_window: 372000}
   - slug: gpt-5.6-terra
     inherit: [static-parents/gpt-5.6-terra]
     overrides: {context_window: 372000, max_context_window: 372000}
@@ -74,3 +73,9 @@ static_models:
     overrides: {context_window: 372000, max_context_window: 372000}
   - slug: grok-4.6
     inherit: [static-parents/grok-4.6]
+  - slug: glm-5.2
+    inherit: [static-parents/glm-5.2]
+  - slug: glm-5.3
+    inherit: [static-parents/glm-5.3]
+  - slug: glm-5.3-flash
+    inherit: [static-parents/glm-5.3-flash]

@@ -17,6 +17,7 @@ func TestNIMConfiguredFullIDMetadata(t *testing.T) {
 	// 读取实际NIM配置，只隔离无关渠道和静态模型，不在测试中补写查询规则。
 	cfg.Channels = map[string]ChannelConfig{"nim": cfg.Channels["nim"]}
 	cfg.StaticModels = nil
+	cfg.CustomChannels = nil
 
 	// 2026-09-08 models.dev API保存的NVIDIA字段；source-only是额外的成员准入哨兵。
 	// CPA输入只含原始成员和旧字段，不使用已富化目录。

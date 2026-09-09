@@ -151,14 +151,19 @@ func TestProviderPrefixCapturedReplay(t *testing.T) {
 	for _, row := range base.Models {
 		before[asString(row["slug"])] = row
 	}
-	if len(base.Models) != 189 || len(out.Models) != 189 || len(before) != 189 {
-		t.Fatal("fixed membership is not 189")
+	if len(base.Models) != 189 || len(out.Models) != 193 || len(before) != 189 {
+		t.Fatalf("fixed membership changed: base=%d out=%d before=%d", len(base.Models), len(out.Models), len(before))
 	}
 	rows := map[string]any{}
+	// 已批准新增：grok-4.6与GLM裸static（2026-09-09，虚拟池成员，不进fixture基线）。
+	approvedAdditions := map[string]bool{"grok-4.6": true, "glm-5.2": true, "glm-5.3": true, "glm-5.3-flash": true}
 	for _, row := range out.Models {
 		slug := asString(row["slug"])
 		old, exists := before[slug]
 		if !exists {
+			if approvedAdditions[slug] {
+				continue
+			}
 			t.Fatalf("member added: %s", slug)
 		}
 		if id, exists := old["id"]; exists {

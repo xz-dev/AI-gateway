@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestConfiguredSourcesAndFiveStaticModels(t *testing.T) {
+func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	cfg, err := loadConfig("config.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -19,8 +19,8 @@ func TestConfiguredSourcesAndFiveStaticModels(t *testing.T) {
 	if len(cfg.CustomChannels) != 1 || !exists {
 		t.Fatalf("static parent pool must be the only custom channel: %v", cfg.CustomChannels)
 	}
-	if !reflect.DeepEqual(pool.SourcePriority, []string{"models.dev/openai", "models.dev/xai"}) ||
-		len(pool.Models) != 5 || len(pool.Overrides) != 0 || len(pool.providerPrefixes) != 0 {
+	if !reflect.DeepEqual(pool.SourcePriority, []string{"models.dev/openai", "models.dev/xai", "models.dev/zai-coding-plan", "modelparams.dev/z-ai/subscription", "models.dev/zai"}) ||
+		len(pool.Models) != 7 || len(pool.Overrides) != 0 || len(pool.providerPrefixes) != 0 {
 		t.Fatalf("static parent pool must use only the declared subscription sources: %+v", pool)
 	}
 	for name, model := range pool.Models {
@@ -86,11 +86,13 @@ func TestConfiguredSourcesAndFiveStaticModels(t *testing.T) {
 		t.Fatal("Ollama source must retain its explicit native endpoint")
 	}
 	want := map[string]string{
-		"gpt-5.6-sol":   "static-parents/gpt-5.6-sol",
 		"gpt-5.6-terra": "static-parents/gpt-5.6-terra",
 		"gpt-5.6-luna":  "static-parents/gpt-5.6-luna",
 		"gpt-6-astra":   "static-parents/gpt-6-astra",
 		"grok-4.6":      "static-parents/grok-4.6",
+		"glm-5.2":       "static-parents/glm-5.2",
+		"glm-5.3":       "static-parents/glm-5.3",
+		"glm-5.3-flash": "static-parents/glm-5.3-flash",
 	}
 	if len(cfg.StaticModels) != len(want) {
 		t.Fatalf("static model count: got %d, want %d", len(cfg.StaticModels), len(want))
@@ -104,9 +106,9 @@ func TestConfiguredSourcesAndFiveStaticModels(t *testing.T) {
 			t.Fatalf("unexpected static mapping: %s", slug)
 		}
 		overrides, _ := static["overrides"].(map[string]any)
-		if slug == "grok-4.6" {
+		if slug == "grok-4.6" || strings.HasPrefix(slug, "glm-") {
 			if len(static) != 2 {
-				t.Fatalf("grok-4.6 must stay a pure source inherit: %v", static)
+				t.Fatalf("%s must stay a pure source inherit: %v", slug, static)
 			}
 		} else if len(static) != 3 || toInt(overrides["context_window"]) != 372000 || toInt(overrides["max_context_window"]) != 372000 {
 			t.Fatalf("gpt static %s must carry the 372000 context overrides: %v", slug, static)
@@ -132,16 +134,19 @@ func TestConfiguredSourcesAndFiveStaticModels(t *testing.T) {
 		bare[slug] = true
 	}
 	if !reflect.DeepEqual(bare, seen) {
-		t.Fatal("the five explicit static models changed")
+		t.Fatal("the explicit static models changed")
 	}
 	// 虚空池成员不进公开清单，但必须能用真实来源补齐静态元数据。
 	tables := emptySourceTables()
 	tables.setModelsDev(indexModelsDev([]byte(`{"openai":{"models":{
-		"gpt-5.6-sol":{"name":"GPT-5.6 Sol","limit":{"context":1050000,"input":922000,"output":128000}},
 		"gpt-5.6-terra":{"name":"GPT-5.6 Terra","limit":{"context":1050000,"input":922000,"output":128000}},
 		"gpt-5.6-luna":{"name":"GPT-5.6 Luna","limit":{"context":1050000,"input":922000,"output":128000}},
 		"gpt-6-astra":{"name":"GPT-6 Astra","limit":{"context":1050000,"input":922000,"output":128000}}}
-	},"xai":{"models":{"grok-4.6":{"name":"Grok 4.6","limit":{"context":500000,"output":500000}}}}
+	},"xai":{"models":{"grok-4.6":{"name":"Grok 4.6","limit":{"context":500000,"output":500000}}}},
+	"zai-coding-plan":{"models":{
+		"glm-5.2":{"name":"GLM-5.2","limit":{"context":1000000,"output":131072}},
+		"glm-5.3":{"name":"GLM-5.3","limit":{"context":1000000,"output":131072}},
+		"glm-5.3-flash":{"name":"GLM-5.3-Flash","limit":{"context":1000000,"output":131072}}}}
 	}`)), nil)
 	out = mergeManifest(base, nil, cfg, tables, nil)
 	if len(out.Models) != len(seen) {
@@ -152,6 +157,12 @@ func TestConfiguredSourcesAndFiveStaticModels(t *testing.T) {
 		if slug == "grok-4.6" {
 			if toInt(model["context_window"]) != 500000 || model["display_name"] != "Grok 4.6" {
 				t.Fatalf("grok-4.6 must inherit xai source: %v", model)
+			}
+			continue
+		}
+		if strings.HasPrefix(slug, "glm-") {
+			if toInt(model["context_window"]) != 1000000 || toInt(model["max_output_tokens"]) != 131072 || model["display_name"] == nil {
+				t.Fatalf("glm static %s must inherit the zai-coding-plan source: %v", slug, model)
 			}
 			continue
 		}
@@ -203,8 +214,8 @@ func TestCapturedSourceCompletion(t *testing.T) {
 		return by
 	}
 	before, after := replay(beforeConfig), replay(afterConfig)
-	if len(base.Models) != 189 || len(before) != 189 || len(after) != 189 {
-		t.Fatal("fixed 189-member snapshot changed")
+	if len(base.Models) != 189 || len(before) != 193 || len(after) != 193 {
+		t.Fatalf("fixed snapshot membership changed: base=%d before=%d after=%d", len(base.Models), len(before), len(after))
 	}
 	wantOutput := map[string]string{
 		"xl/muse-spark-1.3-contributor":          "131072",
