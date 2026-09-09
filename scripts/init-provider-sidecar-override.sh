@@ -57,7 +57,7 @@ services:
 
   provider-sidecar-tunnel:
     image: ${TUN2PROXY_IMAGE:?Set TUN2PROXY_IMAGE in .env}
-    restart: "no"
+    restart: unless-stopped
     depends_on:
       provider-sidecar-squid-relay:
         condition: service_started
@@ -74,6 +74,14 @@ services:
     sysctls:
       net.ipv6.conf.all.disable_ipv6: "1"
       net.ipv6.conf.default.disable_ipv6: "1"
+    healthcheck:
+      # tun2proxy-bin --version exits 0 once the process is alive and the netns is set up;
+      # service_healthy gate lets provider-sidecar wait for a usable netns before joining it.
+      test: [CMD, /usr/bin/tun2proxy-bin, --version]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
     command:
       - --proxy
       - http://172.30.23.3:3128
@@ -105,7 +113,7 @@ services:
     restart: unless-stopped
     depends_on:
       provider-sidecar-tunnel:
-        condition: service_started
+        condition: service_healthy
         restart: true
     pids_limit: 128
     mem_limit: 512m
