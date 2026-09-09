@@ -1,0 +1,17 @@
+{
+  "cpa_url": "http://cli-proxy-api:8317",
+  "client_version": "0.101.0",
+  "skip_channels": ["gmicloud"],
+  "channels": {
+    "nim": {
+      "include": [
+        "^minimaxai/minimax-m3$",
+        "^moonshotai/kimi-k3$",
+        "^deepseek-ai/deepseek-v4-flash-0731$"
+      ]
+    },
+    "shuaiapi": {
+      "include": ["^claude-"]
+    }
+  }
+}
