@@ -82,10 +82,9 @@ func parseOpenAI(body []byte) ([]ParsedModel, error) {
 		mapDeclaredField(m, "display_name", row["name"])
 		mapDeclaredField(m, "context_window", row["context_length"])
 		mapDeclaredField(m, "max_input_tokens", row["input_token_limit"])
-		mapDeclaredField(m, "max_output_tokens", declaredNested(row, "top_provider", "max_completion_tokens"), row["max_tokens"])
+		mapDeclaredField(m, "max_output_tokens", declaredNested(row, "top_provider", "max_completion_tokens"))
 		mapDeclaredField(m, "input_modalities", declaredNested(row, "architecture", "input_modalities"))
 		mapDeclaredField(m, "output_modalities", declaredNested(row, "architecture", "output_modalities"))
-		syncOutputAliases(m)
 		out = append(out, ParsedModel{ID: id, Metadata: m})
 	}
 	return out, nil
@@ -106,7 +105,6 @@ func parseClaude(body []byte) ([]ParsedModel, error) {
 		}
 		m := cloneMap(row)
 		mapDeclaredField(m, "display_name", row["name"])
-		syncOutputAliases(m)
 		out = append(out, ParsedModel{ID: id, Metadata: m})
 	}
 	return out, nil
@@ -128,8 +126,7 @@ func parseGemini(body []byte) ([]ParsedModel, error) {
 		m := cloneMap(row)
 		mapDeclaredField(m, "display_name", row["displayName"])
 		mapDeclaredField(m, "max_input_tokens", row["inputTokenLimit"])
-		mapDeclaredField(m, "max_output_tokens", row["outputTokenLimit"], row["max_tokens"])
-		syncOutputAliases(m)
+		mapDeclaredField(m, "max_output_tokens", row["outputTokenLimit"])
 		out = append(out, ParsedModel{ID: name, Metadata: m})
 	}
 	return out, nil

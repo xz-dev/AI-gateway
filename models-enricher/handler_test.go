@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,7 +27,8 @@ type fakeCPA struct {
 	nativeDelay     time.Duration
 	nativeCalls     atomic.Int64
 	nativeByVersion map[string][]byte
-	channelsBody    []byte // openai-compatibility kind 响应
+	oauthModels     []string // 显式原名夹具；账号同时注册原名和oauth/限定名。
+	channelsBody    []byte   // openai-compatibility kind 响应
 	showBodies      atomic.Value
 }
 
@@ -36,6 +38,30 @@ func (f *fakeCPA) handler() http.Handler {
 		"gemini-api-key", "xai-api-key", "interactions-api-key", "vertex-api-key",
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v0/management/auth-files", func(w http.ResponseWriter, r *http.Request) {
+		if len(f.oauthModels) == 0 {
+			w.Write([]byte(`{"files":[]}`))
+			return
+		}
+		w.Write([]byte(`{"files":[{"name":"fixture.json","provider":"codex"}]}`))
+	})
+	mux.HandleFunc("GET /v0/management/auth-files/models", func(w http.ResponseWriter, r *http.Request) {
+		models := []map[string]string{}
+		for _, id := range f.oauthModels {
+			models = append(models, map[string]string{"id": id}, map[string]string{"id": "oauth/" + id})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"models": models})
+	})
+	mux.HandleFunc("GET /v0/management/model-definitions/codex", func(w http.ResponseWriter, r *http.Request) {
+		models := []map[string]string{}
+		for _, id := range f.oauthModels {
+			models = append(models, map[string]string{"id": id})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"models": models})
+	})
+	mux.HandleFunc("GET /v0/management/oauth-model-alias", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"oauth-model-alias":{}}`))
+	})
 	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
 		f.nativeCalls.Add(1)
 		if f.nativeDelay > 0 {
@@ -123,8 +149,150 @@ func testCfg() *Config {
 }
 
 var testChannels = []byte(`{"openai-compatibility": [
-	{"name":"Ollama Cloud","prefix":"oc","base-url":"https://ollama.com/v1","api-key-entries":[{"auth-index":"k1"}]}
+	{"name":"Ollama Cloud","prefix":"oc","base-url":"https://ollama.com/v1","api-key-entries":[{"auth-index":"k1"}],"models":[{"name":"deepseek-v4-flash:preview"}]}
 ]}`)
+
+func TestHandlerPinsCPACatalogVersion(t *testing.T) {
+	const legacy = `{"models":[{"slug":"oauth/extended","supported_reasoning_levels":[{"effort":"high"}]},{"slug":"oauth/standard","supported_reasoning_levels":[{"effort":"high"}]}]}`
+	const full = `{"models":[{"slug":"oauth/extended","supported_reasoning_levels":[{"effort":"high"},{"effort":"max"},{"effort":"ultra"}]},{"slug":"oauth/standard","supported_reasoning_levels":[{"effort":"high"}]}]}`
+	fake := &fakeCPA{
+		native: []byte(legacy), nativeByVersion: map[string][]byte{"1": []byte(full)}, oauthModels: []string{"extended", "standard"},
+		channelsBody: []byte(`{"openai-compatibility":[{"prefix":"c","base-url":"https://unused.invalid","api-key-entries":[{}],"models":[{"name":"outside-native"}]}]}`),
+	}
+	upstreamVersions := make(chan string, 5)
+	backend := fake.handler()
+	cpa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" && r.Header.Get("Authorization") != "Bearer c" {
+			t.Error("native catalog lost its client credential")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/v0/management/api-call" {
+			var payload struct {
+				URL string `json:"url"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			u, err := url.Parse(payload.URL)
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			upstreamVersions <- u.Query().Get("client_version")
+			io.WriteString(w, `{"status_code":200,"body":{"data":[{"id":"outside-native"}]}}`)
+			return
+		}
+		backend.ServeHTTP(w, r)
+	}))
+	defer cpa.Close()
+	cfg := testCfg()
+	cfg.Channels = map[string]ChannelConfig{"c": {}}
+	h := newTestHandler(t, cfg, cpa)
+	for _, version := range []string{"v0.65.0", "v0.144.0", "arbitrary", "1"} {
+		t.Run(version, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/v1/models?client_version="+version, nil))
+			if w.Code != 200 {
+				t.Fatalf("HTTP %d: %s", w.Code, w.Body.String())
+			}
+			assertMetadataJSON(t, json.RawMessage(w.Body.Bytes()), full)
+			if got := <-upstreamVersions; got != version {
+				t.Fatalf("upstream inventory version = %q, want caller version %q", got, version)
+			}
+		})
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/models-table?client_version=ignored", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "client_version=1") {
+		t.Fatal("table did not use the fixed CPA catalog version")
+	}
+	if got := <-upstreamVersions; got != "v0.65.0" {
+		t.Fatalf("table changed its upstream inventory version: %q", got)
+	}
+}
+
+// 输出字段通过真实适配/合并路径到达HTTP目录，不在兄弟字段间互填。
+func TestHandlerOutputTokenFields(t *testing.T) {
+	cases := []struct {
+		name, fields, want string
+		overrides          map[string]any
+	}{
+		{"distinct", `"max_tokens":4096,"max_completion_tokens":16384,"max_output_tokens":8192`, `"max_tokens":4096,"max_completion_tokens":16384,"max_output_tokens":8192`, nil},
+		{"legacy-only", `"max_tokens":128000`, `"max_tokens":128000`, nil},
+		{"same-key-null", `"max_tokens":4096`, `"max_tokens":4096,"max_output_tokens":8192`, map[string]any{"max_tokens": nil, "max_output_tokens": 8192}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubSources(t)
+			fake := (&fakeCPA{
+				native:       []byte(`{"models":[{"slug":"c/m"}]}`),
+				channelsBody: []byte(`{"openai-compatibility":[{"prefix":"c","base-url":"https://unused.invalid","api-key-entries":[{}],"models":[{"name":"m"}]}]}`),
+			}).handler()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v0/management/api-call" {
+					io.WriteString(w, `{"status_code":200,"body":{"data":[{"id":"m",`+tc.fields+`}]}}`)
+					return
+				}
+				fake.ServeHTTP(w, r)
+			}))
+			t.Cleanup(server.Close)
+			cfg := testCfg()
+			cfg.Channels = map[string]ChannelConfig{"c": {Models: map[string]ModelConfig{"m": {Overrides: tc.overrides}}}}
+			rec := httptest.NewRecorder()
+			newTestHandler(t, cfg, server).ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models?client_version=output-fields", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("catalog status %d: %s", rec.Code, rec.Body.String())
+			}
+			var got Manifest
+			if err := decodeJSON(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			assertMetadataJSON(t, got.Models, `[{"slug":"c/m","id":"c/m",`+tc.want+`}]`)
+		})
+	}
+}
+
+// OAuth父项精确保留；static子项仅继承已声明的字段。日志供隔离页面验收使用。
+func TestHandlerOutputTokenPassthroughAndInheritance(t *testing.T) {
+	stubSources(t)
+	fake := &fakeCPA{
+		oauthModels: []string{"z", "a", "b", "c"},
+		native: []byte(`{"models":[
+			{"slug":"oauth/z","display_name":"<img src=x onerror=\"window.executed=true\">","input_modalities":["text","image"],"output_modalities":["text"],"context_window":null,"max_tokens":4096,"max_completion_tokens":16384,"max_output_tokens":8192},
+			{"slug":"oauth/a","display_name":"","output_modalities":[],"max_input_tokens":0,"max_tokens":128000},
+			{"slug":"oauth/b","max_tokens":null,"max_completion_tokens":0,"n":9007199254740993},
+			{"slug":"oauth/c","max_tokens":false,"max_completion_tokens":"","max_output_tokens":[]}
+		]}`),
+	}
+	server := httptest.NewServer(fake.handler())
+	t.Cleanup(server.Close)
+	cfg := testCfg()
+	cfg.Channels = nil
+	cfg.StaticModels = []map[string]any{{"slug": "static-a", "inherit": []any{"oauth/a"}}}
+	rec := httptest.NewRecorder()
+	newTestHandler(t, cfg, server).ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models?client_version=output-fields", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("catalog status %d: %s", rec.Code, rec.Body.String())
+	}
+	var got, native Manifest
+	if err := decodeJSON(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeJSON(fake.native, &native); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 5 {
+		t.Fatalf("membership changed: %+v", got.Models)
+	}
+	parents, _ := json.Marshal(native.Models)
+	assertMetadataJSON(t, got.Models[:4], string(parents))
+	assertMetadataJSON(t, got.Models[4], `{"slug":"static-a","display_name":"","output_modalities":[],"max_input_tokens":0,"max_tokens":128000}`)
+	t.Logf("output-token-handler-fixture: %s", rec.Body.String())
+}
 
 func TestHandlerFailClosedOnNativeFailure(t *testing.T) {
 	stubSources(t)
@@ -175,7 +343,8 @@ func TestHandlerConflictOnEmptyChannelPrefix(t *testing.T) {
 func TestHandlerHappyPath(t *testing.T) {
 	stubSources(t)
 	fake := &fakeCPA{
-		native:       []byte(`{"models": [{"slug":"oauth/m1","context_window":1000000}]}`),
+		oauthModels:  []string{"m1"},
+		native:       []byte(`{"models": [{"slug":"oauth/m1","context_window":1000000},{"slug":"oc/deepseek-v4-flash:preview"}]}`),
 		channelsBody: testChannels,
 	}
 	cpa := httptest.NewServer(fake.handler())
@@ -210,8 +379,8 @@ func TestHandlerHappyPath(t *testing.T) {
 	if m["context_window"] != 262144.0 {
 		t.Fatalf("ollama chain-first context: %+v", m)
 	}
-	// models.dev 填补 max_tokens 空缺（lookup_ids 改写命中）
-	if m["max_tokens"] != 8192.0 {
+	// models.dev 的明确 output 映射只填补 max_output_tokens（lookup_ids 改写命中）。
+	if m["max_output_tokens"] != 8192.0 {
 		t.Fatalf("dev gap-fill: %+v", m)
 	}
 	// parsed display_name 优先
@@ -229,7 +398,8 @@ func TestHandlerChannelFailureFailOpen(t *testing.T) {
 	stubSources(t)
 	// 渠道 fetch 失败（api-call 500）时整体仍 200，仅含 native
 	fake := &fakeCPA{
-		native: []byte(`{"models": [{"slug":"oauth/m1"}]}`),
+		oauthModels: []string{"m1"},
+		native:      []byte(`{"models": [{"slug":"oauth/m1"}]}`),
 		channelsBody: []byte(`{"openai-compatibility": [
 			{"name":"Ollama Cloud","prefix":"oc","base-url":"","api-key-entries":[{"auth-index":"k1"}]}
 		]}`),
@@ -261,10 +431,10 @@ func TestHandlerChannelFailureFailOpen(t *testing.T) {
 func TestHandlerConcurrentBuildsAreVersionScoped(t *testing.T) {
 	stubSources(t)
 	fake := &fakeCPA{
-		native: []byte(`{"models": [{"slug": "oauth/default"}]}`),
+		oauthModels: []string{"current"},
+		native:      []byte(`invalid-json`),
 		nativeByVersion: map[string][]byte{
-			"v0.65.0": []byte(`{"models": [{"slug": "oauth/old"}]}`),
-			"v0.66.0": []byte(`{"models": [{"slug": "oauth/new"}]}`),
+			"1": []byte(`{"models": [{"slug": "oauth/current"}]}`),
 		},
 		nativeDelay:  150 * time.Millisecond,
 		channelsBody: testChannels,
@@ -297,15 +467,17 @@ func TestHandlerConcurrentBuildsAreVersionScoped(t *testing.T) {
 			t.Fatalf("request %d: status %d, want 200", i, code)
 		}
 	}
-	if bytes.Equal(bodies[0], bodies[1]) {
-		t.Fatal("different client_versions shared the same catalog body")
+	// 非CPA渠道请求仍可能依赖调用方版本，所以完整构建保持分组；CPA基线统一。
+	if !bytes.Equal(bodies[0], bodies[1]) {
+		t.Fatal("fixed CPA catalog differed between caller versions")
 	}
 }
 
 func TestHandlerConcurrentBuildsCoalesce(t *testing.T) {
 	stubSources(t)
 	fake := &fakeCPA{
-		native:       []byte(`{"models": [{"id": "oauth/m1"}]}`),
+		oauthModels:  []string{"m1"},
+		native:       []byte(`{"models": [{"slug": "oauth/m1", "id": "oauth/m1"}]}`),
 		nativeDelay:  150 * time.Millisecond,
 		channelsBody: testChannels,
 	}

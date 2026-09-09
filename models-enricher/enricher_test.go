@@ -220,12 +220,12 @@ func TestValidateRuntimeEmptyNameOK(t *testing.T) {
 	}
 }
 
-func TestValidateRuntimeMissingChannelConfig(t *testing.T) {
-	cfg := &Config{Channels: map[string]ChannelConfig{}}
+func TestValidateRuntimeUnconfiguredChannelUsesDefaults(t *testing.T) {
 	channels := []Channel{chanOf("Axis", "axis")}
-	err := validateRuntime(cfg, channels, &Manifest{})
-	if ce, ok := err.(*configError); !ok || ce.code != "catalog_configuration_missing" {
-		t.Fatalf("missing channel config: %v", err)
+	for _, cfg := range []*Config{{}, {Channels: map[string]ChannelConfig{"axis": {}}}} {
+		if err := validateRuntime(cfg, channels, &Manifest{}); err != nil {
+			t.Fatalf("missing/empty channel config must use channel-only defaults: %v", err)
+		}
 	}
 }
 
@@ -273,7 +273,7 @@ func TestIndexModelsDevNamespaced(t *testing.T) {
 		"zhipuai": {"models": {"glm-5.3": {"id":"glm-5.3","limit":{"context":1000000,"output":131072}}}}
 	}`)
 	out := indexModelsDev(raw)
-	if h := out["zhipuai"]["glm-5.3"]; toInt(h["context_window"]) != 1000000 || toInt(h["max_tokens"]) != 131072 {
+	if h := out["zhipuai"]["glm-5.3"]; toInt(h["context_window"]) != 1000000 || toInt(h["max_output_tokens"]) != 131072 {
 		t.Fatalf("zhipuai namespace: %+v", h)
 	}
 	if h := out["digitalocean"]["glm-5.3"]; toInt(h["context_window"]) != 1048576 {
@@ -285,7 +285,7 @@ func TestIndexModelsDevFlat(t *testing.T) {
 	raw := []byte(`{"openai/gpt-5.6-sol": {"limit":{"context":1050000,"input":922000,"output":128000}}, "bare-key": {"limit":{"context":1}}}`)
 	out := indexModelsDevFlat(raw)
 	h := out["openai"]["gpt-5.6-sol"]
-	if toInt(h["context_window"]) != 1050000 || toInt(h["max_input_tokens"]) != 922000 || toInt(h["max_tokens"]) != 128000 {
+	if toInt(h["context_window"]) != 1050000 || toInt(h["max_input_tokens"]) != 922000 || toInt(h["max_output_tokens"]) != 128000 {
 		t.Fatalf("flat provider/model key fields: %+v", h)
 	}
 	if _, ok := out["bare-key"]; ok {
@@ -308,7 +308,7 @@ func TestMergeSourceMapsPreservesFirstSourceFields(t *testing.T) {
 	assertMetadataJSON(t, h["supported_reasoning_levels"], `[{"effort":"high"}]`)
 }
 
-func TestIndexModelparamsAuthTypeSplitAndProviderRequired(t *testing.T) {
+func TestIndexModelparamsAuthTypeSplitAndOptionalProvider(t *testing.T) {
 	log := testLog()
 	raw := []byte(`{"models": [
 		{"model":"m1","provider":"zai","authType":"subscription","params":[]},
@@ -332,30 +332,55 @@ func TestIndexModelparamsAuthTypeSplitAndProviderRequired(t *testing.T) {
 	if _, ok := k["zai"]["m1"]; ok {
 		t.Fatal("m1 must NOT leak into api_key namespace")
 	}
-	if _, ok := k[""]["orphan"]; ok {
-		t.Fatal("provider-less entry must be skipped")
+	if _, ok := k[""]["orphan"]; !ok {
+		t.Fatal("provider-less entry must remain available to bare-ID queries")
+	}
+	tables := &SourceTables{mpK: k, mpS: s}
+	if _, ok := tables.lookupQuery(sourceQuery{token: "modelparams.dev//api_key", id: "orphan"}); !ok {
+		t.Fatal("bare-ID query lost provider-less record")
+	}
+	if _, ok := tables.lookupQuery(sourceQuery{token: "modelparams.dev/zai/api_key", id: "orphan"}); ok {
+		t.Fatal("provider-scoped query borrowed provider-less record")
 	}
 }
 
-func TestLookupOneExactOnly(t *testing.T) {
+func TestLookupOneExactThenUniqueCaseFold(t *testing.T) {
 	tables := emptySourceTables()
-	tables.dev["openai"] = map[string]sourceHit{"gpt-5.6-sol": {"context_window": 1050000}}
+	tables.dev["openai"] = map[string]sourceHit{
+		"gpt-5.6-sol": {"context_window": 1050000},
+		"Model":       {"context_window": 1}, "model": {"context_window": 2},
+	}
 	tables.dev["openrouter"] = map[string]sourceHit{"openai/gpt-5.6-sol": {"context_window": 999}}
-
-	if h, ok := tables.lookupOne("models.dev/openai", "gpt-5.6-sol"); !ok || h["context_window"] != 1050000 {
-		t.Fatalf("exact lookup: %+v ok=%v", h, ok)
-	}
-	// 无变体：大写不命中
-	if _, ok := tables.lookupOne("models.dev/openai", "GPT-5.6-SOL"); ok {
-		t.Fatal("no case variants allowed")
-	}
-	// 无跨命名空间泄漏
-	if _, ok := tables.lookupOne("models.dev/anthropic", "gpt-5.6-sol"); ok {
-		t.Fatal("no cross-namespace fallback")
-	}
-	// ollama_cloud 不是 bulk 表
-	if _, ok := tables.lookupOne("ollama_cloud", "x"); ok {
-		t.Fatal("ollama_cloud must not resolve as bulk source")
+	tables.mpK["openai"] = map[string]sourceHit{"Params": {"context_window": 0}}
+	tables.mpS["openai"] = map[string]sourceHit{"Params": {"context_window": 3}}
+	for _, tc := range []struct {
+		name, token, id string
+		want            int
+		found           bool
+	}{
+		{"exact", "models.dev/openai", "gpt-5.6-sol", 1050000, true},
+		{"case-fold", "models.dev/openai", "GPT-5.6-SOL", 1050000, true},
+		{"exact-upper-collision", "models.dev/openai", "Model", 1, true},
+		{"exact-lower-collision", "models.dev/openai", "model", 2, true},
+		{"ambiguous", "models.dev/openai", "MODEL", 0, false},
+		{"missing", "models.dev/openai", "absent", 0, false},
+		{"namespace", "models.dev/anthropic", "GPT-5.6-SOL", 0, false},
+		{"provider-token", "models.dev/OPENAI", "GPT-5.6-SOL", 0, false},
+		{"preserve-prefix", "models.dev/openai", "openai/GPT-5.6-SOL", 0, false},
+		{"preserve-tag", "models.dev/openai", "GPT-5.6-SOL:free", 0, false},
+		{"preserve-date", "models.dev/openai", "GPT-5.6-SOL-20260908", 0, false},
+		{"preserve-variant", "models.dev/openai", "GPT-5.6-SOL-fast", 0, false},
+		{"qualified-source-id", "models.dev/openrouter", "OPENAI/GPT-5.6-SOL", 999, true},
+		{"api-key-zero", "modelparams.dev/openai/api_key", "PARAMS", 0, true},
+		{"subscription", "modelparams.dev/openai/subscription", "params", 3, true},
+		{"non-bulk-source", "ollama_cloud", "x", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hit, ok := tables.lookupOne(tc.token, tc.id)
+			if ok != tc.found || ok && hit["context_window"] != tc.want {
+				t.Fatalf("lookup %s %q: %+v ok=%v; want %d ok=%v", tc.token, tc.id, hit, ok, tc.want, tc.found)
+			}
+		})
 	}
 }
 
@@ -390,7 +415,7 @@ func TestMergeProviderChainPrecedence(t *testing.T) {
 		Channel: Channel{Name: "c", Prefix: "c", Type: "openai-compatibility"},
 		Models:  []ParsedModel{{ID: "m", Metadata: map[string]any{"display_name": "Parsed", "context_window": 272000, "max_input_tokens": 200000}}},
 	}}
-	out := mergeManifest(nil, fetched, cfg, tables, nil)
+	out := mergeManifest(&Manifest{Models: []map[string]any{{"slug": "c/m"}}}, fetched, cfg, tables, nil)
 	m := out.Models[0]
 	if m["slug"] != "c/m" || m["display_name"] != "DevName" {
 		t.Fatalf("explicit source metadata must overlay the channel: %+v", m)
@@ -484,12 +509,12 @@ func TestMergeModelLevelChainReplacesChannel(t *testing.T) {
 func TestMergeLookupIDsPerSource(t *testing.T) {
 	tables := emptySourceTables()
 	setHit(tables.dev, "deepseek", "deepseek-v4-flash", sourceHit{"context_window": 128000})
-	setHit(tables.mpK, "deepseek", "deepseek-v4-flash:preview", sourceHit{"max_tokens": 8192})
+	setHit(tables.mpK, "deepseek", "DEEPSEEK-V4-FLASH:PREVIEW", sourceHit{"max_tokens": 8192})
 	cfg := &Config{Channels: map[string]ChannelConfig{
 		"oc": {SourcePriority: []string{"models.dev/deepseek", "modelparams.dev/deepseek/api_key"},
 			Models: map[string]ModelConfig{
 				"deepseek-v4-flash:preview": {LookupIDs: map[string]string{
-					"models.dev/deepseek": "deepseek-v4-flash",
+					"models.dev/deepseek": "DEEPSEEK-V4-FLASH",
 				}},
 			}},
 	}}
@@ -499,7 +524,7 @@ func TestMergeLookupIDsPerSource(t *testing.T) {
 	}}
 	out := mergeManifest(nil, fetched, cfg, tables, nil)
 	m := out.Models[0]
-	// canonical 带 tag 的 ID 在 mpK 直接命中；models.dev 用 lookup_ids 改写命中
+	// canonical 与显式lookup_ids都忽略大小写；只有显式映射才能改变tag。
 	if m["context_window"] != 128000 || m["max_tokens"] != 8192 {
 		t.Fatalf("per-source lookup_ids broken: %+v", m)
 	}
@@ -605,14 +630,14 @@ func TestMergeStaticInheritPublicPoolAndMiss(t *testing.T) {
 	}
 }
 
-func TestMergeCPABareDropped(t *testing.T) {
+func TestMergeDoesNotInferIdentityFromSlashes(t *testing.T) {
 	base := &Manifest{Models: []map[string]any{
 		{"slug": "bare-model", "context_window": 1},
 		{"slug": "prefixed/model", "context_window": 2},
 	}}
 	out := mergeManifest(base, nil, &Config{}, emptySourceTables(), nil)
-	if len(out.Models) != 1 || out.Models[0]["slug"] != "prefixed/model" {
-		t.Fatalf("bare CPA entries must be dropped at ingest: %+v", out.Models)
+	if len(out.Models) != 2 || out.Models[0]["slug"] != "bare-model" || out.Models[1]["slug"] != "prefixed/model" {
+		t.Fatalf("merge must not guess identity; admission belongs to Management-backed filtering: %+v", out.Models)
 	}
 }
 

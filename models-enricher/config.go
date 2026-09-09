@@ -36,40 +36,51 @@ func validSourceToken(token string) bool {
 }
 
 type Config struct {
-	CPABaseURL      string                   `yaml:"cpa_base_url"`
-	HTTPConcurrency int                      `yaml:"http_concurrency"`
-	ChannelTimeout  time.Duration            `yaml:"channel_timeout"`
-	OverallDeadline time.Duration            `yaml:"overall_deadline"`
-	Channels        map[string]ChannelConfig `yaml:"channels"`
-	CustomChannels  map[string]ChannelConfig `yaml:"custom_channels"`
-	StaticModels    []map[string]any         `yaml:"static_models"`
+	CPABaseURL        string                   `yaml:"cpa_base_url"`
+	HTTPConcurrency   int                      `yaml:"http_concurrency"`
+	ChannelTimeout    time.Duration            `yaml:"channel_timeout"`
+	OverallDeadline   time.Duration            `yaml:"overall_deadline"`
+	Channels          map[string]ChannelConfig `yaml:"channels"`
+	CustomChannels    map[string]ChannelConfig `yaml:"custom_channels"`
+	StaticModels      []map[string]any         `yaml:"static_models"`
+	ProviderPrefixMap yaml.Node                `yaml:"provider_prefix_map"`
+
+	providerPrefixes providerPrefixes
 }
 
 type ModelConfig struct {
-	SourcePriority []string          `yaml:"source_priority"`
-	LookupIDs      map[string]string `yaml:"lookup_ids"`
-	MetadataFrom   string            `yaml:"metadata_from"`
-	Overrides      map[string]any    `yaml:"overrides"`
+	SourcePriority    []string          `yaml:"source_priority"`
+	LookupIDs         map[string]string `yaml:"lookup_ids"`
+	MetadataFrom      string            `yaml:"metadata_from"`
+	Overrides         map[string]any    `yaml:"overrides"`
+	ProviderPrefixMap yaml.Node         `yaml:"provider_prefix_map"` // 仅用于拒绝模型级映射。
 }
 
 type ChannelConfig struct {
-	Path             string                    `yaml:"path"`
-	Include          []string                  `yaml:"include"`
-	Exclude          []string                  `yaml:"exclude"`
-	Overrides        map[string]map[string]any `yaml:"overrides"`
-	SourcePriority   []string                  `yaml:"source_priority"`
-	OllamaNativeBase string                    `yaml:"ollama_native_base_url"`
-	Models           map[string]ModelConfig    `yaml:"models"`
+	FetchModels       *bool                     `yaml:"fetch_models"` // nil 默认为 true。
+	Path              string                    `yaml:"path"`
+	Include           []string                  `yaml:"include"`
+	Exclude           []string                  `yaml:"exclude"`
+	Overrides         map[string]map[string]any `yaml:"overrides"`
+	SourcePriority    []string                  `yaml:"source_priority"`
+	OllamaNativeBase  string                    `yaml:"ollama_native_base_url"`
+	Models            map[string]ModelConfig    `yaml:"models"`
+	ProviderPrefixMap yaml.Node                 `yaml:"provider_prefix_map"`
 
-	include []*regexp.Regexp
-	exclude []*regexp.Regexp
+	providerPrefixes providerPrefixes
+	include          []*regexp.Regexp
+	exclude          []*regexp.Regexp
+}
+
+func (ch ChannelConfig) fetchModelsEnabled() bool {
+	return ch.FetchModels == nil || *ch.FetchModels
 }
 
 // modelOverrides：模型配置在 legacy 平铺配置之上叠层，null 不清除下层。
 func (ch ChannelConfig) modelOverrides(name string) map[string]any {
 	out := map[string]any{}
-	applyModelLayer(out, ch.Overrides[name])
-	applyModelLayer(out, ch.Models[name].Overrides)
+	overlayMetadata(out, ch.Overrides[name])
+	overlayMetadata(out, ch.Models[name].Overrides)
 	return out
 }
 
@@ -90,9 +101,9 @@ func (ch ChannelConfig) modelMetadataFrom(name string) string {
 }
 
 // sourceChain：两级整体替换 — 模型 > 渠道。无全局/内置默认；
-// 空链由调用方按配置错误处理。
+// 空链表示不启用外部来源；显式模型空链可以关闭渠道继承的来源。
 func sourceChain(ch ChannelConfig, model string) []string {
-	if mc, ok := ch.Models[model]; ok && len(mc.SourcePriority) > 0 {
+	if mc, ok := ch.Models[model]; ok && mc.SourcePriority != nil {
 		return mc.SourcePriority
 	}
 	return ch.SourcePriority
@@ -135,6 +146,10 @@ func loadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(raw, cfg); err != nil {
 		return nil, err
 	}
+	cfg.providerPrefixes, err = parseProviderPrefixes(cfg.ProviderPrefixMap, "provider_prefix_map")
+	if err != nil {
+		return nil, err
+	}
 	if cfg.CPABaseURL == "" {
 		return nil, fmt.Errorf("cpa_base_url is required")
 	}
@@ -157,6 +172,7 @@ func loadConfig(path string) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
+		ch.providerPrefixes = mergeProviderPrefixes(cfg.providerPrefixes, ch.providerPrefixes)
 		cfg.Channels[name] = ch
 	}
 	for name, ch := range cfg.CustomChannels {
@@ -170,9 +186,13 @@ func loadConfig(path string) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
+		ch.providerPrefixes = mergeProviderPrefixes(cfg.providerPrefixes, ch.providerPrefixes)
 		cfg.CustomChannels[name] = ch
 	}
 	for i, sm := range cfg.StaticModels {
+		if _, ok := sm["provider_prefix_map"]; ok {
+			return nil, fmt.Errorf("static_models[%d]: provider_prefix_map is only allowed globally or on channels", i)
+		}
 		if _, ok := sm["source_priority"]; ok {
 			return nil, fmt.Errorf("static_models[%d] (%v): source_priority is not allowed; use custom_channels", i, sm["slug"])
 		}
@@ -191,6 +211,11 @@ func loadConfig(path string) (*Config, error) {
 // finishChannelConfig：编译正则并校验所有链 token。custom=true 时禁止 ollama_cloud
 // 与 ollama_native_base_url（ollama_cloud 必须有真实 CPA 渠道作凭证边界）。
 func finishChannelConfig(where string, ch ChannelConfig, custom bool) (ChannelConfig, error) {
+	prefixes, err := parseProviderPrefixes(ch.ProviderPrefixMap, where+".provider_prefix_map")
+	if err != nil {
+		return ch, err
+	}
+	ch.providerPrefixes = prefixes
 	inc, err := compileRegexes(ch.Include)
 	if err != nil {
 		return ch, fmt.Errorf("%s.include: %w", where, err)
@@ -219,6 +244,9 @@ func finishChannelConfig(where string, ch ChannelConfig, custom bool) (ChannelCo
 		return ch, err
 	}
 	for model, mc := range ch.Models {
+		if mc.ProviderPrefixMap.Kind != 0 {
+			return ch, fmt.Errorf("%s.models.%s.provider_prefix_map: model-level mapping is not allowed", where, model)
+		}
 		if err := checkChain(mc.SourcePriority, where+".models."+model+".source_priority"); err != nil {
 			return ch, err
 		}

@@ -12,8 +12,9 @@ import (
 // CPA api-call、sources 抓取、ollama /api/show 都经此池，
 // 任一时刻在途请求数 ≤ http_concurrency。
 type httpPool struct {
-	sem chan struct{}
-	c   *http.Client
+	sem   chan struct{}
+	c     *http.Client
+	cache *readCache
 }
 
 func newHTTPPool(n int, timeout time.Duration) *httpPool {

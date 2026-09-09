@@ -1,123 +1,76 @@
-# models-enricher 配置
-# 身份唯一锚点：channels.<key> 必须精确等于 CPA 渠道的 prefix（无前缀渠道的模型
-# 会被本管线全部过滤，即不可用；name 仅作展示元数据）。
-# 源 token 只允许 provider-qualified 形式：
-#   models.dev/<provider> | modelparams.dev/<provider>/api_key|subscription | ollama_cloud
-# 无全局链、无 provider rank、无 ID 变体猜测。custom_channels 是隐藏 metadata pool，
-# 只供 static_models 继承，不直接出现在输出。
+# models-enricher 配置；channels.<key> 精确匹配 CPA prefix。
+# 未配置的渠道保留CPA基线；已配置渠道默认获取自身目录。
+# 无 source_priority 时不请求外部补全来源。
+# 已启用步骤无可用缓存且失败时，整个渠道退回纯CPA记录。
 cpa_base_url: http://cpa:8317
 http_concurrency: 8
-
 channels:
   axis:
-    source_priority: [models.dev/openai, modelparams.dev/openai/api_key, modelparams.dev/openai/subscription]
-    models:
-      gpt-5.6-sol:
-        overrides: { display_name: "GPT-5.6 Sol" }
+    fetch_models: false
+    source_priority: [models.dev/openai]
+  congee:
+    fetch_models: false
+    source_priority: [models.dev/openai]
   xl:
-    # 上游 models 已由渠道方校准；不在本地做模型白名单过滤。
-    source_priority: [models.dev/google, models.dev/openai, models.dev/xai, modelparams.dev/openai/api_key, modelparams.dev/openai/subscription, modelparams.dev/xai/api_key, modelparams.dev/xai/subscription]
+    source_priority: [modelparams.dev/xai/subscription, models.dev/openai, models.dev/xai, models.dev/zai-coding-plan, models.dev/moonshotai, models.dev/deepseek, models.dev/tencent]
     models:
-      gemini-3.8-flash-high:
-        lookup_ids: { models.dev/google: gemini-3.8-flash }
-      grok-4.6:
-        metadata_from: supergrok/grok-4.6
+      muse-spark-1.3-contributor:
+        source_priority: [models.dev/meta]
   zcode:
-    source_priority: [models.dev/zai, models.dev/zhipuai, modelparams.dev/zai/subscription, modelparams.dev/zhipuai/subscription]
-    models:
-      glm-5.1:
-        overrides: { display_name: "GLM 5.1" }
-      glm-4.7:
-        overrides: { display_name: "GLM 4.7" }
-      glm-4.6:
-        overrides: { display_name: "GLM 4.6" }
+    source_priority: [models.dev/zai-coding-plan, modelparams.dev/z-ai/subscription, models.dev/zai]
   ollama-cloud:
-    # ollama_cloud 源必须显式配置 Ollama 原生 endpoint（不接受从 /v1 基址推导）
     ollama_native_base_url: https://ollama.com
-    source_priority: [ollama_cloud, models.dev/deepseek, modelparams.dev/deepseek/api_key, modelparams.dev/deepseek/subscription]
-    models:
-      deepseek-v4-flash:0731:
-        lookup_ids:
-          models.dev/deepseek: deepseek-v4-flash
-        overrides: { max_tokens: 8192 }
+    source_priority: [ollama_cloud, models.dev/ollama-cloud]
   nim:
     source_priority: [models.dev/nvidia]
+    # NVIDIA来源使用完整厂商路径；仅映射provider会丢失ID中的厂商部分。
+    provider_prefix_map:
+      deepseek-ai: nvidia
+      minimaxai: nvidia
+    models:
+      deepseek-ai/deepseek-v4-flash-0731:
+        lookup_ids:
+          models.dev/nvidia: deepseek-ai/deepseek-v4-flash-0731
+      minimaxai/minimax-m3:
+        lookup_ids:
+          models.dev/nvidia: minimaxai/minimax-m3
   shuaiapi:
-    source_priority: [models.dev/anthropic, modelparams.dev/anthropic/api_key, modelparams.dev/anthropic/subscription]
+    source_priority: [models.dev/anthropic]
   commandcode:
-    # 该上游 /v1/models 当前被 egress 策略 403，富化实际不生效；
-    # 链仅为显式配置占位，放行后应按实际模型 provider 修正。
-    source_priority: [models.dev/openai]
-  gmicloud:
-    # 仅一个 MiniMaxAI/MiniMax-M3（来自 CPA native）；命名空间若 miss 只是无富化。
-    source_priority: [models.dev/minimax, modelparams.dev/minimax/api_key]
+    source_priority: [models.dev/openai, models.dev/anthropic]
+    # 只转换查询前缀；厂家目录参考不代表渠道实测能力。
+    provider_prefix_map:
+      MiniMaxAI: minimax
+      Qwen: alibaba
+      z-ai: zai
+      zai-org: zai
+  gmicloud: {}
 
+# CPA原始裸名在入口过滤；static用虚空池取数，不依赖真实渠道成员。
+# static-parents 是订阅型数据链：成员仅存在于本池，从models.dev取真实厂商声明。
+# statics层用overrides把gpt四项的context压到372k（真实供应商限额），池内保持来源原值。
 custom_channels:
-  openai-catalog:
-    source_priority: [models.dev/openai, modelparams.dev/openai/api_key, modelparams.dev/openai/subscription]
+  static-parents:
+    source_priority: [models.dev/openai, models.dev/xai]
     models:
       gpt-5.6-sol: {}
-      gpt-5.6-terra:
-        overrides: { display_name: "GPT-5.6 Terra" }
-      gpt-5.6-luna:
-        overrides: { display_name: "GPT-5.6 Luna" }
-  zai-catalog:
-    source_priority: [models.dev/zai, models.dev/zhipuai, modelparams.dev/zai/api_key, modelparams.dev/zhipuai/api_key, modelparams.dev/zai/subscription, modelparams.dev/zhipuai/subscription]
-    models:
-      glm-5.3:
-        overrides: { display_name: "GLM 5.3" }
-      glm-5.2: {}
-      glm-5.1: {}
-      glm-4.7: {}
-      glm-4.6: {}
-  moonshot-catalog:
-    source_priority: [models.dev/moonshotai, modelparams.dev/moonshotai/api_key, modelparams.dev/moonshotai/subscription]
-    models:
-      kimi-k2.5:
-        overrides: { display_name: "Kimi K2.5" }
-      kimi-k3:
-        overrides: { display_name: "Kimi K3" }
-      kimi-k2.6:
-        overrides: { display_name: "Kimi K2.6" }
-      kimi-k2: {}
-  deepseek-catalog:
-    source_priority: [models.dev/deepseek, modelparams.dev/deepseek/api_key, modelparams.dev/deepseek/subscription]
-    models:
-      deepseek-v4-flash: {}
-  nvidia-catalog:
-    source_priority: [models.dev/nvidia]
-    models:
-      minimaxai/minimax-m3: {}
-      moonshotai/kimi-k3: {}
-      deepseek-ai/deepseek-v4-flash-0731: {}
-  minimax-catalog:
-    source_priority: [models.dev/minimax]
-    models:
-      MiniMax-M3: {}
+      gpt-5.6-terra: {}
+      gpt-5.6-luna: {}
+      gpt-6-astra: {}
+      grok-4.6: {}
 
-# statics：只物化当前使用的裸模型；能力字段全部来自 inherit/source chain。
-# inherit 列表首命中逐字段胜出，顺序 [custom 池, 公开池]。
 static_models:
   - slug: gpt-5.6-sol
-    inherit: [openai-catalog/gpt-5.6-sol, axis/gpt-5.6-sol]
+    inherit: [static-parents/gpt-5.6-sol]
+    overrides: {context_window: 372000, max_context_window: 372000}
   - slug: gpt-5.6-terra
-    inherit: [openai-catalog/gpt-5.6-terra, axis/gpt-5.6-terra]
+    inherit: [static-parents/gpt-5.6-terra]
+    overrides: {context_window: 372000, max_context_window: 372000}
   - slug: gpt-5.6-luna
-    inherit: [openai-catalog/gpt-5.6-luna, axis/gpt-5.6-luna]
-  - slug: glm-5.3
-    inherit: [zai-catalog/glm-5.3, zcode/glm-5.3]
+    inherit: [static-parents/gpt-5.6-luna]
+    overrides: {context_window: 372000, max_context_window: 372000}
+  - slug: gpt-6-astra
+    inherit: [static-parents/gpt-6-astra]
+    overrides: {context_window: 372000, max_context_window: 372000}
   - slug: grok-4.6
-    inherit: [supergrok/grok-4.6]
-  - slug: deepseek-v4-flash
-    inherit: [ollama-cloud/deepseek-v4-flash:0731, deepseek-catalog/deepseek-v4-flash]
-  - slug: gemini-3.8-flash
-    inherit: [xl/gemini-3.8-flash-high]
-  # bare OAuth/native 注册的对话模型：能力字段经数据链补全（无手写数值）
-  - slug: MiniMaxAI/MiniMax-M3
-    inherit: [minimax-catalog/MiniMax-M3]
-  - slug: minimaxai/minimax-m3
-    inherit: [nvidia-catalog/minimaxai/minimax-m3]
-  - slug: moonshotai/kimi-k3
-    inherit: [nvidia-catalog/moonshotai/kimi-k3]
-  - slug: deepseek-ai/deepseek-v4-flash-0731
-    inherit: [nvidia-catalog/deepseek-ai/deepseek-v4-flash-0731]
+    inherit: [static-parents/grok-4.6]

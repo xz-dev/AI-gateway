@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 )
+
+// 富数据目录固定请求版本，避免调用方版本触发CPA的旧客户端兼容裁剪。
+const cpaCatalogClientVersion = "1"
 
 type CPAClient struct {
 	base      string
@@ -25,6 +29,8 @@ type Channel struct {
 	Prefix    string
 	BaseURL   string
 	AuthIndex string
+	// 管理配置声明的有效原名：alias 非空时使用 alias，否则使用 name。
+	Models []string
 }
 
 type apiCallResponse struct {
@@ -45,35 +51,32 @@ func newCPAClient(base, mgmtKey, clientKey string, pool *httpPool, log *slog.Log
 
 func (c *CPAClient) Discover(ctx context.Context) ([]Channel, error) {
 	var out []Channel
+	var failures []error
 	for _, src := range channelSources {
 		list, err := c.listKind(ctx, src)
+		out = append(out, list...)
 		if err != nil {
 			c.log.Warn("channel list failed", "kind", src.typ, "err", err.Error())
+			failures = append(failures, err)
 			continue
 		}
-		out = append(out, list...)
 	}
-	return out, nil
+	return out, errors.Join(failures...)
 }
 
-func (c *CPAClient) NativeManifest(ctx context.Context, clientVersion string) (*Manifest, error) {
-	u := c.base + "/v1/models?client_version=" + url.QueryEscape(clientVersion)
+func (c *CPAClient) NativeManifest(ctx context.Context) (*Manifest, error) {
+	u := c.base + "/v1/models?client_version=" + cpaCatalogClientVersion
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.clientKey)
-	resp, err := c.pool.Do(req)
+	body, err := c.pool.readJSON(req, 32<<20, true, func(body []byte) error {
+		var manifest Manifest
+		return decodeJSON(body, &manifest)
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := readBoundedBody(resp.Body, 32<<20)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("native manifest status %d", resp.StatusCode)
 	}
 	var m Manifest
 	if err := decodeJSON(body, &m); err != nil {
@@ -107,31 +110,40 @@ func (c *CPAClient) APICall(ctx context.Context, ch Channel, method, absURL stri
 	}
 	req.Header.Set("Authorization", "Bearer "+c.mgmtKey)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.pool.Do(req)
+	// 外层POST只是CPA转发封装；只缓存内层GET或Ollama的只读/api/show。
+	endpoint, _ := url.Parse(absURL)
+	cacheable := method == http.MethodGet || (method == http.MethodPost && endpoint != nil && endpoint.Path == "/api/show")
+	body, err := c.pool.readJSON(req, 32<<20, cacheable, func(body []byte) error {
+		_, _, err := parseAPIRead(body)
+		return err
+	})
 	if err != nil {
+		var status readStatusError
+		if errors.As(err, &status) {
+			return nil, status.status, err
+		}
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
-	body, err := readBoundedBody(resp.Body, 32<<20)
-	if err != nil {
-		return nil, 0, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode, fmt.Errorf("api-call http %d", resp.StatusCode)
-	}
+	return parseAPIRead(body)
+}
+
+func parseAPIRead(body []byte) ([]byte, int, error) {
 	var parsed apiCallResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, 0, err
 	}
 	if parsed.StatusCode < 200 || parsed.StatusCode >= 300 {
-		return nil, parsed.StatusCode, fmt.Errorf("upstream status %d", parsed.StatusCode)
+		return nil, parsed.StatusCode, readStatusError{parsed.StatusCode}
 	}
-	// body 可能是 string（原样文本）或直接 JSON 对象，两种都接受
-	var s string
-	if err := json.Unmarshal(parsed.Body, &s); err == nil {
-		return []byte(s), parsed.StatusCode, nil
+	inner := []byte(parsed.Body)
+	var text string
+	if json.Unmarshal(parsed.Body, &text) == nil {
+		inner = []byte(text)
 	}
-	return parsed.Body, parsed.StatusCode, nil
+	if !json.Valid(inner) {
+		return nil, parsed.StatusCode, fmt.Errorf("invalid api-call body JSON")
+	}
+	return inner, parsed.StatusCode, nil
 }
 
 type channelSource struct {
@@ -150,23 +162,23 @@ var channelSources = []channelSource{
 	{typ: "interactions-api-key", path: "/v0/management/interactions-api-key", wrapper: "interactions-api-key"},
 }
 
+var errIncompleteDiscovery = errors.New("channel identity discovery incomplete")
+
 func (c *CPAClient) listKind(ctx context.Context, src channelSource) ([]Channel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+src.path, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.mgmtKey)
-	resp, err := c.pool.Do(req)
+	body, err := c.pool.readJSON(req, 8<<20, true, func(body []byte) error {
+		_, err := parseChannels(src.typ, src.wrapper, body)
+		if errors.Is(err, errIncompleteDiscovery) {
+			return nil // 响应可用但覆盖不全；返回时仍携带不完整信号。
+		}
+		return err
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := readBoundedBody(resp.Body, 8<<20)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return parseChannels(src.typ, src.wrapper, body)
 }
@@ -185,7 +197,11 @@ func parseChannels(typ, wrapper string, body []byte) ([]Channel, error) {
 		return nil, err
 	}
 	out := make([]Channel, 0, len(entries))
+	var coverageErr error
 	for _, e := range entries {
+		if e == nil {
+			return nil, fmt.Errorf("invalid %s entry", wrapper)
+		}
 		if asBool(e["disabled"]) {
 			continue
 		}
@@ -209,11 +225,36 @@ func parseChannels(typ, wrapper string, body []byte) ([]Channel, error) {
 				}
 			}
 		} else if typ != "openai-compatibility" && auth == "" {
+			coverageErr = errIncompleteDiscovery
 			continue
 		}
 		if typ == "openai-compatibility" && auth == "" {
 			if keys, ok := e["api-key-entries"].([]any); !ok || len(keys) == 0 {
+				coverageErr = errIncompleteDiscovery
 				continue
+			}
+		}
+		var models []string
+		if value := e["models"]; value != nil {
+			list, ok := value.([]any)
+			if !ok {
+				return nil, fmt.Errorf("invalid %s models", wrapper)
+			}
+			for _, value := range list {
+				model, ok := value.(map[string]any)
+				if !ok || asString(model["name"]) == "" {
+					return nil, fmt.Errorf("invalid %s model name", wrapper)
+				}
+				if alias := model["alias"]; alias != nil {
+					if _, ok := alias.(string); !ok {
+						return nil, fmt.Errorf("invalid %s model alias", wrapper)
+					}
+				}
+				id := asString(model["alias"])
+				if id == "" {
+					id = asString(model["name"])
+				}
+				models = append(models, id)
 			}
 		}
 		out = append(out, Channel{
@@ -222,9 +263,10 @@ func parseChannels(typ, wrapper string, body []byte) ([]Channel, error) {
 			Prefix:    strings.Trim(prefix, "/"),
 			BaseURL:   base,
 			AuthIndex: auth,
+			Models:    models,
 		})
 	}
-	return out, nil
+	return out, coverageErr
 }
 
 func asString(v any) string {

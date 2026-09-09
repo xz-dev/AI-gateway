@@ -1,0 +1,3580 @@
+{
+  "models_dev_api": {
+    "stepfun": {
+      "models": {
+        "step-3.7-flash": {
+          "id": "step-3.7-flash",
+          "name": "Step 3.7 Flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-05-29",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 256000,
+            "input": 256000,
+            "output": 256000
+          }
+        },
+        "step-3.5-flash": {
+          "id": "step-3.5-flash",
+          "name": "Step 3.5 Flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-01-29",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 256000,
+            "input": 256000,
+            "output": 256000
+          }
+        }
+      }
+    },
+    "xiaomi": {
+      "models": {
+        "mimo-v2.5": {
+          "id": "mimo-v2.5",
+          "name": "MiMo-V2.5",
+          "family": "mimo",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-04-22",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        },
+        "mimo-v2.5-pro": {
+          "id": "mimo-v2.5-pro",
+          "name": "MiMo-V2.5-Pro",
+          "family": "mimo",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-04-22",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        }
+      }
+    },
+    "minimax": {
+      "models": {
+        "MiniMax-M2.5": {
+          "id": "MiniMax-M2.5",
+          "name": "MiniMax-M2.5",
+          "family": "minimax",
+          "reasoning": true,
+          "reasoning_options": [],
+          "release_date": "2026-02-12",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 204800,
+            "output": 131072
+          }
+        },
+        "MiniMax-M3": {
+          "id": "MiniMax-M3",
+          "name": "MiniMax-M3",
+          "family": "minimax",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-06-01",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 512000
+          }
+        },
+        "MiniMax-M2.7": {
+          "id": "MiniMax-M2.7",
+          "name": "MiniMax-M2.7",
+          "family": "minimax",
+          "reasoning": true,
+          "reasoning_options": [],
+          "release_date": "2026-03-18",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 204800,
+            "output": 131072
+          }
+        }
+      }
+    },
+    "alibaba": {
+      "models": {
+        "qwen3.7-max": {
+          "id": "qwen3.7-max",
+          "name": "Qwen3.7 Max",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "budget_tokens"
+            }
+          ],
+          "release_date": "2026-05-21",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 65536
+          }
+        },
+        "qwen3.6-plus": {
+          "id": "qwen3.6-plus",
+          "name": "Qwen3.6 Plus",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "budget_tokens"
+            }
+          ],
+          "release_date": "2026-04-02",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 65536
+          }
+        },
+        "qwen3.8-flash": {
+          "id": "qwen3.8-flash",
+          "name": "Qwen3.8 Flash",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "xhigh"
+              ]
+            },
+            {
+              "type": "budget_tokens",
+              "max": 262144
+            }
+          ],
+          "release_date": "2026-08-26",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        },
+        "qwen3.6-max-preview": {
+          "id": "qwen3.6-max-preview",
+          "name": "Qwen3.6 Max Preview",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "budget_tokens"
+            }
+          ],
+          "release_date": "2026-04-20",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          }
+        },
+        "qwen3.8-max": {
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8 Max",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "xhigh"
+              ]
+            },
+            {
+              "type": "budget_tokens",
+              "min": 0,
+              "max": 262144
+            }
+          ],
+          "release_date": "2026-08-03",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        },
+        "qwen3.7-plus": {
+          "id": "qwen3.7-plus",
+          "name": "Qwen3.7 Plus",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "budget_tokens"
+            }
+          ],
+          "release_date": "2026-06-02",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 65536
+          }
+        }
+      }
+    },
+    "nvidia": {
+      "models": {
+        "deepseek-ai/deepseek-v4-flash-0731": {
+          "id": "deepseek-ai/deepseek-v4-flash-0731",
+          "name": "DeepSeek V4 Flash 0731",
+          "family": "deepseek-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "none",
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-31",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 384000
+          }
+        },
+        "nvidia/nemotron-3-ultra-550b-a55b": {
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "name": "Nemotron 3 Ultra 550B A55B",
+          "family": "nemotron",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-06-04",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 65536
+          }
+        },
+        "minimaxai/minimax-m3": {
+          "id": "minimaxai/minimax-m3",
+          "name": "MiniMax-M3",
+          "family": "minimax",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-06-01",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 16384
+          }
+        },
+        "moonshotai/kimi-k3": {
+          "id": "moonshotai/kimi-k3",
+          "name": "Kimi K3",
+          "family": "kimi-k3",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-16",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        }
+      }
+    },
+    "anthropic": {
+      "models": {
+        "claude-opus-5": {
+          "id": "claude-opus-5",
+          "name": "Claude Opus 5",
+          "family": "claude-opus",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-24",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 128000
+          }
+        },
+        "claude-sonnet-5": {
+          "id": "claude-sonnet-5",
+          "name": "Claude Sonnet 5",
+          "family": "claude-sonnet",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-06-29",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 128000
+          }
+        }
+      }
+    },
+    "google": {
+      "models": {
+        "gemini-3.6-flash": {
+          "id": "gemini-3.6-flash",
+          "name": "Gemini 3.6 Flash",
+          "family": "gemini-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-07-21",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        },
+        "gemini-3.1-flash-lite": {
+          "id": "gemini-3.1-flash-lite",
+          "name": "Gemini 3.1 Flash Lite",
+          "family": "gemini-flash-lite",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-05-07",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        },
+        "gemini-3.5-flash": {
+          "id": "gemini-3.5-flash",
+          "name": "Gemini 3.5 Flash",
+          "family": "gemini-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-05-19",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        },
+        "gemini-3.5-flash-lite": {
+          "id": "gemini-3.5-flash-lite",
+          "name": "Gemini 3.5 Flash Lite",
+          "family": "gemini-flash-lite",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-07-21",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        },
+        "gemini-3.8-flash": {
+          "id": "gemini-3.8-flash",
+          "name": "Gemini 3.8 Flash",
+          "family": "gemini-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-09-02",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        },
+        "gemini-3.7-flash": {
+          "id": "gemini-3.7-flash",
+          "name": "Gemini 3.7 Flash",
+          "family": "gemini-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-08-13",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        }
+      }
+    },
+    "thinkingmachines": {
+      "models": {
+        "thinkingmachines/Inkling": {
+          "id": "thinkingmachines/Inkling",
+          "name": "Inkling",
+          "family": "ling",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-15",
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 65536,
+            "output": 65536
+          }
+        }
+      }
+    },
+    "meta": {
+      "models": {
+        "muse-spark-1.3": {
+          "id": "muse-spark-1.3",
+          "name": "Muse Spark 1.3",
+          "family": "muse",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-09-02",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "pdf",
+              "audio"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        },
+        "muse-spark-1.2": {
+          "id": "muse-spark-1.2",
+          "name": "Muse Spark 1.2",
+          "family": "muse",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ]
+            }
+          ],
+          "release_date": "2026-08-05",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "pdf",
+              "audio"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        },
+        "muse-spark-1.2-contributor": {
+          "id": "muse-spark-1.2-contributor",
+          "name": "Muse Spark 1.2 Contributor",
+          "family": "muse",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ]
+            }
+          ],
+          "release_date": "2026-08-05",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "pdf",
+              "audio"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        },
+        "muse-spark-1.3-contributor": {
+          "id": "muse-spark-1.3-contributor",
+          "name": "Muse Spark 1.3 Contributor",
+          "family": "muse",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ]
+            }
+          ],
+          "release_date": "2026-09-02",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "pdf",
+              "audio"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        },
+        "muse-spark-1.1": {
+          "id": "muse-spark-1.1",
+          "name": "Muse Spark 1.1",
+          "family": "muse",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ]
+            }
+          ],
+          "release_date": "2026-04-08",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        }
+      }
+    },
+    "zhipuai": {
+      "models": {
+        "glm-5.2": {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-06-13",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        },
+        "glm-5.1": {
+          "id": "glm-5.1",
+          "name": "GLM-5.1",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-03-27",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 200000,
+            "output": 131072
+          }
+        },
+        "glm-5.3": {
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-08-14",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        },
+        "glm-4.6": {
+          "id": "glm-4.6",
+          "name": "GLM-4.6",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2025-09-30",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 204800,
+            "output": 131072
+          }
+        },
+        "glm-4.7": {
+          "id": "glm-4.7",
+          "name": "GLM-4.7",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2025-12-22",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 204800,
+            "output": 131072
+          }
+        }
+      }
+    },
+    "sakana": {
+      "models": {
+        "fugu-ultra": {
+          "id": "fugu-ultra",
+          "name": "Fugu Ultra",
+          "family": "fugu",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "high",
+                "xhigh"
+              ]
+            }
+          ],
+          "release_date": "2026-06-15",
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 1000000
+          }
+        }
+      }
+    },
+    "deepseek": {
+      "models": {
+        "deepseek-v4-flash-vision-exp": {
+          "id": "deepseek-v4-flash-vision-exp",
+          "name": "DeepSeek V4 Flash Vision Exp",
+          "family": "deepseek-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-08-21",
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 384000
+          }
+        },
+        "deepseek-v4-flash": {
+          "id": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash",
+          "family": "deepseek-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-31",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 384000
+          }
+        },
+        "deepseek-v4-pro": {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "family": "deepseek-thinking",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-08-12",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 384000
+          }
+        }
+      }
+    },
+    "openai": {
+      "models": {
+        "gpt-5.6-sol": {
+          "id": "gpt-5.6-sol",
+          "name": "GPT-5.6 Sol",
+          "family": "gpt-sol",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "none",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-09",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1050000,
+            "input": 922000,
+            "output": 128000
+          }
+        },
+        "gpt-5.6-luna": {
+          "id": "gpt-5.6-luna",
+          "name": "GPT-5.6 Luna",
+          "family": "gpt-luna",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "none",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-09",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1050000,
+            "input": 922000,
+            "output": 128000
+          }
+        },
+        "gpt-5.6-terra": {
+          "id": "gpt-5.6-terra",
+          "name": "GPT-5.6 Terra",
+          "family": "gpt-terra",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "none",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-09",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1050000,
+            "input": 922000,
+            "output": 128000
+          }
+        }
+      }
+    },
+    "moonshotai": {
+      "models": {
+        "kimi-k2.7-code-highspeed": {
+          "id": "kimi-k2.7-code-highspeed",
+          "name": "Kimi K2.7 Code HighSpeed",
+          "family": "kimi-k2",
+          "reasoning": true,
+          "reasoning_options": [],
+          "release_date": "2026-06-12",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 262144
+          }
+        },
+        "kimi-k2.6": {
+          "id": "kimi-k2.6",
+          "name": "Kimi K2.6",
+          "family": "kimi-k2",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-04-21",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 262144
+          }
+        },
+        "kimi-k2.7-code": {
+          "id": "kimi-k2.7-code",
+          "name": "Kimi K2.7 Code",
+          "family": "kimi-k2",
+          "reasoning": true,
+          "reasoning_options": [],
+          "release_date": "2026-06-12",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 262144
+          }
+        },
+        "kimi-k3": {
+          "id": "kimi-k3",
+          "name": "Kimi K3",
+          "family": "kimi-k3",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-07-16",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        },
+        "kimi-k2.5": {
+          "id": "kimi-k2.5",
+          "name": "Kimi K2.5",
+          "family": "kimi-k2",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-01",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 262144
+          }
+        }
+      }
+    },
+    "xai": {
+      "models": {
+        "grok-4.5": {
+          "id": "grok-4.5",
+          "name": "Grok 4.5",
+          "family": "grok",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-07-08",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 500000,
+            "output": 500000
+          }
+        },
+        "grok-4.6": {
+          "id": "grok-4.6",
+          "name": "Grok 4.6",
+          "family": "grok",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ]
+            }
+          ],
+          "release_date": "2026-08-12",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 500000,
+            "output": 500000
+          }
+        }
+      }
+    },
+    "zai": {
+      "models": {
+        "glm-4.7": {
+          "id": "glm-4.7",
+          "name": "GLM-4.7",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2025-12-22",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 204800,
+            "output": 131072
+          }
+        },
+        "glm-4.6": {
+          "id": "glm-4.6",
+          "name": "GLM-4.6",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2025-09-30",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 204800,
+            "output": 131072
+          }
+        },
+        "glm-5.2": {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-06-13",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        },
+        "glm-5.3-flash": {
+          "id": "glm-5.3-flash",
+          "name": "GLM-5.3-Flash",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-08-26",
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        },
+        "glm-5": {
+          "id": "glm-5",
+          "name": "GLM-5",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-02-12",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 204800,
+            "output": 131072
+          }
+        },
+        "glm-5.1": {
+          "id": "glm-5.1",
+          "name": "GLM-5.1",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            }
+          ],
+          "release_date": "2026-04-07",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 200000,
+            "output": 131072
+          }
+        },
+        "glm-5.3": {
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "high",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-08-14",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        }
+      }
+    },
+    "tencent-tokenhub": {
+      "models": {
+        "hy4-preview": {
+          "id": "hy4-preview",
+          "name": "Hy4 preview",
+          "family": "Hy",
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "none",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-08-28",
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1024000,
+            "output": 64000
+          }
+        }
+      }
+    }
+  },
+  "models_dev_flat": {
+    "stepfun/step-3.7-flash": {
+      "id": "stepfun/step-3.7-flash",
+      "name": "Step 3.7 Flash",
+      "reasoning": true,
+      "release_date": "2026-05-29",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 256000,
+        "input": 256000,
+        "output": 256000
+      }
+    },
+    "stepfun/step-3.5-flash": {
+      "id": "stepfun/step-3.5-flash",
+      "name": "Step 3.5 Flash",
+      "reasoning": true,
+      "release_date": "2026-01-29",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 256000,
+        "input": 256000,
+        "output": 256000
+      }
+    },
+    "xiaomi/mimo-v2.5": {
+      "id": "xiaomi/mimo-v2.5",
+      "name": "MiMo-V2.5",
+      "family": "mimo",
+      "reasoning": true,
+      "release_date": "2026-04-22",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "audio",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 131072
+      }
+    },
+    "xiaomi/mimo-v2.5-pro": {
+      "id": "xiaomi/mimo-v2.5-pro",
+      "name": "MiMo-V2.5-Pro",
+      "family": "mimo",
+      "reasoning": true,
+      "release_date": "2026-04-22",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 131072
+      }
+    },
+    "minimax/MiniMax-M2.5": {
+      "id": "minimax/MiniMax-M2.5",
+      "name": "MiniMax-M2.5",
+      "family": "minimax",
+      "reasoning": true,
+      "release_date": "2026-02-12",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 204800,
+        "output": 131072
+      }
+    },
+    "minimax/MiniMax-M3": {
+      "id": "minimax/MiniMax-M3",
+      "name": "MiniMax-M3",
+      "family": "minimax",
+      "reasoning": true,
+      "release_date": "2026-06-01",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 512000
+      }
+    },
+    "minimax/MiniMax-M2.7": {
+      "id": "minimax/MiniMax-M2.7",
+      "name": "MiniMax-M2.7",
+      "family": "minimax",
+      "reasoning": true,
+      "release_date": "2026-03-18",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 204800,
+        "output": 131072
+      }
+    },
+    "alibaba/qwen3.7-max": {
+      "id": "alibaba/qwen3.7-max",
+      "name": "Qwen3.7 Max",
+      "family": "qwen",
+      "reasoning": true,
+      "release_date": "2026-05-21",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 65536
+      }
+    },
+    "alibaba/qwen3.6-plus": {
+      "id": "alibaba/qwen3.6-plus",
+      "name": "Qwen3.6 Plus",
+      "family": "qwen",
+      "reasoning": true,
+      "release_date": "2026-04-02",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 65536
+      }
+    },
+    "alibaba/qwen3.8-flash": {
+      "id": "alibaba/qwen3.8-flash",
+      "name": "Qwen3.8 Flash",
+      "family": "qwen",
+      "reasoning": true,
+      "release_date": "2026-08-26",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 131072
+      }
+    },
+    "alibaba/qwen3.6-max-preview": {
+      "id": "alibaba/qwen3.6-max-preview",
+      "name": "Qwen3.6 Max Preview",
+      "family": "qwen",
+      "reasoning": true,
+      "release_date": "2026-04-20",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 262144,
+        "output": 65536
+      }
+    },
+    "alibaba/qwen3.8-max": {
+      "id": "alibaba/qwen3.8-max",
+      "name": "Qwen3.8 Max",
+      "family": "qwen",
+      "reasoning": true,
+      "release_date": "2026-08-03",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 131072
+      }
+    },
+    "alibaba/qwen3.7-plus": {
+      "id": "alibaba/qwen3.7-plus",
+      "name": "Qwen3.7 Plus",
+      "family": "qwen",
+      "reasoning": true,
+      "release_date": "2026-06-02",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 64000
+      }
+    },
+    "anthropic/claude-opus-5": {
+      "id": "anthropic/claude-opus-5",
+      "name": "Claude Opus 5",
+      "family": "claude-opus",
+      "reasoning": true,
+      "release_date": "2026-07-24",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 128000
+      }
+    },
+    "anthropic/claude-sonnet-5": {
+      "id": "anthropic/claude-sonnet-5",
+      "name": "Claude Sonnet 5",
+      "family": "claude-sonnet",
+      "reasoning": true,
+      "release_date": "2026-06-30",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 128000
+      }
+    },
+    "google/gemini-3.6-flash": {
+      "id": "google/gemini-3.6-flash",
+      "name": "Gemini 3.6 Flash",
+      "family": "gemini-flash",
+      "reasoning": true,
+      "release_date": "2026-07-21",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 65536
+      }
+    },
+    "google/gemini-3.1-flash-lite": {
+      "id": "google/gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash Lite",
+      "family": "gemini-flash-lite",
+      "reasoning": true,
+      "release_date": "2026-05-07",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 65536
+      }
+    },
+    "google/gemini-3.5-flash": {
+      "id": "google/gemini-3.5-flash",
+      "name": "Gemini 3.5 Flash",
+      "family": "gemini-flash",
+      "reasoning": true,
+      "release_date": "2026-05-19",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 65536
+      }
+    },
+    "google/gemini-3.5-flash-lite": {
+      "id": "google/gemini-3.5-flash-lite",
+      "name": "Gemini 3.5 Flash Lite",
+      "family": "gemini-flash-lite",
+      "reasoning": true,
+      "release_date": "2026-07-21",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 65536
+      }
+    },
+    "google/gemini-3.8-flash": {
+      "id": "google/gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "family": "gemini-flash",
+      "reasoning": true,
+      "release_date": "2026-09-02",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 65536
+      }
+    },
+    "google/gemini-3.7-flash": {
+      "id": "google/gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash",
+      "family": "gemini-flash",
+      "reasoning": true,
+      "release_date": "2026-08-13",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 65536
+      }
+    },
+    "meta/muse-spark-1.3": {
+      "id": "meta/muse-spark-1.3",
+      "name": "Muse Spark 1.3",
+      "family": "muse",
+      "reasoning": true,
+      "release_date": "2026-09-02",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "pdf",
+          "audio"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 131072
+      }
+    },
+    "meta/muse-spark-1.2": {
+      "id": "meta/muse-spark-1.2",
+      "name": "Muse Spark 1.2",
+      "family": "muse",
+      "reasoning": true,
+      "release_date": "2026-08-05",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "pdf",
+          "audio"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 131072
+      }
+    },
+    "meta/muse-spark-1.1": {
+      "id": "meta/muse-spark-1.1",
+      "name": "Muse Spark 1.1",
+      "family": "muse",
+      "reasoning": true,
+      "release_date": "2026-04-08",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 131072
+      }
+    },
+    "zhipuai/glm-4.7": {
+      "id": "zhipuai/glm-4.7",
+      "name": "GLM-4.7",
+      "family": "glm",
+      "reasoning": true,
+      "release_date": "2025-12-22",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 204800,
+        "output": 131072
+      }
+    },
+    "zhipuai/glm-4.6": {
+      "id": "zhipuai/glm-4.6",
+      "name": "GLM-4.6",
+      "family": "glm",
+      "reasoning": true,
+      "release_date": "2025-09-30",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 204800,
+        "output": 131072
+      }
+    },
+    "zhipuai/glm-5.2": {
+      "id": "zhipuai/glm-5.2",
+      "name": "GLM-5.2",
+      "family": "glm",
+      "reasoning": true,
+      "release_date": "2026-06-13",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 131072
+      }
+    },
+    "zhipuai/glm-5.1": {
+      "id": "zhipuai/glm-5.1",
+      "name": "GLM-5.1",
+      "family": "glm",
+      "reasoning": true,
+      "release_date": "2026-04-07",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 200000,
+        "output": 131072
+      }
+    },
+    "zhipuai/glm-5.3": {
+      "id": "zhipuai/glm-5.3",
+      "name": "GLM-5.3",
+      "family": "glm",
+      "reasoning": true,
+      "release_date": "2026-08-14",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 131072
+      }
+    },
+    "sakana/fugu-ultra": {
+      "id": "sakana/fugu-ultra",
+      "name": "Fugu Ultra",
+      "family": "fugu",
+      "reasoning": true,
+      "release_date": "2026-06-15",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000
+      }
+    },
+    "deepseek/deepseek-v4-flash-vision-exp": {
+      "id": "deepseek/deepseek-v4-flash-vision-exp",
+      "name": "DeepSeek V4 Flash Vision Exp",
+      "family": "deepseek-flash",
+      "reasoning": true,
+      "release_date": "2026-08-21",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 384000
+      }
+    },
+    "deepseek/deepseek-v4-flash": {
+      "id": "deepseek/deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "family": "deepseek-flash",
+      "reasoning": true,
+      "release_date": "2026-04-24",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 384000
+      }
+    },
+    "deepseek/deepseek-v4-pro": {
+      "id": "deepseek/deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "family": "deepseek-thinking",
+      "reasoning": true,
+      "release_date": "2026-04-24",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1000000,
+        "output": 384000
+      }
+    },
+    "openai/gpt-5.6-sol": {
+      "id": "openai/gpt-5.6-sol",
+      "name": "GPT-5.6 Sol",
+      "family": "gpt-sol",
+      "reasoning": true,
+      "release_date": "2026-07-09",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      }
+    },
+    "openai/gpt-5.6-luna": {
+      "id": "openai/gpt-5.6-luna",
+      "name": "GPT-5.6 Luna",
+      "family": "gpt-luna",
+      "reasoning": true,
+      "release_date": "2026-07-09",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      }
+    },
+    "openai/gpt-5.6-terra": {
+      "id": "openai/gpt-5.6-terra",
+      "name": "GPT-5.6 Terra",
+      "family": "gpt-terra",
+      "reasoning": true,
+      "release_date": "2026-07-09",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      }
+    },
+    "moonshotai/kimi-k2.7-code-highspeed": {
+      "id": "moonshotai/kimi-k2.7-code-highspeed",
+      "name": "Kimi K2.7 Code Highspeed",
+      "family": "kimi-k2",
+      "reasoning": true,
+      "release_date": "2026-06-12",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 262144,
+        "output": 262144
+      }
+    },
+    "moonshotai/kimi-k2.6": {
+      "id": "moonshotai/kimi-k2.6",
+      "name": "Kimi K2.6",
+      "family": "kimi-k2",
+      "reasoning": true,
+      "release_date": "2026-04-21",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 262144,
+        "output": 262144
+      }
+    },
+    "moonshotai/kimi-k2.7-code": {
+      "id": "moonshotai/kimi-k2.7-code",
+      "name": "Kimi K2.7 Code",
+      "family": "kimi-k2",
+      "reasoning": true,
+      "release_date": "2026-06-12",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 262144,
+        "output": 262144
+      }
+    },
+    "moonshotai/kimi-k3": {
+      "id": "moonshotai/kimi-k3",
+      "name": "Kimi K3",
+      "family": "kimi-k3",
+      "reasoning": true,
+      "release_date": "2026-07-16",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 1048576,
+        "output": 131072
+      }
+    },
+    "moonshotai/kimi-k2.5": {
+      "id": "moonshotai/kimi-k2.5",
+      "name": "Kimi K2.5",
+      "family": "kimi-k2",
+      "reasoning": true,
+      "release_date": "2026-01",
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 262144,
+        "output": 262144
+      }
+    },
+    "xai/grok-4.5": {
+      "id": "xai/grok-4.5",
+      "name": "Grok 4.5",
+      "family": "grok",
+      "reasoning": true,
+      "release_date": "2026-07-08",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 500000,
+        "output": 500000
+      }
+    },
+    "xai/grok-4.6": {
+      "id": "xai/grok-4.6",
+      "name": "Grok 4.6",
+      "family": "grok",
+      "reasoning": true,
+      "release_date": "2026-08-12",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "limit": {
+        "context": 500000,
+        "output": 500000
+      }
+    }
+  },
+  "modelparams": {
+    "models": [
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.6-max-preview",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.6-plus",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.7-flash",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.7-max",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.7-plus",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.8-27b",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.8-flash",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.8-max",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "alibaba",
+        "authType": "api_key",
+        "model": "qwen3.8-max-0902",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "anthropic",
+        "authType": "api_key",
+        "model": "claude-opus-5",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "anthropic",
+        "authType": "subscription",
+        "model": "claude-opus-5",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "anthropic",
+        "authType": "api_key",
+        "model": "claude-sonnet-5",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "anthropic",
+        "authType": "subscription",
+        "model": "claude-sonnet-5",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "deepseek",
+        "authType": "api_key",
+        "model": "deepseek-v4-flash",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "high",
+            "values": [
+              "high",
+              "max"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "deepseek",
+        "authType": "api_key",
+        "model": "deepseek-v4-pro",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "high",
+            "values": [
+              "high",
+              "max"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "google",
+        "authType": "api_key",
+        "model": "gemini-3.1-flash-lite",
+        "params": []
+      },
+      {
+        "provider": "google",
+        "authType": "api_key",
+        "model": "gemini-3.7-flash",
+        "params": []
+      },
+      {
+        "provider": "google",
+        "authType": "api_key",
+        "model": "gemini-3.8-flash",
+        "params": []
+      },
+      {
+        "provider": "meta",
+        "authType": "api_key",
+        "model": "muse-spark-1.1",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "meta",
+        "authType": "api_key",
+        "model": "muse-spark-1.2-contributor",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "minimax",
+        "authType": "api_key",
+        "model": "minimax-m2.5",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "minimax",
+        "authType": "api_key",
+        "model": "minimax-m2.7",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "minimax",
+        "authType": "api_key",
+        "model": "minimax-m3",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "moonshot",
+        "authType": "api_key",
+        "model": "kimi-k2.5",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "moonshot",
+        "authType": "api_key",
+        "model": "kimi-k2.6",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "moonshot",
+        "authType": "subscription",
+        "model": "kimi-k2.6",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "moonshot",
+        "authType": "api_key",
+        "model": "kimi-k2.7-code",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "default": 32768,
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "moonshot",
+        "authType": "api_key",
+        "model": "kimi-k2.7-code-highspeed",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "default": 32768,
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "moonshot",
+        "authType": "api_key",
+        "model": "kimi-k3",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "max",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "nvidia",
+        "authType": "api_key",
+        "model": "deepseek-v4-flash-0731",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1,
+              "max": 16384
+            }
+          }
+        ]
+      },
+      {
+        "provider": "nvidia",
+        "authType": "api_key",
+        "model": "nemotron-3-ultra-550b-a55b",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 16384,
+            "range": {
+              "min": 1,
+              "max": 32768
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "high",
+            "values": [
+              "none",
+              "medium",
+              "high"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "openai",
+        "authType": "api_key",
+        "model": "gpt-5.6-luna",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "none",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "openai",
+        "authType": "subscription",
+        "model": "gpt-5.6-luna",
+        "params": []
+      },
+      {
+        "provider": "openai",
+        "authType": "api_key",
+        "model": "gpt-5.6-sol",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "none",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "openai",
+        "authType": "subscription",
+        "model": "gpt-5.6-sol",
+        "params": []
+      },
+      {
+        "provider": "openai",
+        "authType": "api_key",
+        "model": "gpt-5.6-terra",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "default": 4096,
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "none",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "openai",
+        "authType": "subscription",
+        "model": "gpt-5.6-terra",
+        "params": []
+      },
+      {
+        "provider": "xai",
+        "authType": "api_key",
+        "model": "grok-4.5",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "high",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "xai",
+        "authType": "subscription",
+        "model": "grok-4.5",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "high",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "xai",
+        "authType": "api_key",
+        "model": "grok-4.6",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "high",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "xai",
+        "authType": "subscription",
+        "model": "grok-4.6",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "high",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "xiaomi",
+        "authType": "api_key",
+        "model": "mimo-v2.5",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "xiaomi",
+        "authType": "api_key",
+        "model": "mimo-v2.5-pro",
+        "params": [
+          {
+            "path": "max_completion_tokens",
+            "range": {
+              "min": 1
+            }
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "api_key",
+        "model": "glm-4.6",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "subscription",
+        "model": "glm-4.6",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "api_key",
+        "model": "glm-4.7",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "subscription",
+        "model": "glm-4.7",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "api_key",
+        "model": "glm-5",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "api_key",
+        "model": "glm-5.1",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "subscription",
+        "model": "glm-5.1",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "api_key",
+        "model": "glm-5.2",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "max",
+            "values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "subscription",
+        "model": "glm-5.2",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "max",
+            "values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "api_key",
+        "model": "glm-5.3",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "max",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ]
+      },
+      {
+        "provider": "z-ai",
+        "authType": "api_key",
+        "model": "glm-5.3-flash",
+        "params": [
+          {
+            "path": "max_tokens",
+            "default": 65536,
+            "range": {
+              "min": 1,
+              "max": 131072
+            }
+          },
+          {
+            "path": "reasoning_effort",
+            "default": "max",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "provenance": {
+    "generated_at": "2026-09-06T17:04:02.768987+00:00",
+    "urls": [
+      "https://models.dev/api.json",
+      "https://models.dev/models.json",
+      "https://modelparams.dev/api/v1/models.json"
+    ],
+    "source_sha256": {
+      "models-dev-api": "a46b48dfa4cd5a1da63403cc899384acb716c683543f927923b1ba1cfdb320f6",
+      "models-dev-flat": "76d315a27723d598e1468b0970c2232c83338310d9b0e6f3f76d03fb6201f7a1",
+      "modelparams": "a47de4c030fbfcf8f47b5a81da6bf86221b25de9cd116fdb0499b94aac9d9d95"
+    },
+    "note": "Selected declared fields and exact IDs only; no fabricated capability values."
+  }
+}

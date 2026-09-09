@@ -7,8 +7,10 @@ import (
 )
 
 type channelModels struct {
-	Channel Channel
-	Models  []ParsedModel
+	Channel      Channel
+	Models       []ParsedModel
+	Failed       bool
+	FetchSkipped bool
 }
 
 // fetchChannelModels 渠道间并发（goroutine per channel），实际在途 HTTP 由
@@ -22,11 +24,20 @@ func fetchChannelModels(ctx context.Context, cpa *CPAClient, cfg *Config, channe
 	var wg sync.WaitGroup
 
 	for i, ch := range channels {
+		chCfg, configured := cfg.Channels[ch.Prefix]
+		if !configured || !chCfg.fetchModelsEnabled() {
+			results[i] = channelModels{Channel: ch, FetchSkipped: true}
+			ok[i] = true
+			continue
+		}
 		wg.Add(1)
 		go func(i int, ch Channel) {
 			defer wg.Done()
 			chCtx, chCancel := context.WithTimeout(overall, cfg.ChannelTimeout)
 			defer chCancel()
+			// 保留失败渠道身份，合成时整批退回CPA基线，而非继续叠加其他来源。
+			results[i] = channelModels{Channel: ch, Failed: true}
+			ok[i] = true
 			models, err := fetchOne(chCtx, cpa, cfg, ch, clientVersion)
 			if err != nil {
 				log.Warn("channel fetch failed", "prefix", ch.Prefix, "name", ch.Name, "type", ch.Type, "err", err.Error())

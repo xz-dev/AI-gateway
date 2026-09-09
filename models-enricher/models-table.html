@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>models-table · catalog diagnostics</title>
+<style>
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 16px; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  #meta { color: #555; font-size: 12px; margin-bottom: 12px; }
+  table { border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #888; padding: 4px 8px; text-align: left; vertical-align: top; }
+  th { background: #eee; position: sticky; top: 0; }
+  td.null { color: #b00020; font-style: italic; }
+  tr:nth-child(even) td { background: #fafafa; }
+  #err { color: #b00020; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>models-table</h1>
+<div id="meta">{{.Meta}}</div>
+<div id="err">{{.Error}}</div>
+{{if not .Error}}
+<table id="tbl">
+  <thead><tr>{{range .Columns}}<th>{{.Label}}</th>{{end}}</tr></thead>
+  <tbody>
+  {{range .Rows}}<tr>{{range .}}<td{{if .Null}} class="null"{{end}}>{{.Text}}</td>{{end}}</tr>
+  {{end}}</tbody>
+</table>
+{{end}}
+</body>
+</html>

@@ -20,7 +20,7 @@ func (e *configError) Error() string {
 // 身份规则：prefix 是渠道的唯一配置身份（CPA 仅 openai-compatibility 有 name 字段；
 // 且无前缀渠道的模型在本管线会被全部过滤，空前缀 = 不可用配置）。
 //   - 发现的 key channel：prefix 非空且唯一；
-//   - 每个发现渠道必须有 exact channels.<prefix> 配置与非空 channel 链；
+//   - 配置按 exact channels.<prefix> 查找；未配置时保留CPA基线，不执行补全；
 //   - 链含 ollama_cloud 的渠道必须显式配置 ollama_native_base_url；
 //   - custom channel key 不得与发现渠道 prefix 或 native manifest 的
 //     provider prefix（slug 首段）冲突。
@@ -39,13 +39,9 @@ func validateRuntime(cfg *Config, channels []Channel, base *Manifest) error {
 		}
 		seenPrefixes[ch.Prefix] = ch.Type
 
-		chCfg, ok := cfg.Channels[ch.Prefix]
-		if !ok {
-			missing = append(missing, fmt.Sprintf("channel prefix %q has no channels.<prefix> configuration", ch.Prefix))
-			continue
-		}
-		if len(chCfg.SourcePriority) == 0 {
-			missing = append(missing, fmt.Sprintf("channel prefix %q has empty source_priority", ch.Prefix))
+		chCfg := cfg.Channels[ch.Prefix]
+		if syncManagedKind(ch.Type) && (len(chCfg.Include) > 0 || len(chCfg.Exclude) > 0) {
+			conflicts = append(conflicts, fmt.Sprintf("channel prefix %q: move include/exclude to cpa-model-sync", ch.Prefix))
 		}
 		if channelUsesOllama(chCfg) && chCfg.OllamaNativeBase == "" {
 			missing = append(missing, fmt.Sprintf("channel prefix %q uses ollama_cloud but ollama_native_base_url is not configured", ch.Prefix))
