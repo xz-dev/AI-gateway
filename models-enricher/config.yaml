@@ -7,7 +7,7 @@
 cpa_base_url: http://cpa:8317
 
 bare_models_takeover: true
-source_priority: [models.dev/zai, models.dev/openai, models.dev/anthropic]
+source_priority: [models.dev/zai, models.dev/xai, models.dev/moonshotai, models.dev/openai, models.dev/anthropic]
 http_concurrency: 8
 channels:
   axis:
@@ -49,98 +49,23 @@ channels:
       Qwen: alibaba
       z-ai: zai
       zai-org: zai
-  gmicloud: {}
+  gmicloud:
+    source_priority: []
 
-# CPA原始裸名在入口过滤；static用虚空池取数，不依赖真实渠道成员。
-# static-parents 是纯虚空创造池：成员仅存在于本池，全部字段内联声明，不查询外部来源。
-# statics层用overrides把gpt三项的context压到372k（真实供应商限额），池内保持厂商最大值。
-custom_channels:
-  static-parents:
-    models:
-      gpt-5.6-terra:
-        overrides:
-          display_name: GPT-5.6 Terra
-          input_modalities: [text, image, pdf]
-          output_modalities: [text]
-          context_window: 1048000
-          max_context_window: 1048000
-          max_input_tokens: 922000
-          max_output_tokens: 128000
-          supported_reasoning_levels: [{effort: none}, {effort: low}, {effort: medium}, {effort: high}, {effort: xhigh}, {effort: max}]
-      gpt-5.6-luna:
-        overrides:
-          display_name: GPT-5.6 Luna
-          input_modalities: [text, image, pdf]
-          output_modalities: [text]
-          context_window: 1048000
-          max_context_window: 1048000
-          max_input_tokens: 922000
-          max_output_tokens: 128000
-          supported_reasoning_levels: [{effort: none}, {effort: low}, {effort: medium}, {effort: high}, {effort: xhigh}, {effort: max}]
-      gpt-6-astra:
-        overrides:
-          display_name: GPT-6 Astra
-          input_modalities: [text, image, pdf]
-          output_modalities: [text]
-          context_window: 1048000
-          max_context_window: 1048000
-          max_input_tokens: 922000
-          max_output_tokens: 128000
-          supported_reasoning_levels: [{effort: low}, {effort: medium}, {effort: high}, {effort: xhigh}, {effort: max}]
-      grok-4.6:
-        overrides:
-          display_name: Grok 4.6
-          input_modalities: [text, image, pdf]
-          output_modalities: [text]
-          context_window: 500000
-          max_context_window: 500000
-          max_output_tokens: 500000
-          supported_reasoning_levels: [{effort: low}, {effort: medium}, {effort: high}, {effort: xhigh}]
-      glm-5.2:
-        overrides:
-          display_name: GLM-5.2
-          input_modalities: [text]
-          output_modalities: [text]
-          context_window: 1000000
-          max_context_window: 1000000
-          max_tokens: 131072
-          max_output_tokens: 131072
-          supported_reasoning_levels: [{effort: high}, {effort: max}]
-          default_reasoning_level: max
-      glm-5.3:
-        overrides:
-          display_name: GLM-5.3
-          input_modalities: [text]
-          output_modalities: [text]
-          context_window: 1000000
-          max_context_window: 1000000
-          max_output_tokens: 131072
-          supported_reasoning_levels: [{effort: low}, {effort: high}, {effort: max}]
-      glm-5.3-flash:
-        overrides:
-          display_name: GLM-5.3-Flash
-          input_modalities: [text, image, video, pdf]
-          output_modalities: [text]
-          context_window: 1000000
-          max_context_window: 1000000
-          max_output_tokens: 131072
-          supported_reasoning_levels: [{effort: low}, {effort: high}, {effort: max}]
-
+# 裸模型经 bare_models_takeover 动态补全（fail-open）；
+# statics 只保留与动态源数据不同的真实差异：
+#   gpt 三项：供应商真实限额 372k 覆盖 models.dev 的标称值；
+#   glm-5.2：默认推理档 max（动态源无默认档声明）；
+#   kimi-k3-256k：models.dev 无此 ID，继承 kimi-k3 动态数据后压上下文。
 static_models:
   - slug: gpt-5.6-terra
-    inherit: [static-parents/gpt-5.6-terra]
     overrides: {context_window: 372000, max_context_window: 372000}
   - slug: gpt-5.6-luna
-    inherit: [static-parents/gpt-5.6-luna]
     overrides: {context_window: 372000, max_context_window: 372000}
   - slug: gpt-6-astra
-    inherit: [static-parents/gpt-6-astra]
     overrides: {context_window: 372000, max_context_window: 372000}
-  - slug: grok-4.6
-    inherit: [static-parents/grok-4.6]
   - slug: glm-5.2
-    inherit: [static-parents/glm-5.2]
-  - slug: glm-5.3
-    inherit: [static-parents/glm-5.3]
-  - slug: glm-5.3-flash
-    inherit: [static-parents/glm-5.3-flash]
+    overrides: {default_reasoning_level: max}
+  - slug: kimi-k3-256k
+    inherit: [kimi-k3]
+    overrides: {context_window: 256000, max_context_window: 256000}

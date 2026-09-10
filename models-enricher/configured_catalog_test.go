@@ -15,25 +15,21 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool, exists := cfg.CustomChannels["static-parents"]
-	if len(cfg.CustomChannels) != 1 || !exists {
-		t.Fatalf("static parent pool must be the only custom channel: %v", cfg.CustomChannels)
+	if len(cfg.CustomChannels) != 0 {
+		t.Fatalf("no custom channel expected after bare-model takeover: %v", cfg.CustomChannels)
 	}
-	if len(pool.SourcePriority) != 0 || len(pool.Models) != 7 || len(pool.Overrides) != 0 || len(pool.providerPrefixes) != 0 {
-		t.Fatalf("static parent pool must be source-free void definitions: %+v", pool)
+	// gmicloud 显式空链退出全局兜底。
+	if got := sourceChain(cfg.Channels["gmicloud"], "x"); len(got) != 0 {
+		t.Fatalf("gmicloud explicit empty chain must disable global fallback: %v", got)
 	}
-	for name, model := range pool.Models {
-		if len(model.SourcePriority) != 0 || len(model.LookupIDs) != 0 || model.MetadataFrom != "" || len(model.Overrides) == 0 {
-			t.Fatalf("static parent %s must be void-created from inline overrides only", name)
-		}
-	}
+	// 未显式配置链的渠道在源级判断处回退全局链（sourceChain 仅在渠道存在时生效）。
 	for name, want := range map[string][]string{
 		"zcode":        {"models.dev/zai-coding-plan", "modelparams.dev/z-ai/subscription", "models.dev/zai"},
 		"ollama-cloud": {"ollama_cloud", "models.dev/ollama-cloud"},
 		"shuaiapi":     {"models.dev/anthropic"},
 		"nim":          {"models.dev/nvidia"},
 		"commandcode":  {"models.dev/openai", "models.dev/anthropic"},
-		"gmicloud":     nil,
+		"gmicloud":     {},
 	} {
 		ch, exists := cfg.Channels[name]
 		if !exists || !ch.fetchModelsEnabled() || !reflect.DeepEqual(ch.SourcePriority, want) {
@@ -53,23 +49,46 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 			t.Fatalf("%s has unapproved model configuration, provider mapping or manual overrides", name)
 		}
 	}
-	muse := cfg.Channels["xl"].Models["muse-spark-1.3-contributor"]
-	if !reflect.DeepEqual(muse.SourcePriority, []string{"models.dev/meta"}) ||
-		len(muse.LookupIDs) != 0 ||
-		muse.MetadataFrom != "" || len(muse.Overrides) != 0 {
-		t.Fatal("XL Muse must retain its Meta chain without redundant same-name bindings or manual overrides")
+	// 全局链与裸模型接管开关。
+	if !cfg.BareModelsTakeover {
+		t.Fatal("bare_models_takeover must be enabled")
 	}
-	nim := cfg.Channels["nim"]
-	if len(nim.providerPrefixes) != 2 {
-		t.Fatal("NIM must use only the two approved NVIDIA provider mappings")
+	wantGlobal := []string{"models.dev/zai", "models.dev/xai", "models.dev/moonshotai", "models.dev/openai", "models.dev/anthropic"}
+	if !reflect.DeepEqual(cfg.GlobalSourcePriority, wantGlobal) {
+		t.Fatalf("global chain changed: %v", cfg.GlobalSourcePriority)
 	}
-	for _, id := range []string{"deepseek-ai/deepseek-v4-flash-0731", "minimaxai/minimax-m3"} {
-		model := nim.Models[id]
-		if len(model.SourcePriority) != 0 || len(model.Overrides) != 0 || model.MetadataFrom != "" || !reflect.DeepEqual(model.LookupIDs, map[string]string{"models.dev/nvidia": id}) {
-			t.Fatalf("NIM must retain only the full-ID lookup for %s", id)
+	// statics 只保留与动态源有真实差异的声明。
+	wantInherit := map[string][]string{
+		"gpt-5.6-terra": nil,
+		"gpt-5.6-luna":  nil,
+		"gpt-6-astra":   nil,
+		"glm-5.2":       nil,
+		"kimi-k3-256k":  {"kimi-k3"},
+	}
+	if len(cfg.StaticModels) != len(wantInherit) {
+		t.Fatalf("static model count: got %d, want %d", len(cfg.StaticModels), len(wantInherit))
+	}
+	for _, static := range cfg.StaticModels {
+		slug := asString(static["slug"])
+		if _, exists := wantInherit[slug]; !exists {
+			t.Fatalf("unexpected static model: %s", slug)
 		}
-		if got := sourceQueries(nim, id); !reflect.DeepEqual(got, []sourceQuery{{"models.dev/nvidia", id, true}}) {
-			t.Fatalf("NIM full-ID query changed: %#v", got)
+		if got := inheritList(static["inherit"]); !reflect.DeepEqual(got, wantInherit[slug]) {
+			t.Fatalf("unexpected static inherit for %s: %v", slug, got)
+		}
+		overrides, _ := static["overrides"].(map[string]any)
+		switch slug {
+		case "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "kimi-k3-256k":
+			if toInt(overrides["context_window"]) != 372000 && slug != "kimi-k3-256k" {
+				t.Fatalf("gpt static %s must carry the 372000 context overrides: %v", slug, static)
+			}
+			if slug == "kimi-k3-256k" && toInt(overrides["context_window"]) != 256000 {
+				t.Fatalf("kimi-k3-256k static must carry the 256000 context overrides: %v", static)
+			}
+		case "glm-5.2":
+			if overrides["default_reasoning_level"] != "max" {
+				t.Fatalf("glm-5.2 static must retain default_reasoning_level max: %v", static)
+			}
 		}
 	}
 	commandcode := cfg.Channels["commandcode"]
@@ -84,83 +103,43 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	if cfg.Channels["ollama-cloud"].OllamaNativeBase != "https://ollama.com" {
 		t.Fatal("Ollama source must retain its explicit native endpoint")
 	}
-	want := map[string]string{
-		"gpt-5.6-terra": "static-parents/gpt-5.6-terra",
-		"gpt-5.6-luna":  "static-parents/gpt-5.6-luna",
-		"gpt-6-astra":   "static-parents/gpt-6-astra",
-		"grok-4.6":      "static-parents/grok-4.6",
-		"glm-5.2":       "static-parents/glm-5.2",
-		"glm-5.3":       "static-parents/glm-5.3",
-		"glm-5.3-flash": "static-parents/glm-5.3-flash",
-	}
-	if len(cfg.StaticModels) != len(want) {
-		t.Fatalf("static model count: got %d, want %d", len(cfg.StaticModels), len(want))
-	}
+	// 物化验证：静态声明在空来源下克隆 bySlug 并叠加 override。
 	base := &Manifest{}
-	seen := map[string]bool{}
-	for _, static := range cfg.StaticModels {
-		slug := asString(static["slug"])
-		parent, exists := want[slug]
-		if !exists || seen[slug] || !reflect.DeepEqual(inheritList(static["inherit"]), []string{parent}) {
-			t.Fatalf("unexpected static mapping: %s", slug)
-		}
-		overrides, _ := static["overrides"].(map[string]any)
-		if slug == "grok-4.6" || strings.HasPrefix(slug, "glm-") {
-			if len(static) != 2 {
-				t.Fatalf("%s must stay a pure source inherit: %v", slug, static)
-			}
-		} else if len(static) != 3 || toInt(overrides["context_window"]) != 372000 || toInt(overrides["max_context_window"]) != 372000 {
-			t.Fatalf("gpt static %s must carry the 372000 context overrides: %v", slug, static)
-		}
-		seen[slug] = true
-		// 虚空父项不进base：只存在于custom pool，不依赖任何真实CPA成员。
-		// 裸名假条目仍放入，证明CPA原始数据不会泄漏进静态结果。
-		base.Models = append(base.Models, map[string]any{"slug": slug, "leaked_from_cpa_bare": true})
-	}
-	// 裸名全部被身份过滤；static只能从虚空池取数。
+	base.Models = append(base.Models,
+		map[string]any{"slug": "gpt-5.6-terra", "display_name": "cpa-bare"},
+		map[string]any{"slug": "gpt-5.6-luna", "display_name": "cpa-bare"},
+		map[string]any{"slug": "gpt-6-astra", "display_name": "cpa-bare"},
+		map[string]any{"slug": "glm-5.2", "display_name": "cpa-bare"},
+		map[string]any{"slug": "kimi-k3-256k", "display_name": "cpa-bare"},
+		map[string]any{"slug": "kimi-k3", "display_name": "cpa-bare", "context_window": 1048576, "max_output_tokens": 131072},
+	)
 	identities := &catalogIdentities{qualified: map[string]bool{}}
 	base, _ = identities.filter(base, cfg)
 	out := mergeManifest(base, nil, cfg, emptySourceTables(), nil)
-	if len(out.Models) != len(seen) {
-		t.Fatalf("virtual parents leaked or static members lost: %v", out.Models)
-	}
-	bare := map[string]bool{}
+	bySlug := map[string]map[string]any{}
 	for _, model := range out.Models {
-		slug := asString(model["slug"])
-		if _, leak := model["leaked_from_cpa_bare"]; leak || (model["id"] != nil && model["id"] != slug) {
-			t.Fatalf("static %s must use only its virtual pool, not CPA bare data", slug)
-		}
-		bare[slug] = true
+		bySlug[asString(model["slug"])] = model
 	}
-	if !reflect.DeepEqual(bare, seen) {
-		t.Fatal("the explicit static models changed")
-	}
-	// 虚空池成员不进公开清单；元数据全部来自池内内联声明（虚空创造），不查询外部来源。
-	out = mergeManifest(base, nil, cfg, emptySourceTables(), nil)
-	if len(out.Models) != len(seen) {
-		t.Fatalf("enriched pass changed membership: %v", out.Models)
-	}
-	for _, model := range out.Models {
-		slug := asString(model["slug"])
-		if slug == "grok-4.6" {
-			if toInt(model["context_window"]) != 500000 || model["display_name"] != "Grok 4.6" {
-				t.Fatalf("grok-4.6 must use its inline values: %v", model)
+	for slug, model := range bySlug {
+		switch slug {
+		case "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra":
+			if toInt(model["context_window"]) != 372000 {
+				t.Fatalf("gpt static %s must override context to 372000: %v", slug, model)
 			}
-			continue
-		}
-		if strings.HasPrefix(slug, "glm-") {
-			if toInt(model["context_window"]) != 1000000 || toInt(model["max_output_tokens"]) != 131072 || model["display_name"] == nil {
-				t.Fatalf("glm static %s must use its inline values: %v", slug, model)
+		case "glm-5.2":
+			if model["default_reasoning_level"] != "max" {
+				t.Fatalf("glm-5.2 must retain default_reasoning_level max: %v", model)
 			}
-			if slug == "glm-5.2" && model["default_reasoning_level"] != "max" {
-				t.Fatalf("glm-5.2 must carry its inline default: %v", model)
+		case "kimi-k3-256k":
+			if toInt(model["context_window"]) != 256000 || toInt(model["max_output_tokens"]) != 131072 {
+				t.Fatalf("kimi-k3-256k must inherit kimi-k3 and clamp context: %v", model)
 			}
-			continue
-		}
-		if toInt(model["context_window"]) != 372000 || toInt(model["max_input_tokens"]) != 922000 || toInt(model["max_output_tokens"]) != 128000 || model["display_name"] == nil {
-			t.Fatalf("static %s must override context to 372000 and inherit the inline rest: %v", slug, model)
 		}
 	}
+	if _, leaked := bySlug["nonexistent-static"]; leaked {
+		t.Fatal("statics must not invent members")
+	}
+
 }
 
 // 复用已录制的公开目录和来源缓存；不重新抓取目录、执行推理或证明渠道能力。

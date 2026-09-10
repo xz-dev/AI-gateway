@@ -80,3 +80,15 @@ func TestBareModelsTakeoverOn(t *testing.T) {
 		t.Fatal("bare model should not be preserveNative; it must go through dynamic enrichment")
 	}
 }
+
+// static 声明的裸名也必须保留在 base 中：statics 物化克隆的是 bySlug 的动态数据，
+// 若 filter 把 static 裸名移除，克隆为空导致 ctx/display 等动态字段全部丢失。
+func TestBareStaticSlugStaysAdmitted(t *testing.T) {
+	ids := &catalogIdentities{qualified: map[string]bool{}, unavailable: map[string]bool{}, nativeOnly: map[string]bool{}}
+	cfg := &Config{BareModelsTakeover: true}
+	base := &Manifest{Models: []map[string]any{{"slug": "glm-5.2"}}}
+	out, _ := ids.filter(base, cfg)
+	if !out.admitted["glm-5.2"] {
+		t.Fatal("static-declared bare slug must stay admitted for dynamic enrichment")
+	}
+}

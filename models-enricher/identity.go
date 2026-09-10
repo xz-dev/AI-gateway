@@ -128,8 +128,9 @@ func (ids *catalogIdentities) filter(base *Manifest, cfg *Config) (*Manifest, in
 	fallbackCount := 0
 	for _, model := range base.Models {
 		id := asString(model["slug"])
-		if cfg.BareModelsTakeover && !strings.Contains(id, "/") && !static[id] && !ids.qualified[id] {
-			// 裸模型接管：主人手设的裸名不再被入口过滤，进入动态补全；
+		if cfg.BareModelsTakeover && !strings.Contains(id, "/") && !ids.qualified[id] {
+			// 裸模型接管：主人手设的裸名不再被入口过滤，进入动态补全。static 声明的裸名同样
+			// 保留在 base 中；merge 的 statics 循环会用 bySlug 里的动态数据克隆后叠加 override。
 			// 无源命中时保留 CPA 原始字段（fail-open，与 unavailable 同语义）。
 			out.admitted[id] = true
 			out.Models = append(out.Models, model)
