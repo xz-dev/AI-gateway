@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="5">
+<meta http-equiv="refresh" content="10">
 <title>{{if .Error}}AISIX status unavailable{{else}}AISIX routing status{{end}}</title>
 <style>
 :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background: #0b1020; color: #e7ecf4; }
@@ -16,12 +16,10 @@ h2 { margin-bottom: .25rem; font-size: 1.35rem; }
 h3 { margin: 0; overflow-wrap: anywhere; }
 .page-head, .summary, .card-head, .candidate, .target-main { display: flex; gap: .75rem; align-items: center; }
 .page-head { justify-content: space-between; align-items: flex-end; margin-bottom: 1.5rem; }
-.eyebrow { margin-bottom: .35rem; color: #7dd3fc; font-size: .72rem; font-weight: 800; letter-spacing: .14em; }
 .subtle, .target-meta { color: #9aa8bf; }
 .summary { flex-wrap: wrap; justify-content: flex-end; }
 .summary span, .strategy { border: 1px solid #31405f; border-radius: 999px; background: #111a2f; padding: .45rem .7rem; white-space: nowrap; }
-.notice, .empty { border: 1px solid #31405f; border-radius: 12px; background: #111a2f; padding: 1rem 1.1rem; }
-.notice { margin-bottom: 2rem; border-left: 4px solid #7dd3fc; }
+.empty { border: 1px solid #31405f; border-radius: 12px; background: #111a2f; padding: 1rem 1.1rem; }
 section { margin-top: 2rem; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 1rem; }
 .card { min-width: 0; border: 1px solid #263553; border-radius: 16px; background: rgba(17, 26, 47, .92); padding: 1rem; }
@@ -56,13 +54,11 @@ time { white-space: nowrap; }
 <p class="empty">The private routing state could not be read. This page will retry automatically.</p>
 {{else}}
 <header class="page-head">
-  <div><p class="eyebrow">PRIVATE MANAGEMENT VIEW · aisix-status/{{.Version}}</p><h1>AISIX routing status</h1><p class="subtle">Generated <time>{{.Generated}}</time>; refreshes every 5s without JavaScript.</p></div>
+  <div><h1>AISIX routing status</h1><p class="subtle">Generated <time>{{.Generated}}</time>; refreshes every 10s without JavaScript.</p></div>
   <div class="summary"><span><strong>{{len .Combos}}</strong> combos</span><span><strong>{{.Eligible}}</strong> eligible</span><span><strong>{{.Excluded}}</strong> excluded</span><span><strong>{{.Unresolved}}</strong> unresolved</span></div>
 </header>
-<aside class="notice"><strong>Eligibility is not a health proof.</strong> <code>eligible</code> means AISIX is not currently excluding the direct target. It is not independently health-checked. Routing decisions are made per request; a combo has no persistent current target.</aside>
 <section>
 <h2>Routing combos</h2>
-<p class="subtle">Configured declaration order is shown. Priority can move a target ahead at runtime.</p>
 {{if .Combos}}<div class="cards">{{range .Combos}}
 <article class="card">
   <div class="card-head"><h3>{{.Name}}</h3><span class="strategy">{{.Strategy}}</span></div>
@@ -78,11 +74,10 @@ time { white-space: nowrap; }
 <section>
 <h2>Direct targets</h2>
 <p class="subtle">Current AISIX runtime eligibility and exclusion state.</p>
-<div class="table-wrap"><table><thead><tr><th>ID</th><th>Target</th><th>State</th><th>Runtime detail</th></tr></thead><tbody>
-{{range .Direct}}<tr><td><code>{{.ID}}</code></td><td><strong>{{.Name}}</strong></td><td><span class="pill {{.State}}">{{.State}}</span></td><td>{{.Detail}}</td></tr>{{else}}<tr><td colspan="4">No direct targets are configured.</td></tr>{{end}}
+<div class="table-wrap"><table><thead><tr><th>ID</th><th>Target</th><th>Combos</th><th>State</th><th>Runtime detail</th></tr></thead><tbody>
+{{range .Direct}}<tr><td><code>{{.ID}}</code></td><td><strong>{{.Name}}</strong></td><td>{{range $index, $combo := .Combos}}{{if $index}}<br>{{end}}{{$combo}}{{else}}—{{end}}</td><td><span class="pill {{.State}}">{{.State}}</span></td><td>{{.Detail}}</td></tr>{{else}}<tr><td colspan="5">No direct targets are configured.</td></tr>{{end}}
 </tbody></table></div>
 </section>
-<section><h2>Recent actual outcomes</h2><div class="empty">Not shown: AISIX exposes no authoritative retained last-served history. This page does not infer outcomes by joining independent text log lines.</div></section>
 {{end}}
 </main></body>
 </html>

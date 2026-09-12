@@ -7,7 +7,8 @@ provider_keys:
     api_key: replace-with-cpa-client-key
 
 models:
-  - display_name: concrete-model
+  # Keep each direct alias byte-identical to the CPA model name.
+  - display_name: provider/concrete-model
     provider: openai
     model_name: provider/concrete-model
     provider_key: cpa-pool
@@ -24,7 +25,7 @@ models:
       retry_on_429: true
       max_fallbacks: 0
       targets:
-        - model: concrete-model
+        - model: provider/concrete-model
 
 api_keys:
   - display_name: sub2api

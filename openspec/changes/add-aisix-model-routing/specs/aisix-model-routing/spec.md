@@ -6,12 +6,13 @@ Route logical models through AISIX over one CPA upstream pool with per-target 42
 
 ### Requirement: One upstream pool supports explicit logical routing
 
-AISIX SHALL accept logical model IDs from authorized callers and select among their configured concrete CPA targets through one shared CPA provider pool. It SHALL support ordered in-request failover and bounded retries per the approved policy. Sub2API SHALL retain client authentication and quota authority; CPA SHALL retain provider credential custody.
+AISIX SHALL accept logical model IDs from authorized callers and select among their configured concrete CPA targets through one shared CPA provider pool. Each direct AISIX target name SHALL preserve the exact CPA model name without transliteration. AISIX SHALL support ordered in-request failover, same-priority round-robin, and bounded retries per the approved policy. Sub2API SHALL retain client authentication and quota authority; CPA SHALL retain provider credential custody.
 
 #### Scenario: Logical model selects a concrete target
 - **WHEN** an authorized client requests a configured logical model
 - **THEN** the request reaches an eligible concrete CPA target with only the model field rewritten to the concrete target ID
 - **AND** other request fields pass through unmodified
+- **AND** the direct AISIX target name is byte-identical to the CPA model name
 
 #### Scenario: Route inventory has an unresolved discrepancy
 - **WHEN** a required target, ordering, or cooldown policy cannot be represented or verified

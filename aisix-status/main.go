@@ -99,14 +99,15 @@ type comboView struct {
 
 type directView struct {
 	ID, Name, State, Detail string
+	Combos                  []string
 }
 
 type pageData struct {
-	Version, Generated, Error string
-	Combos                    []comboView
-	Direct                    []directView
-	Eligible, Excluded        int
-	Unresolved                int
+	Generated, Error   string
+	Combos             []comboView
+	Direct             []directView
+	Eligible, Excluded int
+	Unresolved         int
 }
 
 type statusHandler struct {
@@ -208,8 +209,7 @@ func (h *statusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var statuses []runtimeStatus
 	if h.getJSON(r.Context(), "/admin/v1/models", &models) != nil || h.getJSON(r.Context(), "/admin/v1/models/status", &statuses) != nil {
 		h.writePage(w, r.Method == http.MethodHead, http.StatusServiceUnavailable, pageData{
-			Version: version,
-			Error:   "AISIX status unavailable",
+			Error: "AISIX status unavailable",
 		})
 		return
 	}
@@ -249,18 +249,28 @@ func buildPage(models []modelEntry, statuses []runtimeStatus, now time.Time) pag
 		byName[status.DisplayName] = status
 	}
 
-	data := pageData{
-		Version:   version,
-		Generated: now.UTC().Format(time.RFC3339),
+	data := pageData{Generated: now.UTC().Format(time.RFC3339)}
+	combosByTarget := make(map[string][]string)
+	for _, entry := range models {
+		if entry.Value.Routing == nil {
+			continue
+		}
+		name := entry.Value.DisplayName
+		if name == "" {
+			name = entry.ID
+		}
+		data.Combos = append(data.Combos, buildCombo(name, entry.Value.Routing, byName, now))
+		for _, target := range entry.Value.Routing.Targets {
+			combosByTarget[target.Model] = append(combosByTarget[target.Model], name)
+		}
+	}
+	for target := range combosByTarget {
+		sort.Strings(combosByTarget[target])
 	}
 	for _, entry := range models {
 		name := entry.Value.DisplayName
 		if name == "" {
 			name = entry.ID
-		}
-		if entry.Value.Routing != nil {
-			data.Combos = append(data.Combos, buildCombo(name, entry.Value.Routing, byName, now))
-			continue
 		}
 		if isVirtual(entry.Value) {
 			continue
@@ -270,7 +280,7 @@ func buildPage(models []modelEntry, statuses []runtimeStatus, now time.Time) pag
 			status, ok = byName[name]
 		}
 		state, detail := statusDisplay(status, ok, now)
-		data.Direct = append(data.Direct, directView{ID: entry.ID, Name: name, State: state, Detail: detail})
+		data.Direct = append(data.Direct, directView{ID: entry.ID, Name: name, State: state, Detail: detail, Combos: combosByTarget[name]})
 		switch state {
 		case "eligible":
 			data.Eligible++
@@ -356,7 +366,7 @@ func statusDisplay(status runtimeStatus, exists bool, now time.Time) (string, st
 	switch status.Status {
 	case "healthy":
 		state = "eligible"
-		detail = "not currently excluded by AISIX; not independently health-checked"
+		detail = "—"
 	case "cooldown":
 		state = "cooldown"
 		detail = "currently excluded by AISIX cooldown"

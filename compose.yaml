@@ -895,7 +895,7 @@ services:
         ipv4_address: 172.30.64.3
 
   aisix-status:
-    image: ${AISIX_STATUS_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix-status:0.1.0}
+    image: ${AISIX_STATUS_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix-status:0.1.1}
     user: "65532:65532"
     restart: unless-stopped
     depends_on:

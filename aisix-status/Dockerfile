@@ -3,11 +3,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG STATUS_VERSION=0.1.0
+ARG STATUS_VERSION=0.1.1
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${STATUS_VERSION}" -o /out/aisix-status .
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d
-ARG STATUS_VERSION=0.1.0
+ARG STATUS_VERSION=0.1.1
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="AI-gateway AISIX status" \
       org.opencontainers.image.version="${STATUS_VERSION}" \

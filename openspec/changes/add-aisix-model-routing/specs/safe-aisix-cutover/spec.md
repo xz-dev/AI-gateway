@@ -50,8 +50,9 @@ The approved loopback/Tailscale management binding SHALL serve a server-rendered
 #### Scenario: Operator opens routing status
 - **WHEN** the operator sends `GET /status` through the approved management binding
 - **THEN** the response is complete HTML without JavaScript and shows each routing combo's configured target order and strategy
-- **AND** each direct target shows whether AISIX currently considers it eligible, cooling, unavailable, or unresolved
+- **AND** each direct target shows every routing combo that directly references it and whether AISIX currently considers it eligible, cooling, unavailable, or unresolved
 - **AND** available cooldown expiry or remaining duration and recent status reason are shown
+- **AND** the page refreshes no more frequently than every 10 seconds
 
 #### Scenario: Status wording preserves routing semantics
 - **WHEN** a routing combo or direct target is displayed

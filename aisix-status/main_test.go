@@ -93,7 +93,9 @@ func TestStatusPageSSR(t *testing.T) {
 		"missing-target",
 		"unresolved",
 		"direct-primary",
-		"no authoritative retained last-served history",
+		"Combos",
+		`http-equiv="refresh" content="10"`,
+		"refreshes every 10s",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("response missing %q", want)
@@ -108,7 +110,19 @@ func TestStatusPageSSR(t *testing.T) {
 		}
 		position += next + len(want)
 	}
-	for _, forbidden := range []string{testAdminKey, "provider-key-must-not-leak", "backup-key-must-not-leak", "gpt-primary", "<script", admin.URL} {
+	backupRowStart := strings.Index(body, "<code>direct-backup</code>")
+	if backupRowStart < 0 {
+		t.Fatal("direct backup row missing")
+	}
+	backupRowEnd := strings.Index(body[backupRowStart:], "</tr>")
+	if backupRowEnd < 0 {
+		t.Fatal("direct backup row is incomplete")
+	}
+	backupRow := body[backupRowStart : backupRowStart+backupRowEnd]
+	if !strings.Contains(backupRow, "combo&lt;&amp;&gt;<br>dynamic-combo") {
+		t.Errorf("direct backup row missing sorted combo memberships: %s", backupRow)
+	}
+	for _, forbidden := range []string{testAdminKey, "provider-key-must-not-leak", "backup-key-must-not-leak", "gpt-primary", "<script", admin.URL, "Eligibility is not a health proof", "not independently health-checked", "PRIVATE MANAGEMENT VIEW", "Configured declaration order is shown", "Recent actual outcomes", "refreshes every 5s"} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("response leaked forbidden value %q", forbidden)
 		}

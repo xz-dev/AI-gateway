@@ -2,6 +2,13 @@ name: Publish AISIX images
 
 on:
   workflow_dispatch:
+    inputs:
+      component:
+        description: Image component to publish
+        required: true
+        default: all
+        type: choice
+        options: [all, aisix, aisix-status]
   push:
     tags: ["aisix-images-v*"]
 
@@ -20,11 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - component: aisix
-            context: ./aisix
-          - component: aisix-status
-            context: ./aisix-status
+        component: ${{ fromJSON(inputs.component == 'aisix' && '["aisix"]' || inputs.component == 'aisix-status' && '["aisix-status"]' || '["aisix","aisix-status"]') }}
     steps:
       - uses: actions/checkout@v4
       - name: Read immutable image version
@@ -32,7 +35,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(tr -d '\n' < "${{ matrix.context }}/VERSION")
+          version=$(tr -d '\n' < "${{ matrix.component }}/VERSION")
           [[ "$version" =~ ^[0-9][0-9A-Za-z._+-]*$ ]]
           owner=${GITHUB_REPOSITORY_OWNER,,}
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -43,9 +46,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite a version tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}" >/dev/null 2>&1; then
+            echo "Version tag already exists; bump the component VERSION file." >&2
+            exit 1
+          fi
       - uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
+          context: ./${{ matrix.component }}
           push: true
           pull: true
           tags: |
