@@ -16,6 +16,7 @@ import (
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	catalogCacheTTL.Store(int64(5 * time.Minute))
+	catalogCacheMaxBytes.Store(16 << 20)
 	cfgPath := env("CONFIG_PATH", "/app/config.yaml")
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
@@ -39,13 +40,14 @@ func main() {
 	}
 	defer os.RemoveAll(pool.cache.dir)
 	cpa := newCPAClient(cfg.CPABaseURL, mgmt, clientKey, pool, log)
+	aisix := newAISIXClient(cfg.AISIXModelsURL, cfg.AISIXToken, cfg.AISIXTimeout, pool)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	catalog := handleModels(cfg, cpa, pool, log)
+	catalog := handleModels(cfg, cpa, aisix, pool, log)
 	mux.HandleFunc("/v1/models", catalog)
 	mux.HandleFunc("/models-table", catalog)
 
@@ -72,6 +74,8 @@ func main() {
 // 0=禁用；生产在main()启用。APISIX交集Lua每请求都拉original腿，
 // 没有这层缓存时每个前门请求都触发一次全量构建。
 var catalogCacheTTL atomic.Int64
+var catalogCacheMaxBytes atomic.Int64
+var catalogBuildMu sync.Mutex
 
 const catalogCacheMaxEntries = 24
 
@@ -88,22 +92,39 @@ type flightResult struct {
 	stored time.Time
 }
 
-// evictOldestCachedFlightLocked：缓存条目上限；只驱逐已完成条目，进行中的构建不动。
+// cachedCatalogBytesLocked 返回已完成缓存体的总字节数；进行中的构建不计入。
+func cachedCatalogBytesLocked() int64 {
+	var total int64
+	for _, f := range catalogFlights.byVersion {
+		if f.done == nil {
+			total += int64(len(f.body))
+		}
+	}
+	return total
+}
+
+// evictOldestCachedFlightLocked 同时约束缓存条目和总字节数；只驱逐已完成条目。
 func evictOldestCachedFlightLocked() {
-	if len(catalogFlights.byVersion) <= catalogCacheMaxEntries {
-		return
-	}
-	var oldest string
-	var oldestAt time.Time
-	for cv, f := range catalogFlights.byVersion {
-		if f.done != nil {
-			continue
+	for {
+		byteLimit := catalogCacheMaxBytes.Load()
+		overEntries := len(catalogFlights.byVersion) > catalogCacheMaxEntries
+		overBytes := byteLimit > 0 && cachedCatalogBytesLocked() > byteLimit
+		if !overEntries && !overBytes {
+			return
 		}
-		if oldest == "" || f.stored.Before(oldestAt) {
-			oldest, oldestAt = cv, f.stored
+		var oldest string
+		var oldestAt time.Time
+		for cv, f := range catalogFlights.byVersion {
+			if f.done != nil {
+				continue
+			}
+			if oldest == "" || f.stored.Before(oldestAt) {
+				oldest, oldestAt = cv, f.stored
+			}
 		}
-	}
-	if oldest != "" {
+		if oldest == "" {
+			return
+		}
 		delete(catalogFlights.byVersion, oldest)
 	}
 }
@@ -111,7 +132,7 @@ func evictOldestCachedFlightLocked() {
 // handleModels：GET /v1/models?client_version=... 的合成管线。
 // 失败语义：native无可用结果 → 502；配置/身份冲突 → 500 JSON；
 // 已启用的渠道步骤无可用结果 → WARN + 该渠道整批CPA基线，其他渠道继续。
-func handleModels(cfg *Config, cpa *CPAClient, pool *httpPool, log *slog.Logger) http.HandlerFunc {
+func handleModels(cfg *Config, cpa *CPAClient, aisix *AISIXClient, pool *httpPool, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		table := r.URL.Path == "/models-table"
 		write := func(status int, body []byte) {
@@ -166,7 +187,10 @@ func handleModels(cfg *Config, cpa *CPAClient, pool *httpPool, log *slog.Logger)
 		evictOldestCachedFlightLocked()
 		catalogFlights.Unlock()
 
-		status, body := buildCatalog(r, cfg, cpa, pool, log, cv)
+		// 不同 client_version 的完整目录构建同样可能很大；串行化构建，避免并发峰值越过容器内存边界。
+		catalogBuildMu.Lock()
+		status, body := buildCatalog(r, cfg, cpa, aisix, pool, log, cv)
+		catalogBuildMu.Unlock()
 		f.status, f.body = status, body
 		close(f.done)
 
@@ -176,6 +200,7 @@ func handleModels(cfg *Config, cpa *CPAClient, pool *httpPool, log *slog.Logger)
 				// 只缓存成功结果；失败保持每次重建，避免把瞬时错误钉死在前门。
 				f.stored = time.Now()
 				f.done = nil
+				evictOldestCachedFlightLocked()
 			} else {
 				delete(catalogFlights.byVersion, cv)
 			}
@@ -186,10 +211,11 @@ func handleModels(cfg *Config, cpa *CPAClient, pool *httpPool, log *slog.Logger)
 }
 
 // buildCatalog 执行完整合成管线，返回 HTTP 状态与响应体（供单飞共享）。
-func buildCatalog(r *http.Request, cfg *Config, cpa *CPAClient, pool *httpPool, log *slog.Logger, cv string) (int, []byte) {
+func buildCatalog(r *http.Request, cfg *Config, cpa *CPAClient, aisix *AISIXClient, pool *httpPool, log *slog.Logger, cv string) (int, []byte) {
 	ctx, cancel := context.WithTimeout(r.Context(), cfg.OverallDeadline+5*time.Second)
 	defer cancel()
 
+	// --- Phase 1: Mandatory CPA Phase ---
 	// CPA native manifest 是成员基线；读取层可回退成功旧缓存。
 	// 无可用缓存且获取失败时整体 fail-closed，禁止用空 Manifest 替代。
 	base, err := cpa.NativeManifest(ctx)
@@ -197,6 +223,10 @@ func buildCatalog(r *http.Request, cfg *Config, cpa *CPAClient, pool *httpPool, 
 		log.Warn("native manifest failed", "err", err.Error())
 		return errorJSON(http.StatusBadGateway, "native_manifest_failed", "CPA native manifest unavailable: "+err.Error())
 	}
+
+	// 身份过滤前先捕获 CPA 原始模型 ID 全集；用于精确排除 AISIX 重复项。
+	originalCPAIDs := extractCPAIDs(base)
+
 	channels, err := cpa.Discover(ctx)
 	if err != nil {
 		log.Warn("discover failed", "err", err.Error())
@@ -215,7 +245,8 @@ func buildCatalog(r *http.Request, cfg *Config, cpa *CPAClient, pool *httpPool, 
 
 	// 先确定实际成员与启用步骤，再并发读取所需来源；关闭的步骤不是失败。
 	fetched := fetchChannelModels(ctx, cpa, cfg, channels, cv, log)
-	tables := fetchSources(ctx, pool, requiredSources(cfg, base, fetched), log)
+	cpaNeeded := requiredSources(cfg, base, fetched)
+	tables := fetchSources(ctx, pool, cpaNeeded, log)
 
 	ollama := map[string]map[string]sourceHit{}
 	var owg sync.WaitGroup
@@ -249,7 +280,44 @@ func buildCatalog(r *http.Request, cfg *Config, cpa *CPAClient, pool *httpPool, 
 		}
 	}
 
-	manifest := mergeManifest(base, fetched, cfg, tables, ollama)
+	// --- Phase 2: Optional AISIX Phase ---
+	// CPA 必需项完全完成后，在调用方派生的有界独立预算内执行可选读取。
+	// 绝不抢占 CPA 并发槽，绝不消耗 CPA 的时间预算。
+	var supplementalIDs []string
+	if aisix != nil {
+		apiTimeout := aisix.timeout
+		if apiTimeout <= 0 || apiTimeout > cfg.OverallDeadline {
+			apiTimeout = cfg.OverallDeadline
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			if remaining := time.Until(deadline); remaining < apiTimeout {
+				apiTimeout = remaining
+			}
+		}
+		if apiTimeout > 0 {
+			apiCtx, apiCancel := context.WithTimeout(ctx, apiTimeout)
+			aisixIDs, apiErr := aisix.FetchModelIDs(apiCtx)
+			apiCancel()
+			if apiErr != nil {
+				log.Warn("aisix models supplement unavailable", "err", apiErr.Error())
+			} else {
+				supplementalIDs = computeSupplementalIDs(aisixIDs, originalCPAIDs)
+			}
+		}
+	}
+
+	// --- Phase 3: Enrich only the actual difference ---
+	// 仅当存在实际增量且依赖尚未获取的来源时，才拉取额外源表。
+	if len(supplementalIDs) > 0 {
+		extraNeeded := requiredSupplementalSources(cfg, supplementalIDs, cpaNeeded)
+		if len(extraNeeded) > 0 {
+			extraTables := fetchSources(ctx, pool, extraNeeded, log)
+			tables.merge(extraTables)
+		}
+	}
+
+	// --- Phase 4: Merge Manifest ---
+	manifest := mergeManifest(base, fetched, cfg, tables, ollama, supplementalIDs)
 	body, err := json.Marshal(manifest)
 	if err != nil {
 		return errorJSON(http.StatusInternalServerError, "manifest_encode_failed", err.Error())

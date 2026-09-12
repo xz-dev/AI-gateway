@@ -132,6 +132,9 @@ services:
         ipv4_address: 172.30.40.2
       model-sync-cpa:
         ipv4_address: 172.30.44.2
+      aisix-cpa:
+        aliases: [cpa]
+        ipv4_address: 172.30.62.3
 
   cli-proxy-api:
     image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:v7.2.152}
@@ -297,6 +300,8 @@ services:
         ipv4_address: 172.30.15.2
       sub2api-squid-source:
         ipv4_address: 172.30.19.2
+      sub2api-aisix:
+        ipv4_address: 172.30.60.2
 
   sub2api:
     image: ${SUB2API_IMAGE:-docker.io/weishaw/sub2api:0.2.1}
@@ -320,6 +325,7 @@ services:
     depends_on:
       sub2api-netns: {condition: service_started, restart: true}
       sub2api-host-relay: {condition: service_started}
+      aisix: {condition: service_started, restart: true}
       sub2api-cpa-relay: {condition: service_started, restart: true}
       sub2api-postgres-relay: {condition: service_started, restart: true}
       sub2api-redis-relay: {condition: service_started, restart: true}
@@ -363,7 +369,7 @@ services:
       HTTP_PROXY: http://sub2api-egress-relay:3128
       HTTPS_PROXY: http://sub2api-egress-relay:3128
       UPDATE_PROXY_URL: http://sub2api-egress-relay:3128
-      NO_PROXY: 127.0.0.1,localhost,cli-proxy-api,postgres,redis,sub2api-egress-relay
+      NO_PROXY: 127.0.0.1,localhost,aisix,cli-proxy-api,postgres,redis,sub2api-egress-relay
       SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
       TZ: ${TZ:-UTC}
     healthcheck:
@@ -674,6 +680,8 @@ services:
         ipv4_address: 172.30.29.2
       enricher-squid-source:
         ipv4_address: 172.30.31.2
+      enricher-aisix:
+        ipv4_address: 172.30.64.2
 
   cpa-model-sync:
     build:
@@ -704,18 +712,19 @@ services:
   models-enricher:
     build:
       context: ./models-enricher
-    image: ${MODELS_ENRICHER_IMAGE:-models-enricher:v0.5.1}
+    image: ${MODELS_ENRICHER_IMAGE:-models-enricher:aisix-cachebound-20260912}
     pull_policy: build
     network_mode: service:models-enricher-netns
     restart: unless-stopped
     depends_on:
       models-enricher-netns: {condition: service_started, restart: true}
+      aisix: {condition: service_started, restart: true}
       enricher-cpa-relay: {condition: service_started, restart: true}
       enricher-squid-relay: {condition: service_started, restart: true}
     pids_limit: 64
-    # 上游文件缓存也计入256m预算；32m缓存加原子替换临时文件最多64m。
-    mem_limit: 256m
-    memswap_limit: 256m
+    # 完整目录构建会短时持有较大的解析树；Go堆限制低于cgroup，保留native缓冲余量。
+    mem_limit: 384m
+    memswap_limit: 384m
     cpus: 0.5
     read_only: true
     cap_drop: [ALL]
@@ -726,11 +735,14 @@ services:
     environment:
       LISTEN_ADDR: :8090
       CONFIG_PATH: /app/config.yaml
+      GOMEMLIMIT: 288MiB
       CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY:?Set CPA_MANAGEMENT_KEY in .env}
       CPA_CLIENT_KEY: ${CPA_CLIENT_KEY:-${CPA_API_KEY:?Set CPA_CLIENT_KEY or CPA_API_KEY in .env}}
+      AISIX_MODELS_URL: http://aisix:3000/v1/models
+      AISIX_TOKEN: ${AISIX_CATALOG_KEY:?Set AISIX_CATALOG_KEY in .env}
       HTTP_PROXY: http://enricher-egress-relay:3128
       HTTPS_PROXY: http://enricher-egress-relay:3128
-      NO_PROXY: 127.0.0.1,localhost,cpa,enricher-egress-relay
+      NO_PROXY: 127.0.0.1,localhost,aisix,cpa,enricher-egress-relay
       SSL_CERT_FILE: /etc/ssl/certs/ai-gateway-ca-bundle.pem
     volumes:
       - ./models-enricher/config.yaml:/app/config.yaml:ro,Z
@@ -864,6 +876,80 @@ services:
       models-table-host-netns: {condition: service_started, restart: true}
       model-catalog-sidecar: {condition: service_started}
 
+  aisix-netns:
+    <<: *netns-owner
+    ports:
+      - "${AISIX_STATUS_BIND_ADDRESS:-127.0.0.1}:${AISIX_STATUS_PORT:-3001}:3001"
+    networks:
+      aisix-host-source:
+        ipv4_address: 172.30.66.2
+      aisix-status-admin:
+        ipv4_address: 172.30.68.2
+      sub2api-aisix:
+        aliases: [aisix]
+        ipv4_address: 172.30.60.3
+      aisix-cpa:
+        ipv4_address: 172.30.62.2
+      enricher-aisix:
+        aliases: [aisix]
+        ipv4_address: 172.30.64.3
+
+  aisix-status:
+    image: ${AISIX_STATUS_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix-status:0.1.0}
+    user: "65532:65532"
+    restart: unless-stopped
+    depends_on:
+      aisix: {condition: service_started, restart: true}
+    pids_limit: 32
+    mem_limit: 32m
+    memswap_limit: 32m
+    cpus: 0.2
+    read_only: true
+    cap_drop: [ALL]
+    logging: *default-logging
+    security_opt: [no-new-privileges:true]
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8080
+      AISIX_ADMIN_URL: http://172.30.68.2:3002
+      AISIX_CONFIG_PATH: /etc/aisix/config.yaml
+    volumes:
+      - ./aisix/config.yaml:/etc/aisix/config.yaml:ro,Z
+    networks:
+      aisix-status-admin:
+        ipv4_address: 172.30.68.3
+
+  aisix-status-relay:
+    <<: *socat-relay
+    network_mode: service:aisix-netns
+    command: ["TCP4-LISTEN:3001,reuseaddr,fork", "TCP4:172.30.68.3:8080,connect-timeout=3"]
+    depends_on:
+      aisix-netns: {condition: service_started, restart: true}
+      aisix-status: {condition: service_started}
+
+  aisix:
+    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix:1.2.0-deadlockfix-7d6d14b}
+    network_mode: service:aisix-netns
+    command: ["--config", "/etc/aisix/config.yaml"]
+    restart: unless-stopped
+    depends_on:
+      aisix-netns: {condition: service_started, restart: true}
+      cli-proxy-api: {condition: service_started}
+    pids_limit: 128
+    mem_limit: 160m
+    memswap_limit: 160m
+    cpus: 1.0
+    read_only: true
+    cap_drop: [ALL]
+    # The pinned AISIX binary carries cap_net_bind_service=ep; retain only
+    # that capability in the bounding set so exec works under no-new-privileges.
+    cap_add: [NET_BIND_SERVICE]
+    logging: *default-logging
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16m"]
+    volumes:
+      - ./aisix/config.yaml:/etc/aisix/config.yaml:ro,Z
+      - ./aisix/resources.yaml:/etc/aisix/resources.yaml:ro,Z
+
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared:2026.8.3}
     restart: unless-stopped
@@ -890,6 +976,20 @@ services:
         gw_priority: 1
 
 networks:
+  sub2api-aisix:
+    internal: true
+    ipam: {config: [{subnet: 172.30.60.0/29}]}
+  aisix-cpa:
+    internal: true
+    ipam: {config: [{subnet: 172.30.62.0/29}]}
+  enricher-aisix:
+    internal: true
+    ipam: {config: [{subnet: 172.30.64.0/29}]}
+  aisix-status-admin:
+    internal: true
+    ipam: {config: [{subnet: 172.30.68.0/29}]}
+  aisix-host-source:
+    ipam: {config: [{subnet: 172.30.66.0/29}]}
   model-sync-cpa:
     internal: true
     ipam: {config: [{subnet: 172.30.44.0/29}]}

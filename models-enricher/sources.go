@@ -163,6 +163,43 @@ func requiredSources(cfg *Config, base *Manifest, fetched []channelModels) map[s
 	return needed
 }
 
+// requiredSupplementalSources 仅针对实际 New API 增量模型（unique(N) - C），
+// 提取尚未在已有 source 表中获取的外部来源；无增量或来源已就绪时不发新请求。
+func requiredSupplementalSources(cfg *Config, supplemental []string, alreadyFetched map[string]bool) map[string]bool {
+	if len(supplemental) == 0 || len(cfg.GlobalSourcePriority) == 0 {
+		return nil
+	}
+	needed := map[string]bool{}
+	supp := ChannelConfig{globalChain: cfg.GlobalSourcePriority, providerPrefixes: cfg.providerPrefixes}
+	for _, id := range supplemental {
+		for _, token := range sourceChain(supp, id) {
+			provider, _, _ := strings.Cut(token, "/")
+			if alreadyFetched == nil || !alreadyFetched[provider] {
+				needed[provider] = true
+			}
+		}
+	}
+	return needed
+}
+
+func (t *SourceTables) merge(extra *SourceTables) {
+	if t == nil || extra == nil {
+		return
+	}
+	mergeSourceMaps(t.dev, extra.dev)
+	mergeSourceMaps(t.devAuto, extra.devAuto)
+	mergeSourceMaps(t.mpK, extra.mpK)
+	mergeSourceMaps(t.mpS, extra.mpS)
+	if t.failed == nil {
+		t.failed = map[string]bool{}
+	}
+	for k, v := range extra.failed {
+		if v {
+			t.failed[k] = true
+		}
+	}
+}
+
 // fetchSources 只拉取已启用的bulk来源；共享失败留给依赖渠道处理。
 // 所有请求共享 httpPool 并发上限。
 func fetchSources(ctx context.Context, pool *httpPool, needed map[string]bool, log *slog.Logger) *SourceTables {

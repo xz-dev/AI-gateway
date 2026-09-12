@@ -26,6 +26,8 @@ type fakeCPA struct {
 	native          []byte
 	nativeDelay     time.Duration
 	nativeCalls     atomic.Int64
+	nativeActive    atomic.Int64
+	nativeMaxActive atomic.Int64
 	nativeByVersion map[string][]byte
 	oauthModels     []string // 显式原名夹具；账号同时注册原名和oauth/限定名。
 	channelsBody    []byte   // openai-compatibility kind 响应
@@ -64,6 +66,10 @@ func (f *fakeCPA) handler() http.Handler {
 	})
 	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
 		f.nativeCalls.Add(1)
+		active := f.nativeActive.Add(1)
+		defer f.nativeActive.Add(-1)
+		for previous := f.nativeMaxActive.Load(); active > previous && !f.nativeMaxActive.CompareAndSwap(previous, active); previous = f.nativeMaxActive.Load() {
+		}
 		if f.nativeDelay > 0 {
 			time.Sleep(f.nativeDelay)
 		}
@@ -130,7 +136,8 @@ func stubSources(t *testing.T) {
 func newTestHandler(t *testing.T, cfg *Config, cpa *httptest.Server) http.Handler {
 	t.Helper()
 	pool := newHTTPPool(8, 5*time.Second)
-	return handleModels(cfg, newCPAClient(cpa.URL, "m", "c", pool, testLog()), pool, testLog())
+	aisix := newAISIXClient(cfg.AISIXModelsURL, cfg.AISIXToken, cfg.AISIXTimeout, pool)
+	return handleModels(cfg, newCPAClient(cpa.URL, "m", "c", pool, testLog()), aisix, pool, testLog())
 }
 
 func testCfg() *Config {

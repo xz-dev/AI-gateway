@@ -5,9 +5,9 @@ The Rust sidecar manages only the five supported API-key kinds through CPA's int
 Management API. Gemini/Interactions retain Go inventory behavior; Go metadata,
 OAuth/native visibility, static aliases and downstream authorization remain separate.
 
-Reusable Docker Compose stack for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [Sub2API](https://github.com/Wei-Shaw/sub2api), [Apache APISIX](https://apisix.apache.org/), [ai-sse-keepalive-proxy](https://github.com/xz-dev/ai-sse-keepalive-proxy), [Squid](https://www.squid-cache.org/), [socat](http://www.dest-unreach.org/socat/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
+Reusable Docker Compose stack for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [Sub2API](https://github.com/Wei-Shaw/sub2api), [AISIX](https://github.com/api7/aisix), [Apache APISIX](https://apisix.apache.org/), [ai-sse-keepalive-proxy](https://github.com/xz-dev/ai-sse-keepalive-proxy), [Squid](https://www.squid-cache.org/), [socat](http://www.dest-unreach.org/socat/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
 
-It separates provider credentials, client API-key authority, public routing, and Internet ingress:
+It separates provider credentials, client API-key authority, logical-model routing, public routing, and Internet ingress:
 
 ```mermaid
 flowchart LR
@@ -16,7 +16,10 @@ flowchart LR
   cloudflared --> APISIX
   APISIX --> Keepalive[AI SSE keepalive proxy]
   Keepalive --> Sub2API
-  Sub2API --> CPA[CLIProxyAPI]
+  Sub2API --> AISIX
+  AISIX --> CPA[CLIProxyAPI]
+  Enricher[models-enricher] --> AISIX
+  Enricher --> CPA
   Sub2API --> PostgreSQL
   Sub2API --> Redis
   CPA --> Proxy[Allowlist egress proxy]
@@ -37,11 +40,12 @@ flowchart LR
 - Request bodies are capped at 16 MiB and rejected with a neutral `413` before reaching Sub2API.
 - Public final `401` and all final `404` responses become the same zero-byte `404`; other statuses and successful, SSE, and WebSocket responses remain transparent.
 - APISIX strips Sub2API's private `X-Client-Request-ID` and preserves standard `X-Request-ID` on non-opaque responses.
-- Sub2API accepts forwarded client IPs only through AI SSE middleware's outgoing relay, after APISIX sanitizes them. Its URL allowlist stays disabled because CPA uses an internal HTTP URL; Docker pairwise networks provide the service-reachability boundary instead.
-- CPA, Sub2API admin access, and APISIX bind to loopback by default.
-- Every directed TCP edge has one independent explicit-version `alpine/socat` relay. Its source and target sides use separate networks, so sources can initiate through the relay but targets cannot open a new connection back. TCP remains full duplex after connection establishment, preserving OAuth, SSE, WebSocket, and 600-second requests. No relay exposes an API or reverse mode. The base template declares TCP edges only.
-- Every internal relay network has exactly two Compose members; no service uses Compose's default network. CPA, Sub2API, APISIX, and AI SSE middleware share networking with minimal Alpine namespace owners that delete all default routes and drop privilege. Separate host-ingress namespace owners hold published ports and the source/target sides of their dedicated socat relays. This remains portable across rootless Podman and rootful Docker without host firewall changes or engine-specific bridge options.
-- CPA and Sub2API have no direct Internet route. Each reaches Squid only through its own source/target socat relay pair. Squid alone joins `proxy-egress`; cloudflared alone joins its egress network and reaches APISIX only through its own relay. APISIX has no Internet route.
+- Sub2API accepts forwarded client IPs only through AI SSE middleware's outgoing relay, after APISIX sanitizes them. Its URL allowlist stays disabled because AISIX and CPA use internal HTTP URLs; Docker pairwise networks provide the service-reachability boundary instead.
+- AISIX exclusively owns client-visible logical model IDs, ordered fallback, bounded retries, and per-concrete-target cooldown. CPA retains provider credentials and pool execution; Sub2API retains client authentication, entitlement, quota, and WebSocket ingress.
+- CPA, Sub2API admin access, and APISIX bind to loopback by default. AISIX Admin binds only to the dedicated unpublished `aisix-status-admin` network. The separate server-rendered `/status` page binds to loopback by default and may additionally bind to one explicit Tailscale address, never a wildcard.
+- Most directed TCP edges use an independent explicit-version `alpine/socat` relay. The three AISIX edges are deliberate exceptions: `sub2api-aisix`, `aisix-cpa`, and `enricher-aisix` are direct internal two-member networks with no AISIX-specific relay containers.
+- Every internal network has an explicit bounded membership; no service uses Compose's default network. CPA, Sub2API, APISIX, AISIX, and AI SSE middleware share networking with minimal Alpine namespace owners that delete all default routes and drop privilege. Separate host-ingress namespace owners hold published ports and the source/target sides of socat-relayed edges. This remains portable across rootless Podman and rootful Docker without host firewall changes or engine-specific bridge options.
+- CPA and Sub2API have no direct Internet route. Each reaches Squid only through its own source/target socat relay pair. AISIX has no Internet or Squid edge at all; it can reach only Sub2API, CPA, the enricher, and its private management binding. Squid alone joins `proxy-egress`; cloudflared alone joins its egress network and reaches APISIX only through its own relay. APISIX has no Internet route.
 - An optional `provider-sidecar` stays out of the reusable base Compose file. This is a generic role for an explicit-version OpenAI-compatible service whose runtime-specific image, environment, mounts, command, healthcheck, domains, models, and credentials exist only in ignored production state. The generated override supplies reusable TLS, shared-TUN, virtual-DNS, relay, and Squid boundaries without naming or embedding a concrete provider.
 - Egress policy is fail-closed. Every HTTPS tunnel must pass service/source, CONNECT domain, exact ClientHello SNI-to-CONNECT matching, and resolved private/reserved-address denial. Squid resolves only through an in-container Unbound instance that strips unsafe answers before caching, including mixed and rebinding responses. `bump` destinations additionally require exact decrypted Host-to-SNI matching plus method/path ACLs. `splice` destinations retain end-to-end TLS fingerprints but cannot expose encrypted Host/path to Squid.
 - TLS inspection uses a locally generated CA. Its private key is mounted only into Squid; CPA, Sub2API, and optional provider-sidecar receive only a public trust bundle. Upstream certificate validation remains enabled.
@@ -58,18 +62,19 @@ cd "$HOME/AI-gateway"
 ./scripts/init.sh
 ```
 
-`init.sh` generates private values without printing them. It refuses to overwrite an existing `.env` or `data/cpa/conf/config.yaml`.
+`init.sh` generates private values without printing them. It refuses to overwrite an existing `.env`, CPA config, or AISIX runtime file. It creates `aisix/config.yaml` and `aisix/resources.yaml` behind a mode-`0700` directory, plus mode-`0600` `aisix/caller-keys.json` for operator use.
 
 1. Replace `ADMIN_EMAIL=admin@example.invalid` in `.env`.
 2. In Cloudflare Dashboard, create a remotely managed Tunnel and replace `CLOUDFLARED_TUNNEL_TOKEN` in `.env` using an editor that does not expose it in shell history. Keep `.env` mode `0600`.
-3. Review the built-in control-plane rules in `data/egress-proxy/policy.json`, add only the deployment-specific provider or optional-feature destinations you need, then render it. This ignored runtime file is created only when absent, so repository upgrades never merge into or replace the user's allowlist:
+3. Replace the example model entries in private `aisix/resources.yaml` with the approved concrete CPA targets and logical routes. Keep one CPA provider key, reuse each concrete target as one direct model, and give Sub2API only the logical IDs it is authorized to expose. Configure CPA-backed Sub2API accounts with Base URL `http://aisix:3000/v1`, the private `sub2api` caller key from `aisix/caller-keys.json`, boolean pool mode, bounded retry, and `http_bridge`. Never print either caller key.
+4. Review the built-in control-plane rules in `data/egress-proxy/policy.json`, add only the deployment-specific provider or optional-feature destinations you need, then render it. This ignored runtime file is created only when absent, so repository upgrades never merge into or replace the user's allowlist:
 
    ```bash
    ./scripts/init-egress-proxy.sh
    ```
 
    The generated policy allows only the exact CPA and Sub2API control-plane `GET` requests documented below; provider, OAuth, plugin, private-sidecar, and user-defined egress remains denied. Use `tls: "bump"` with explicit methods and anchored POSIX path expressions. Use `tls: "splice"` only when preserving end-to-end TLS behavior is required; splice entries cannot enforce HTTP Host/path.
-4. If production uses an optional provider-sidecar, add an explicit non-floating version-tagged `PROVIDER_SIDECAR_IMAGE`, non-root `PROVIDER_SIDECAR_USER`, and `PROVIDER_SIDECAR_API_KEY` only to the ignored `.env`. Initialize dedicated internal TLS, generate the ignored transport override, then add the image-specific environment, mounts, command, and healthcheck to that private override:
+5. If production uses an optional provider-sidecar, add an explicit non-floating version-tagged `PROVIDER_SIDECAR_IMAGE`, non-root `PROVIDER_SIDECAR_USER`, and `PROVIDER_SIDECAR_API_KEY` only to the ignored `.env`. Initialize dedicated internal TLS, generate the ignored transport override, then add the image-specific environment, mounts, command, and healthcheck to that private override:
 
    ```bash
    ./scripts/init-provider-sidecar-tls.sh
@@ -78,13 +83,13 @@ cd "$HOME/AI-gateway"
 
    The public contract is intentionally narrow: the sidecar is OpenAI-compatible at `/v1`, listens on plain HTTP port `8080` inside its shared tunnel namespace, publishes no host port, runs as the declared non-root user, and obtains all Internet access through TUN → relay → Squid. The generator does not know or store any vendor-specific runtime setting.
 
-5. Validate and start. Compose builds `ai-sse-keepalive-proxy:v0.1.0` locally from tagged, pinned submodule `middleware/ai-sse-keepalive-proxy`; it never pulls middleware from GHCR:
+6. Validate and start. GitHub Actions publishes the temporary AISIX deadlock-fix image and independent status image to GHCR from the tracked Dockerfiles. Compose consumes their fixed version tags and never compiles them on the production host; `ai-sse-keepalive-proxy:v0.1.0` and models-enricher remain local builds:
 
    ```bash
    git submodule update --init --recursive
    ./scripts/validate.sh
    source ./scripts/container-runtime.sh
-   "${AI_GATEWAY_COMPOSE[@]}" pull cli-proxy-api postgres redis sub2api apisix cloudflared
+   "${AI_GATEWAY_COMPOSE[@]}" pull cli-proxy-api postgres redis sub2api aisix aisix-status apisix cloudflared
    "${AI_GATEWAY_COMPOSE[@]}" up -d --build
    "${AI_GATEWAY_COMPOSE[@]}" ps
    ```
@@ -143,12 +148,12 @@ Example TLS-preserving destination:
 }
 ```
 
-Optional components need separate exact rules and are not enabled by the tracked default:
+The tracked default includes the enricher's exact metadata reads; it does not authorize provider inference. Optional components need separate exact rules:
 
 | Component | Exact domain | Anchored path |
 |---|---|---|
-| CPA metadata plugin | `models.dev` | `^/api\\.json$` |
-| CPA metadata plugin | `modelparams.dev` | `^/api/v1/models\\.json$` |
+| models-enricher | `models.dev` | `^/(api\\.json|catalog\\.json)($|[?])` |
+| models-enricher | `modelparams.dev` | `^/api/v1/models\\.json($|[?])` |
 | Sub2API rollback-version listing | `api.github.com` | `^/repos/Wei-Shaw/sub2api/releases\\?per_page=15$` |
 | CPA plugin registry, listing only | `raw.githubusercontent.com` | `^/router-for-me/CLIProxyAPI-Plugins-Store/main/registry\\.json$` |
 | CPA model-catalog fallback | `models.router-for.me` | `^/models\\.json$` |
@@ -162,20 +167,32 @@ Repository upgrades do not modify an existing `data/egress-proxy/policy.json`. E
 
 Domain entries may be exact names or start with `.` to include subdomains. A domain may have multiple `bump` entries when different paths require different methods, but it cannot mix `bump` and `splice`. IP literals, plaintext HTTP, missing SNI, CONNECT ports other than 443, unlisted redirects, unknown methods/paths, private/link-local/loopback/CGNAT/documentation/multicast/reserved destinations, and malformed upstream certificates fail closed. Never allow all of GitHub: add only the exact repository API, raw-content, or release paths a configured component actually reads. Re-run `./scripts/init-egress-proxy.sh` after every policy edit, then validate and recreate Squid with its dependent clients together.
 
-## Configure CPA and Sub2API
+## Configure AISIX, CPA, and Sub2API
 
 CPA listens at `http://127.0.0.1:8317` by default. Its management UI/API requires the private `CPA_MANAGEMENT_KEY` stored in `.env`. OAuth callback ports are also loopback-only. Use SSH port forwarding rather than changing them to `0.0.0.0` on a remote host.
 
 CPA's global `proxy-url` forces provider transports through Squid. If an OpenAI-compatible entry targets another service on a pairwise internal network, set that entry's `api-key-entries[].proxy-url` to `direct`; otherwise the global proxy would incorrectly receive the internal HTTP request. Do not use `direct` for Internet destinations—the CPA container has no direct Internet route.
 
-Add provider accounts to CPA, then create an OpenAI-compatible upstream account in Sub2API:
+Add provider accounts to CPA, define their concrete IDs and logical routes in private `aisix/resources.yaml`, then create an OpenAI-compatible upstream account in Sub2API:
 
 | Field | Value |
 | --- | --- |
-| Base URL | `http://cli-proxy-api:8317/v1` |
-| API key | private `CPA_API_KEY` value from `.env` |
+| Base URL | `http://aisix:3000/v1` |
+| API key | private `sub2api` value from `aisix/caller-keys.json` |
+| Pool mode | boolean `true` |
+| WebSocket mode | `http_bridge` |
 
-Leave that internal CPA account without a Sub2API proxy. For every Sub2API account whose Base URL is on the Internet, explicitly assign an active `http` proxy record pointing to `sub2api-egress-relay:3128` with fallback mode `none`; Sub2API's account transports do not consistently inherit proxy environment variables.
+Leave that internal AISIX account without a Sub2API proxy. For every Sub2API account whose Base URL is on the Internet, explicitly assign an active `http` proxy record pointing to `sub2api-egress-relay:3128` with fallback mode `none`; Sub2API's account transports do not consistently inherit proxy environment variables.
+
+The only standing AISIX management surface is the complete no-JavaScript page at `http://127.0.0.1:3001/status`; a deployment may also bind that same page to one explicit Tailscale address. It displays configured target order, strategy, fallback budget, direct IDs, and AISIX's current eligible/cooldown/unavailable/unresolved state. `eligible` means only that AISIX is not currently excluding the target. A first eligible candidate is shown only for deterministic tag-free failover; dynamic strategies remain request-dependent. AISIX retains no authoritative current or last-served target history, and the page does not infer one from logs.
+
+AISIX Admin, Scalar, and playground paths are not proxied by the page listener. Admin listens only at `172.30.68.2:3002` on the internal `aisix-status-admin` network. For temporary maintenance, forward a local port over SSH instead of publishing Admin:
+
+```bash
+ssh -N -L 127.0.0.1:3002:172.30.68.2:3002 operator@gateway-host
+```
+
+While the SSH process is running, browse `http://127.0.0.1:3002/admin/openapi-scalar` or make an authenticated request with the private Admin key from `aisix/config.yaml`; load the key without placing it in shell history. Stop the SSH process immediately afterward. The forwarded endpoint must then be unreachable again.
 
 ### Pi Codex SSE and WebSocket transports
 
@@ -200,7 +217,7 @@ Override the built-in provider in the user's private `~/.pi/agent/models.json`:
 
 The higher-priority APISIX Codex Responses route matches only that marker plus a nonempty `x-api-key`. It removes the parse-only `Authorization` and marker before proxying; it neither stores nor validates the credential. Sub2API remains the sole API-key authority and authenticates `x-api-key`. Requests missing either header fail closed through the normal opaque public response policy. The same `/backend-api/codex/responses` path handles POST/SSE and GET/WebSocket.
 
-Set `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true` only after enabling a reviewed WebSocket mode on the corresponding Sub2API account. Use `ctx_pool` when per-turn admission and pricing controls are required. In Pi settings, `transport: "websocket"` reuses one connection while sending full context; `transport: "websocket-cached"` reuses it and sends `previous_response_id` plus the new input delta. `transport: "sse"` remains the explicit HTTP streaming mode.
+Set `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true` only after enabling a reviewed WebSocket mode on the corresponding Sub2API account. In Pi settings, `transport: "websocket"` reuses one connection while sending full context and is the supported mode for the current CPA-backed path. `transport: "websocket-cached"` sends `previous_response_id` plus only the new input delta; current CPA upstreams do not emit reusable `resp_*` IDs, so this implicit continuation mode is not supported yet. `transport: "sse"` remains the explicit HTTP streaming mode.
 
 ### Optional provider-sidecar
 
@@ -256,7 +273,7 @@ When upgrading Sub2API, re-audit that provider/upstream authentication failures 
 
 ## Operations
 
-Sub2API, CLIProxyAPI, AI SSE keepalive proxy, their namespace owners, and every adjacent socat relay are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never use `docker restart`, never recreate a namespace owner alone, and never recreate CPA without Sub2API. With the production override, include the provider-sidecar tunnel and both provider-sidecar relays in the same full-stack operation.
+Sub2API, AISIX, CLIProxyAPI, models-enricher, AI SSE keepalive proxy, their namespace owners, and adjacent relays are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never use `docker restart` or recreate a namespace owner alone. A proven application-only image replacement may use Compose `up -d --no-deps --no-build <service>` while its namespace owner remains unchanged; broader network or CPA changes require the coupled stack. With the production override, include the provider-sidecar tunnel and both provider-sidecar relays in the same full-stack operation.
 
 ```bash
 source ./scripts/container-runtime.sh
@@ -264,7 +281,8 @@ source ./scripts/container-runtime.sh
 # Follow all stack and relay logs
 "${AI_GATEWAY_COMPOSE[@]}" logs -f
 
-# Apply an image, policy, relay, or namespace change as one coupled recreation
+# Pull the fixed AISIX artifacts, then apply a coupled recreation
+"${AI_GATEWAY_COMPOSE[@]}" pull aisix aisix-status
 "${AI_GATEWAY_COMPOSE[@]}" up -d --build --force-recreate
 
 # Stop and restart the complete stack without deleting bind-mounted data
@@ -284,11 +302,11 @@ Persistent application state lives under ignored `data/`, including the egress C
 ./scripts/validate.sh .env.example # tracked template only
 ```
 
-Validation keeps three durable security contracts. First, the tracked fresh-install policy is the exact control-plane baseline documented above: missing, extra, or broadened GitHub rules fail offline validation. Second, egress is fail-closed: application namespaces have no direct route, Squid is sole provider egress, filtered DNS blocks private/reserved and rebinding answers, and policy tests distinguish domain, SNI/Host, method, and path allowlists. Third, every declared directed edge uses disjoint pairwise networks joined by one nonroot/read-only/capability-free relay; forward TCP works while reverse initiation and relay bypass fail. Compose rendering, local image builds, APISIX/Squid syntax, explicit non-floating version tags, and untracked-secret checks are lightweight scaffold gates, not snapshots of service counts, fixed addresses, or application policy values. Like Compose startup, `validate.sh` automatically includes repo-root `compose.override.yaml` when present; `AI_GATEWAY_COMPOSE_OVERRIDE` selects a different explicit override.
+Validation keeps three durable security contracts. First, the tracked fresh-install policy is the exact control-plane baseline documented above: missing, extra, or broadened GitHub rules fail offline validation. Second, egress is fail-closed: application namespaces have no direct route, Squid is sole provider egress, filtered DNS blocks private/reserved and rebinding answers, and policy tests distinguish domain, SNI/Host, method, and path allowlists. Third, each edge is either a disjoint relay pair or one of the three explicit direct AISIX networks; validation checks both bounded shapes. Compose rendering, local image builds, APISIX/Squid syntax, explicit non-floating version tags, and untracked-secret checks are lightweight scaffold gates, not snapshots of service counts, fixed addresses, or application policy values. Like Compose startup, `validate.sh` automatically includes repo-root `compose.override.yaml` when present; `AI_GATEWAY_COMPOSE_OVERRIDE` selects a different explicit override.
 
-### Optional models gateway (apisix-models + models-enricher)
+### Catalog compatibility stack (apisix-models + models-enricher)
 
-A dedicated second APISIX instance (`apisix-models`, config in `apisix-models/`) sits between Sub2API and CPA. It transparently proxies all CPA-bound traffic (SSE streaming and Codex WebSocket enabled on the catch-all route) and routes `GET /v1/models` with a **nonempty `client_version`** to `models-enricher` (route `codex-models`). Missing or empty versions fall through to CPA. Requests sent directly to the enricher still require a nonempty version.
+The dedicated `apisix-models` instance remains for catalog and protocol compatibility, but CPA-backed Sub2API inference accounts no longer traverse it: their path is Sub2API -> AISIX -> CPA. Parameterized `GET /v1/models` requests reach `models-enricher` through the retained catalog sidecars, while missing or empty versions retain the established CPA fallback behavior. Requests sent directly to the enricher still require a nonempty version.
 
 `models-enricher` (Go service in `models-enricher/`) answers Codex manifest requests. The CPA **native manifest** (`GET /v1/models?client_version=1` with the client key, regardless of the caller's version) is the authoritative baseline for OAuth/native models: if neither a fresh response nor an eligible successful cached response is available, the enricher returns 502 `native_manifest_failed` and synthesizes nothing. It then discovers enabled key-type CPA channels via the management API (`CPA_MANAGEMENT_KEY`), fetches explicitly configured channels' live models through CPA `api-call` (credentials never leave CPA), and enriches from explicitly configured sources. For the five key-channel kinds managed by Rust, upstream inventories supply metadata only; Go retains CPA-authoritative membership. All outbound HTTP (CPA calls, source fetches, ollama lookups) shares one bounded pool (`http_concurrency`, default 8); channels are fetched concurrently with deterministic ordering, and a single channel/source failure degrades with a WARN instead of failing the request.
 
@@ -311,13 +329,13 @@ Source configuration is fully explicit (`models-enricher/config.yaml`):
 
 Only enabled enrichment steps can fail a channel. If its channel inventory, an explicitly required bulk source, or any required Ollama model lookup fails without usable cached data, every member of that channel returns its complete CPA baseline. Partial enrichment, target overrides and same-prefix static replacements are withheld; successful read-cache entries remain available. Shared source failures affect only dependent channels, and other channels continue. A successful source response without a matching model is an ordinary metadata miss, not a request failure. With no usable CPA native baseline, the whole catalog still fails closed. Invalid configuration remains distinct from an upstream outage.
 
-APISIX does **not** cache the final enriched catalog. Go caches successful CPA and external-source **read responses** for five minutes, measured from successful refresh; final catalogs are composed on demand. Concurrent reads for the same key share one fetch. The SHA-256 filename covers method, complete URL/query, request headers/authentication and body, so CPA `api-call` channels and client versions do not collide. Only inner GET requests and Ollama's read-only `POST /api/show` are cacheable through `api-call`; outer HTTP 200 does not hide an inner failure.
+APISIX does **not** cache the final enriched catalog. Go caches successful final catalogs by `client_version` for five minutes, with at most 24 entries and a 16 MiB aggregate completed-body limit; an oversized result is served but not retained. Full builds for different versions are serialized to bound peak memory, while concurrent requests for the same version share one build. Go separately caches successful CPA and external-source **read responses** for five minutes. The SHA-256 filename covers method, complete URL/query, request headers/authentication and body, so CPA `api-call` channels and client versions do not collide. Only inner GET requests and Ollama's read-only `POST /api/show` are cacheable through `api-call`; outer HTTP 200 does not hide an inner failure.
 
-Expired entries may be used indefinitely on network errors, timeouts or HTTP 502/503/504, while they remain in cache. Each later request attempts refresh again; serving stale does not renew freshness. HTTP 401/403, other non-transient statuses and invalid JSON do not use stale values; successful refresh replaces the file atomically. Cache files are private (0600) in a new 0700 `/tmp/enricher-cache-*` directory per process; old process directories are never loaded. The container mounts a 64MiB `/tmp` tmpfs, counted within its unchanged 256MiB limit. Cached content is capped at 32MiB and 256 entries with least-recently-used eviction; temporary atomic-replacement files can use another 32MiB. Eviction or restart may remove fallback availability. Management responses can contain credentials: never publish these files or mount persistent cache storage. The client-facing CPA key comes from `CPA_CLIENT_KEY` (defaults to `CPA_API_KEY`).
+Expired read-cache entries may be used indefinitely on network errors, timeouts or HTTP 502/503/504, while they remain in cache. Each later request attempts refresh again; serving stale does not renew freshness. HTTP 401/403, other non-transient statuses and invalid JSON do not use stale values; successful refresh replaces the file atomically. Cache files are private (0600) in a new 0700 `/tmp/enricher-cache-*` directory per process; old process directories are never loaded. The container mounts a 64MiB `/tmp` tmpfs and uses a 384 MiB cgroup limit with `GOMEMLIMIT=288MiB`. Read-cache content remains capped at 32MiB and 256 entries with least-recently-used eviction; temporary atomic-replacement files can use another 32MiB. Eviction or restart may remove fallback availability. Management responses can contain credentials: never publish these files or mount persistent cache storage. The client-facing CPA key comes from `CPA_CLIENT_KEY` (defaults to `CPA_API_KEY`).
 
-HTTP alias routing already uses APISIX `ai-proxy-multi` with configured targets, chash and pre-stream failure policies; WebSocket alias handling stays in `ws-alias-proxy`. Configured target availability is separate from support for multiple targets.
+AISIX owns HTTP/SSE alias routing over concrete CPA targets. Sub2API owns WebSocket ingress and reconstructs explicit full-history requests through `http_bridge`; retained APISIX and `ws-alias-proxy` components continue serving their separate public/catalog compatibility roles.
 
-Cutover: point the Sub2API CPA hop at the `apisix-models` relay and remove the legacy `sub2api-cpa-relay` (see change `add-apisix-models-gateway` tasks 4.x).
+Cutover: configure every CPA-backed Sub2API account for `http://aisix:3000/v1` with an AISIX caller key. CPA model-router is not a standby or rollback path.
 
 ### Front-door model catalog intersection (model-catalog-sidecar)
 
@@ -352,7 +370,9 @@ See [the 2026-09-05 closeout](docs/catalog-round-closeout.md) for OpenSpec phase
 │   ├── apisix.yaml       # standalone routes and public response policy
 │   ├── config.yaml       # APISIX data-plane configuration
 │   └── lua/              # custom APISIX modules
-├── apisix-models/        # dedicated Sub2API<->CPA gateway instance
+├── aisix/                # pinned AISIX CI build, patch, public examples, private ignored runtime files
+├── aisix-status/         # independent no-JavaScript server-rendered status page
+├── apisix-models/        # retained catalog/protocol compatibility APISIX instance
 │   ├── apisix.yaml       # models route split + WS/SSE catch-all
 │   └── config.yaml       # standalone data-plane configuration
 ├── models-enricher/      # Go Codex manifest enricher sidecar

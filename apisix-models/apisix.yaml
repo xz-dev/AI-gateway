@@ -263,5 +263,29 @@ routes:
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
+      # 2026-09-10: Kimi 上游不支持 prompt_cache_retention（400 invalid_request_error），
+      # CPA kimi_executor 不剥字段，导致 400→500 转换后 sub2api 重试 10 次、
+      # 客户端表现为长时间 hang + 最终 Connection error。
+      # 在此统一剥除该字段，避免无效上游调用和重试风暴。
+      # 注意：WS 路径不经过此插件（APISIX WS 代理跳过 body 插件），
+      #       WS 侧由 ws-alias-proxy 的 rewriteBody 同步剥除。
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - >-
+            return function()
+              local ct = ngx.var.http_content_type or ""
+              if not ct:find("json") then return end
+              ngx.req.read_body()
+              local body = ngx.req.get_body_data()
+              if not body or body == "" then return end
+              local dkjson = require("dkjson")
+              local obj, pos, err = dkjson.decode(body, 1, nil)
+              if err or type(obj) ~= "table" then return end
+              if obj.prompt_cache_retention == nil then return end
+              obj.prompt_cache_retention = nil
+              local nb = dkjson.encode(obj)
+              if nb then ngx.req.set_body_data(nb) end
+            end
     upstream_id: cpa
 #END

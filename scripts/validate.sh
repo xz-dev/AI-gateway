@@ -30,7 +30,8 @@ if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
   for path in data/cpa/conf/config.yaml data/cpa/mgmt.key \
     data/egress-proxy/ca.key data/egress-proxy/ca.crt \
     data/egress-proxy/ca-bundle.pem data/egress-proxy/policy.json \
-    data/egress-proxy/generated/squid.conf data/egress-proxy/virtual-resolv.conf; do
+    data/egress-proxy/generated/squid.conf data/egress-proxy/virtual-resolv.conf \
+    aisix/config.yaml aisix/resources.yaml aisix/caller-keys.json; do
     [ -f "$path" ] || { echo "missing runtime file: $path" >&2; exit 1; }
   done
   [ "$(stat -c %a data/egress-proxy)" = 700 ] || { echo 'data/egress-proxy must have mode 700' >&2; exit 1; }
@@ -40,9 +41,34 @@ if [ "$env_file" = .env ] || [ "$env_file" = "$root/.env" ]; then
   [ "$key_id" = "$cert_id" ] || { echo 'egress CA key and certificate do not match' >&2; exit 1; }
   openssl x509 -in data/egress-proxy/ca.crt -noout -checkend 2592000 >/dev/null || { echo 'egress CA expires within 30 days' >&2; exit 1; }
   [ "$(stat -c %a data/sub2api/postgres)" = 1777 ] || { echo 'data/sub2api/postgres must have mode 1777' >&2; exit 1; }
+  [ "$(stat -c %a aisix)" = 700 ] || { echo 'aisix runtime directory must have mode 700' >&2; exit 1; }
+  [[ $(stat -c %a aisix/config.yaml) == 444 ]] || { echo 'aisix/config.yaml must have mode 444 for both non-root AISIX readers' >&2; exit 1; }
+  case $(stat -c %a aisix/resources.yaml) in 400|444) ;; *) echo 'aisix/resources.yaml must have mode 400 or 444' >&2; exit 1 ;; esac
+  [ "$(stat -c %a aisix/caller-keys.json)" = 600 ] || { echo 'aisix/caller-keys.json must have mode 600' >&2; exit 1; }
+  readarray -t aisix_key_hashes < <(python3 - <<'PY'
+import hashlib
+import json
+from pathlib import Path
+
+keys = json.loads(Path("aisix/caller-keys.json").read_text())
+if set(keys) != {"sub2api", "enricher_catalog"} or not all(isinstance(value, str) and value for value in keys.values()):
+    raise SystemExit("aisix/caller-keys.json has an invalid shape")
+for name in ("sub2api", "enricher_catalog"):
+    print(hashlib.sha256(keys[name].encode()).hexdigest())
+PY
+  )
+  [ "${#aisix_key_hashes[@]}" = 2 ] || { echo 'failed to derive AISIX caller-key hashes' >&2; exit 1; }
+  for hash in "${aisix_key_hashes[@]}"; do
+    grep -Eq "^[[:space:]]*key_hash:[[:space:]]*${hash}[[:space:]]*$" aisix/resources.yaml || {
+      echo 'AISIX caller key does not match resources.yaml' >&2
+      exit 1
+    }
+  done
 fi
 
-for path in .env .pi compose.override.yaml cpa/config.yaml secrets/cloudflare-tunnel-token data; do
+for path in .env .pi .migration-evidence compose.override.yaml cpa/config.yaml \
+  aisix/config.yaml aisix/resources.yaml aisix/caller-keys.json \
+  secrets/cloudflare-tunnel-token data; do
   if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
     echo "private runtime path is tracked: $path" >&2
     exit 1
@@ -55,6 +81,18 @@ grep -Eq '^proxy-url:[[:space:]]*"?http://cpa-egress-relay:3128"?[[:space:]]*$' 
   echo "$cpa_config must force global provider traffic through cpa-egress-relay" >&2
   exit 1
 }
+aisix_config=aisix/config.example.yaml
+[ "$runtime_mode" = 0 ] || aisix_config=aisix/config.yaml
+python3 - "$aisix_config" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r"(?ms)^admin:\s*\n(.*?)(?=^[A-Za-z_][A-Za-z0-9_]*:\s*(?:#.*)?$|\Z)", text)
+if not match or not re.search(r"(?m)^\s+addr:\s*172\.30\.68\.2:3002\s*$", match.group(0)):
+    raise SystemExit(f"{sys.argv[1]} must bind AISIX Admin only to 172.30.68.2:3002")
+PY
 
 tmpdir=$(mktemp -d /tmp/ai-gateway-validate.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
@@ -102,6 +140,10 @@ expected = {
             r"^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\.json$",
             r"^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\.sha256$",
         ),
+    )),
+    "enricher": sorted((
+        entry("modelparams.dev", r"^/api/v1/models\.json($|[?])"),
+        entry("models.dev", r"^/(api\.json|catalog\.json)($|[?])"),
     )),
 }
 
@@ -257,7 +299,7 @@ def relay_is_hardened(name):
 for service, config in services.items():
     if config.get("privileged") is True:
         raise SystemExit(f"privileged service is forbidden: {service}")
-    if config.get("ports") and not service.endswith("-host-netns"):
+    if config.get("ports") and not (service.endswith("-host-netns") or service == "aisix-netns"):
         raise SystemExit(f"only host namespace owners may publish ports: {service}")
     depends = config.get("depends_on") or {}
     if isinstance(depends, dict):
@@ -267,8 +309,10 @@ for service, config in services.items():
     image = str(config.get("image", ""))
     if not image:
         continue
-    if "@sha256:" in image:
-        raise SystemExit(f"image digest references are forbidden: {service}")
+    if "@" in image:
+        image, digest = image.rsplit("@", 1)
+        if not digest.startswith("sha256:") or len(digest.removeprefix("sha256:")) != 64:
+            raise SystemExit(f"image digest must be a complete sha256 pin: {service}")
     image_name = image.rsplit("/", 1)[-1]
     if ":" not in image_name:
         raise SystemExit(f"image is missing an explicit version tag: {service}")
@@ -277,14 +321,94 @@ for service, config in services.items():
         raise SystemExit(f"image tag is not an explicit non-floating version: {service}={image_tag}")
 
 network_members = {name: members(name) for name in networks}
+
+# AISIX is the intentional direct-edge exception to the ordinary relay shape.
+# Validate exact namespace-owner membership so a future Compose edit cannot
+# silently widen these pairwise networks or reintroduce an AISIX relay.
+direct_aisix_edges = {
+    "sub2api-aisix": {"sub2api-netns", "aisix-netns"},
+    "aisix-cpa": {"aisix-netns", "cpa-netns"},
+    "enricher-aisix": {"models-enricher-netns", "aisix-netns"},
+}
+for name, expected_members in direct_aisix_edges.items():
+    if network_members.get(name) != expected_members:
+        raise SystemExit(f"invalid direct AISIX edge {name}: {sorted(network_members.get(name, set()))}")
+for forbidden in ("aisix-relay", "sub2api-aisix-relay", "aisix-cpa-relay", "enricher-aisix-relay"):
+    if forbidden in services:
+        raise SystemExit(f"AISIX-specific relay is forbidden: {forbidden}")
+
+aisix_service = services.get("aisix", {})
+status_service = services.get("aisix-status", {})
+for name, service in (("aisix", aisix_service), ("aisix-status", status_service)):
+    if service.get("build") is not None:
+        raise SystemExit(f"{name} must consume its fixed-version GHCR image, not build on the deployment host")
+if aisix_service.get("network_mode") != "service:aisix-netns":
+    raise SystemExit("AISIX must share the route-stripped aisix-netns namespace")
+aisix_owner = services.get("aisix-netns", {})
+if service_networks(aisix_owner) != set(direct_aisix_edges) | {"aisix-host-source", "aisix-status-admin"}:
+    raise SystemExit("aisix-netns has an unexpected network membership")
+aisix_ports = aisix_owner.get("ports") or []
+if not aisix_ports:
+    raise SystemExit("AISIX status page binding is missing")
+for port in aisix_ports:
+    if isinstance(port, dict):
+        host_ip = str(port.get("host_ip") or "")
+        target = int(port.get("target", 0))
+    else:
+        parts = str(port).rsplit(":", 2)
+        if len(parts) != 3:
+            raise SystemExit("AISIX status port must use an explicit host binding")
+        host_ip = parts[0].strip("[]")
+        target = int(parts[2].split("/", 1)[0])
+    if host_ip in ("", "0.0.0.0", "::", "[::]"):
+        raise SystemExit("AISIX status port must not use a wildcard host binding")
+    if target != 3001:
+        raise SystemExit("AISIX namespace may publish only the status relay port 3001")
+
+if service_networks(status_service) != {"aisix-status-admin"}:
+    raise SystemExit("AISIX status renderer must attach only to aisix-status-admin")
+if network_members.get("aisix-status-admin") != {"aisix-netns", "aisix-status"}:
+    raise SystemExit("AISIX Admin network must contain only AISIX and the status renderer")
+if str(status_service.get("user")) != "65532:65532" or status_service.get("read_only") is not True or status_service.get("ports") or status_service.get("healthcheck"):
+    raise SystemExit("AISIX status renderer must be non-root/read-only without ports or healthcheck timers")
+if {str(cap).upper() for cap in status_service.get("cap_drop", [])} != {"ALL"} or status_service.get("cap_add"):
+    raise SystemExit("AISIX status renderer must drop all capabilities")
+if "no-new-privileges:true" not in status_service.get("security_opt", []):
+    raise SystemExit("AISIX status renderer must set no-new-privileges")
+if not status_service.get("pids_limit") or not status_service.get("mem_limit") or not status_service.get("cpus"):
+    raise SystemExit("AISIX status renderer must have explicit resource limits")
+status_environment = status_service.get("environment") or {}
+if status_environment.get("AISIX_ADMIN_URL") != "http://172.30.68.2:3002":
+    raise SystemExit("AISIX status renderer must use the fixed internal Admin address")
+if set(volume_targets(status_service)) != {"/etc/aisix/config.yaml"}:
+    raise SystemExit("AISIX status renderer may mount only the read-only AISIX bootstrap config")
+status_relay = services.get("aisix-status-relay", {})
+relay_text = command_text(status_relay)
+if status_relay.get("network_mode") != "service:aisix-netns" or not relay_is_hardened("aisix-status-relay"):
+    raise SystemExit("AISIX status page must use a hardened relay in the AISIX namespace")
+if "TCP4-LISTEN:3001" not in relay_text or "TCP4:172.30.68.3:8080" not in relay_text:
+    raise SystemExit("AISIX status relay must forward only port 3001 to the isolated renderer")
+
+internal_membership_exceptions = {
+    # The front APISIX, catalog bridge, and private table host share this
+    # established catalog-source segment; every other internal net is a pair.
+    "apisix-catalog-source": {"apisix-netns", "model-catalog-sidecar", "models-table-host-netns"},
+}
 for name, config in networks.items():
     config = config or {}
     current = network_members[name]
     if config.get("internal") is True:
-        if len(current) != 2:
+        expected_members = internal_membership_exceptions.get(name)
+        if expected_members is not None:
+            if current != expected_members:
+                raise SystemExit(f"invalid bounded internal network {name}: {sorted(current)}")
+        elif len(current) != 2:
             raise SystemExit(f"internal network must have exactly two members: {name}={sorted(current)}")
     elif name.endswith("-host-source"):
-        if len(current) != 1 or not next(iter(current)).endswith("-host-netns"):
+        if name == "aisix-host-source":
+            if current != {"aisix-netns"}:
+                raise SystemExit(f"AISIX host source must have only aisix-netns: {sorted(current)}")
+        elif len(current) != 1 or not next(iter(current)).endswith("-host-netns"):
             raise SystemExit(f"host source network must have one namespace owner: {name}")
     elif name.endswith("-egress"):
         if len(current) != 1:
@@ -300,6 +424,17 @@ for source_name in sorted(name for name in networks if name.endswith("-source") 
         raise SystemExit(f"missing target network for {source_name}")
     source_members = network_members[source_name]
     target_members = network_members[target_name]
+    if source_name == "apisix-catalog-source":
+        bridge = services.get("model-catalog-sidecar", {})
+        if target_members != {"model-catalog-sidecar", "apisix-models-netns"}:
+            raise SystemExit(f"invalid catalog target membership: {sorted(target_members)}")
+        if str(bridge.get("user")) != "101:101" or bridge.get("read_only") is not True or bridge.get("ports"):
+            raise SystemExit("catalog bridge must be non-root/read-only without ports")
+        if {str(cap).upper() for cap in bridge.get("cap_drop", [])} != {"ALL"} or bridge.get("cap_add"):
+            raise SystemExit("catalog bridge must drop all capabilities")
+        if "no-new-privileges:true" not in bridge.get("security_opt", []):
+            raise SystemExit("catalog bridge must set no-new-privileges")
+        continue
     relays = source_members & target_members
     if len(relays) != 1:
         raise SystemExit(f"edge {source_name} must have exactly one shared relay")
@@ -314,6 +449,15 @@ for source_name in sorted(name for name in networks if name.endswith("-source") 
 # Host ingress also has a dedicated hardened relay sharing the route-stripped
 # namespace owner; no application publishes a port itself.
 for source_name in sorted(name for name in networks if name.endswith("-host-source")):
+    if source_name == "aisix-host-source":
+        if status_relay.get("network_mode") != "service:aisix-netns" or not relay_is_hardened("aisix-status-relay"):
+            raise SystemExit("AISIX status host edge must use its hardened namespace relay")
+        continue
+    if source_name == "models-table-host-source":
+        table_relay = services.get("models-table-relay", {})
+        if table_relay.get("network_mode") != "service:models-table-host-netns" or not relay_is_hardened("models-table-relay"):
+            raise SystemExit("models table host edge must use its hardened namespace relay")
+        continue
     prefix = source_name[:-12]
     target_name = f"host-{prefix}-target"
     if target_name not in networks:

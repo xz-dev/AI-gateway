@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -68,5 +69,74 @@ func TestHandlerCatalogResultCache(t *testing.T) {
 	get(h, "v-nocache")
 	if got := fake.nativeCalls.Load() - before; got != 2 {
 		t.Fatalf("disabled cache must rebuild per request: rebuilt %d, want 2", got)
+	}
+}
+
+func TestCatalogCacheRejectsBodiesOverByteLimit(t *testing.T) {
+	stubSources(t)
+	fake := &fakeCPA{
+		oauthModels:  []string{"m1"},
+		native:       []byte(`{"models": [{"slug": "oauth/m1", "id": "oauth/m1"}]}`),
+		channelsBody: testChannels,
+	}
+	cpa := httptest.NewServer(fake.handler())
+	defer cpa.Close()
+	h := newTestHandler(t, testCfg(), cpa)
+
+	catalogCacheTTL.Store(int64(time.Minute))
+	catalogCacheMaxBytes.Store(1)
+	t.Cleanup(func() {
+		catalogCacheTTL.Store(0)
+		catalogCacheMaxBytes.Store(0)
+	})
+
+	for range 2 {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models?client_version=v-byte-limit", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("catalog status = %d, want 200", rec.Code)
+		}
+	}
+	if got := fake.nativeCalls.Load(); got != 2 {
+		t.Fatalf("oversized cached catalog native calls = %d, want 2", got)
+	}
+}
+
+func TestCatalogBuildsForDifferentVersionsAreSerialized(t *testing.T) {
+	stubSources(t)
+	fake := &fakeCPA{
+		native:       []byte(`{"models": [{"slug": "m1", "id": "m1"}]}`),
+		nativeDelay:  50 * time.Millisecond,
+		channelsBody: testChannels,
+	}
+	cpa := httptest.NewServer(fake.handler())
+	defer cpa.Close()
+	h := newTestHandler(t, testCfg(), cpa)
+
+	catalogCacheTTL.Store(0)
+	catalogCacheMaxBytes.Store(0)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	statuses := make(chan int, 2)
+	for _, version := range []string{"v-serial-a", "v-serial-b"} {
+		wg.Add(1)
+		go func(version string) {
+			defer wg.Done()
+			<-start
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models?client_version="+version, nil))
+			statuses <- rec.Code
+		}(version)
+	}
+	close(start)
+	wg.Wait()
+	close(statuses)
+	for status := range statuses {
+		if status != http.StatusOK {
+			t.Fatalf("catalog status = %d, want 200", status)
+		}
+	}
+	if got := fake.nativeMaxActive.Load(); got != 1 {
+		t.Fatalf("concurrent native catalog builds = %d, want 1", got)
 	}
 }

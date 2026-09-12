@@ -6,6 +6,10 @@
 # 已启用步骤无可用缓存且失败时，整个渠道退回纯CPA记录。
 cpa_base_url: http://cpa:8317
 
+# 可选 AISIX 独有模型目录补充；凭证仅从环境变量 AISIX_TOKEN 读取，禁止写入 YAML。
+aisix_models_url: http://aisix:3000/v1/models
+aisix_timeout: 5s
+
 bare_models_takeover: true
 source_priority: [models.dev/zai, models.dev/xai, models.dev/moonshotai, models.dev/openai, models.dev/anthropic]
 http_concurrency: 8

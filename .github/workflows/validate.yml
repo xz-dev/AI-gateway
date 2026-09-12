@@ -25,9 +25,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: models-enricher/go.mod
-          cache-dependency-path: models-enricher/go.sum
+          cache-dependency-path: |
+            models-enricher/go.sum
+            aisix-status/go.sum
       - name: Check Go metadata boundary
         working-directory: models-enricher
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Check AISIX status boundary
+        working-directory: aisix-status
         run: |
           go test -race ./...
           go vet ./...

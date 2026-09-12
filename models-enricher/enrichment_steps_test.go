@@ -83,7 +83,7 @@ func TestEnabledEnrichmentSteps(t *testing.T) {
 				cfg.Channels["p"] = *tc.channel
 			}
 			pool := cachedTestPool(t)
-			handler := handleModels(cfg, newCPAClient(cpa.URL, "m", "c", pool, testLog()), pool, testLog())
+			handler := handleModels(cfg, newCPAClient(cpa.URL, "m", "c", pool, testLog()), nil, pool, testLog())
 			w := httptest.NewRecorder()
 			handler(w, httptest.NewRequest("GET", "/v1/models?client_version=steps", nil))
 			if w.Code != 200 {

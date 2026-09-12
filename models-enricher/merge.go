@@ -81,7 +81,15 @@ func omitConflictingReasoningDefault(entry, overrides map[string]any) {
 	delete(entry, "default_reasoning_level")
 }
 
-func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables *SourceTables, ollama map[string]map[string]sourceHit) *Manifest {
+func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables *SourceTables, ollama map[string]map[string]sourceHit, supplemental ...[]string) *Manifest {
+	var supp []string
+	if len(supplemental) > 0 {
+		supp = supplemental[0]
+	}
+	isSupplemental := make(map[string]bool, len(supp))
+	for _, id := range supp {
+		isSupplemental[id] = true
+	}
 	bySlug := map[string]map[string]any{}
 	baselinePrefixes := map[string]bool{}
 	for _, pack := range fetched {
@@ -97,6 +105,9 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 		}
 	}
 	baselineSlug := func(slug string) bool {
+		if isSupplemental[slug] {
+			return false
+		}
 		prefix, _, _ := strings.Cut(slug, "/")
 		return baselinePrefixes[prefix] || (base != nil && base.preserveNative[slug])
 	}
@@ -218,6 +229,32 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 			overlayMetadata(entry, overrides)
 			omitConflictingReasoningDefault(entry, overrides)
 			customPool[prefix+"/"+name] = entry
+		}
+	}
+
+	// 补充来自 New API 独有模型：
+	// 不经过 CPA 身份准入，沿用全局数据链动态补全元数据。
+	// 无源命中时保留基础模型记录；已有 static_models 显式覆盖在下方继续叠加。
+	if len(supp) > 0 {
+		suppCfg := ChannelConfig{globalChain: cfg.GlobalSourcePriority, providerPrefixes: cfg.providerPrefixes}
+		for _, id := range supp {
+			if _, exists := bySlug[id]; exists {
+				continue
+			}
+			entry := map[string]any{
+				"id":   id,
+				"slug": id,
+			}
+			if len(cfg.GlobalSourcePriority) > 0 {
+				queries := sourceQueries(suppCfg, id)
+				for i := len(queries) - 1; i >= 0; i-- {
+					if hit, ok := tables.lookupQuery(queries[i]); ok {
+						overlayMetadata(entry, hit)
+					}
+				}
+			}
+			omitConflictingReasoningDefault(entry, nil)
+			put(id, entry)
 		}
 	}
 	// 按配置顺序物化 static；只能引用公开池、隐藏池或已经完成的 static。

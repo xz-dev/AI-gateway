@@ -174,7 +174,7 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		handler := handleModels(testCfg(), newCPAClient(cpa.URL, "m", "c", pool, testLog()), pool, testLog())
+		handler := handleModels(testCfg(), newCPAClient(cpa.URL, "m", "c", pool, testLog()), nil, pool, testLog())
 		serve("127.0.0.4:8090", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			enricherRequests.Add(1)
 			handler.ServeHTTP(w, r)

@@ -57,7 +57,7 @@ func TestOneOllamaModelFailureRollsBackWholeChannelAndRetainsSuccess(t *testing.
 		"q": {FetchModels: &off, SourcePriority: []string{"ollama_cloud"}, OllamaNativeBase: "https://q"},
 	}}
 	pool := cachedTestPool(t)
-	handler := handleModels(cfg, newCPAClient(server.URL, "m", "c", pool, testLog()), pool, testLog())
+	handler := handleModels(cfg, newCPAClient(server.URL, "m", "c", pool, testLog()), nil, pool, testLog())
 	for range 2 {
 		w := httptest.NewRecorder()
 		handler(w, httptest.NewRequest("GET", "/v1/models?client_version=ollama-fallback", nil))

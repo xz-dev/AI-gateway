@@ -6,7 +6,7 @@ CONFIG_TEMPLATE=/opt/apisix.yaml.tpl
 APISIX_CONFIG=${PREFIX}/conf/apisix.yaml
 
 case "${CPA_API_KEY:-}" in
-  *'&'*|*'/'*|*'\\'*)
+  *'&'*|*'/'*|*\\*)
     echo 'CPA_API_KEY has unsafe chars for sed' >&2
     exit 1
     ;;

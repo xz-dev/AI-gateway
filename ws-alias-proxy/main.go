@@ -142,6 +142,9 @@ func rewriteBody(data []byte, target string) []byte {
 	m["model"] = target
 	m["stream"] = true
 	delete(m, "type")
+	// Kimi 上游不支持 prompt_cache_retention（400 invalid_request_error），
+	// CPA kimi_executor 不剥字段，统一在此剥除（HTTP 路径由 apisix-models catch-all 同步处理）。
+	delete(m, "prompt_cache_retention")
 	out, err := json.Marshal(m)
 	if err != nil {
 		return data

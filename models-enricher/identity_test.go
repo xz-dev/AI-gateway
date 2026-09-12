@@ -37,7 +37,7 @@ func identityHandler(t *testing.T, fake *fakeCPA, extra http.HandlerFunc, cfg *C
 	}
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewTextHandler(logs, nil))
-	return handleModels(cfg, newCPAClient(server.URL, "management-test", "client-test", pool, log), pool, log), logs
+	return handleModels(cfg, newCPAClient(server.URL, "management-test", "client-test", pool, log), nil, pool, log), logs
 }
 
 func identityCatalog(t *testing.T, handler http.Handler) map[string]map[string]any {

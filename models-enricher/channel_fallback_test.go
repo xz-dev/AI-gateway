@@ -39,7 +39,7 @@ func TestSharedSourceFailureRollsBackOnlyDependentChannels(t *testing.T) {
 		"c": {SourcePriority: []string{"modelparams.dev/p/subscription"}},
 	}, StaticModels: []map[string]any{{"slug": "a/m", "overrides": map[string]any{"context_window": 9999}}}}
 	pool := cachedTestPool(t)
-	handler := handleModels(cfg, newCPAClient(cpa.URL, "m", "c", pool, testLog()), pool, testLog())
+	handler := handleModels(cfg, newCPAClient(cpa.URL, "m", "c", pool, testLog()), nil, pool, testLog())
 	var baseline Manifest
 	if err := decodeJSON(fake.native, &baseline); err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestUsableStaleSourceStillEnrichesChannel(t *testing.T) {
 	pool := cachedTestPool(t)
 	now := time.Now()
 	pool.cache.clock = func() time.Time { return now }
-	handler := handleModels(cfg, newCPAClient(cpa.URL, "m", "c", pool, testLog()), pool, testLog())
+	handler := handleModels(cfg, newCPAClient(cpa.URL, "m", "c", pool, testLog()), nil, pool, testLog())
 	for range 2 {
 		w := httptest.NewRecorder()
 		handler(w, httptest.NewRequest("GET", "/v1/models?client_version=stale-source", nil))

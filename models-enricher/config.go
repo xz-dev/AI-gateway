@@ -51,6 +51,12 @@ type Config struct {
 	// GlobalSourcePriority 是全局兜底链：模型级 > 渠道级 > 全局。
 	GlobalSourcePriority []string `yaml:"source_priority"`
 
+	// 可选 AISIX 目录补充；未配置端点时完全禁用且不发请求。
+	// 凭证从环境变量读取，YAML中不填凭证。
+	AISIXModelsURL string        `yaml:"aisix_models_url"`
+	AISIXTimeout   time.Duration `yaml:"aisix_timeout"`
+	AISIXToken     string        `yaml:"-"`
+
 	providerPrefixes providerPrefixes
 }
 
@@ -174,6 +180,18 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.OverallDeadline <= 0 {
 		cfg.OverallDeadline = 25 * time.Second
+	}
+	if cfg.AISIXTimeout <= 0 {
+		cfg.AISIXTimeout = cfg.ChannelTimeout
+	}
+	if cfg.AISIXTimeout > cfg.OverallDeadline {
+		cfg.AISIXTimeout = cfg.OverallDeadline
+	}
+	if u := os.Getenv("AISIX_MODELS_URL"); u != "" {
+		cfg.AISIXModelsURL = u
+	}
+	if t := os.Getenv("AISIX_TOKEN"); t != "" {
+		cfg.AISIXToken = t
 	}
 	// 全局链 token 校验与渠道链同规则；ollama_cloud 只能在具体渠道声明。
 	for _, token := range cfg.GlobalSourcePriority {
