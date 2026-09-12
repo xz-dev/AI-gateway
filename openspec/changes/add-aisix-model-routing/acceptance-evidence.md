@@ -5,20 +5,31 @@
 - Production root: `/root/AI-gateway`, Docker Compose project `ai-gateway`.
 - Routing path: Sub2API -> AISIX -> CPA. The catalog enricher also reaches AISIX directly.
 - AISIX resources: one CPA provider key, 25 concrete models, 12 logical routing models, and two caller keys; 40 resources total. `/v1/models` exposes all 37 model IDs.
+- Each direct AISIX `display_name` is byte-identical to the exact CPA `model_name`, including `/`; all 25 names and 36 route references were rewritten without collision or unresolved target.
 - CPA-backed accounts 1, 4, 5, and 6 use `http://aisix:3000/v1`, boolean pool mode, bounded retry, and remain active/schedulable without account-level fault state.
-- Sub2API retains client authentication, entitlement, quota, WebSocket ingress, and `http_bridge`. AISIX exclusively owns logical IDs, ordered fallback, and per-concrete-target cooldown. CPA retains provider credentials and pool execution.
+- Sub2API retains client authentication, entitlement, quota, WebSocket ingress, and `http_bridge`. AISIX exclusively owns logical IDs, priority-aware routing, bounded fallback, and per-concrete-target cooldown. CPA retains provider credentials and pool execution.
 
 ## Immutable images and upstream repair
 
 - AISIX image: `ghcr.io/xz-dev/ai-gateway-aisix:1.2.0-deadlockfix-7d6d14b`.
 - AISIX production image ID: `sha256:9ec1fdfdb32625e4aa21f1087d45d02d3264d8cce265dccc8e29607975a56aaf`.
-- AISIX status image: `ghcr.io/xz-dev/ai-gateway-aisix-status:0.1.0`.
-- AISIX status production image ID: `sha256:a9e2532038450d5a8a18d6a35efa8ec0cf9d1fcb660fc32d8a2a8dafecd575e2`.
-- GitHub Actions run [`34700631293`](https://github.com/xz-dev/AI-gateway/actions/runs/34700631293) built and published both fixed-version GHCR artifacts with OCI provenance and SBOM attestations. Production pulled those artifacts and did not compile either image on the 2 GB host.
+- AISIX status image: `ghcr.io/xz-dev/ai-gateway-aisix-status:0.1.1`.
+- AISIX status production image ID: `sha256:4bb9a27cf9fa78b094c3a2337c58d754c5fa0decbbfae7f75553aa865ff6314e`.
+- GitHub Actions run [`34700631293`](https://github.com/xz-dev/AI-gateway/actions/runs/34700631293) built and published the fixed-version AISIX image and status 0.1.0 with OCI provenance and SBOM attestations. Component-scoped run [`34704633444`](https://github.com/xz-dev/AI-gateway/actions/runs/34704633444) subsequently published status 0.1.1 only; its workflow refuses to overwrite an existing version tag. Production pulled these artifacts and did not compile either image on the 2 GB host.
 - AISIX source revision: upstream 1.2.0 base `adcf0523b9f84deed64fbdea311df292c5bc541b` plus upstream commit `7d6d14bbf5f5ec4577466da48ce7763d519d81bb`; the retained patch SHA-256 is `3908eefe1d81f4325b3d953a9d773b6d50f0645d76b55f722d39528f6e9f7a0a`.
 - The patch fixes the cooldown exclusion-log DashMap deadlock observed in production. A bounded soak and subsequent natural traffic exercised the patched path without blocked listeners, panic, fatal log, or restart. It is a temporary single-patch build until an official stable AISIX release contains the fix.
 - Models-enricher image: `models-enricher:aisix-cachebound-20260912`.
 - Models-enricher production image ID: `sha256:f8e31ec1e0ebeafedfb31a3446feed561803b44632c025eb045864c3f8a03bbd`.
+
+## Final routing refinements
+
+Authenticated resource and runtime-status read-back verified all 25 exact CPA direct names resolve. The 12 logical routes now comprise nine `failover` routes and three `round_robin` routes:
+
+- `grok-4.6` uses equal-weight round-robin between `supergrok/grok-4.6` and `xl/grok-4.6`.
+- AISIX 1.2.0 cannot dispatch a routing model as another routing model's target. `memory-fast` therefore expands the two Grok direct targets under priorities `3, 2, 1, 0, 0`; `memory-reflect` uses priorities `1, 1, 0`. Their top-level round-robin strategy preserves ordered fallback across priority tiers while balancing the same-tier Grok pair.
+- `memory-consolidation` is unrelated to the Grok pair and remains ordered failover from `zcode/glm-5.3` to `ollama-cloud/glm-5.3`.
+
+Absent weights are equal weight 1:1 within a priority tier. Cooldown remains target-level circuit breaking, not proof of quota recovery; expiry makes a target eligible for another attempt. No provider inference quota was spent to prove balancing or recreate a cooldown.
 
 ## Network and management boundary
 
@@ -31,17 +42,17 @@ Final production has no AISIX data-path socat relay. Docker network inspection v
 
 Inside the running AISIX namespace, IPv4 default routes = 0 and IPv6 default routes = 0. AISIX Admin binds only at `172.30.68.2:3002` on `aisix-status-admin`; a direct connection to port 3002 on the AISIX data-network address was refused. The namespace owner publishes only the page relay at `127.0.0.1:3001` and `100.94.238.35:3001`. Neither the AISIX nor status container publishes a host port, and the status renderer joins only `aisix-status-admin`.
 
-The first cutover restart exposed an existing mode-`0400` AISIX config that both non-root readers could not reopen. The operator approved the intended mode-`0444` correction inside the mode-`0700` host directory; AISIX and the status renderer then remained running. Their Docker restart counters retained the ten short failed starts from that bounded incident but did not increase afterward. Sub2API, CPA, the provider sidecar, and egress proxy remained running and healthy with restart count 0; available memory was 319 MiB with 140 MiB swap used.
+The first cutover restart exposed an existing mode-`0400` AISIX config that both non-root readers could not reopen. The operator approved the intended mode-`0444` correction inside the mode-`0700` host directory; AISIX and the status renderer then remained running. Later planned AISIX and status-only recreations reset their historical container counters; both replacement containers started with restart count 0 and remained running. Sub2API, CPA, the provider sidecar, and egress proxy were not recreated by the status 0.1.1 deployment.
 
 ## Page-only management acceptance
 
-Production Docker acceptance verified identical HTTP 200 complete HTML at loopback and `http://100.94.238.35:3001/status`: 12 logical routes and 25 direct targets matched authenticated `/admin/v1/models` and `/admin/v1/models/status` read-back, including configured target order and current state. At acceptance time all 25 direct targets were `eligible`; no synthetic cooldown was triggered merely to populate the page.
+Production Docker acceptance verified identical HTTP 200 complete HTML at loopback and `http://100.94.238.35:3001/status`: 12 logical routes and 25 direct targets matched authenticated `/admin/v1/models` and `/admin/v1/models/status` read-back, including configured target order and current state. The page refreshes every 10 seconds, displays a sorted `Combos` column containing every direct membership, and uses an em dash instead of eligibility boilerplate. Browser acceptance confirmed the table and exact slash-bearing target names. At acceptance time 24 direct targets were `eligible` and one had entered cooldown through natural traffic; no synthetic cooldown was triggered merely to populate the page.
 
-The page contained no JavaScript, Admin credential, caller key, provider-key reference, upstream URL, or raw AISIX response. It returned `Cache-Control: no-store` and a restrictive `default-src 'none'` CSP. Root, Admin, Scalar, playground, metrics, inference, and unknown paths returned 404; `POST /status` returned 405. An authenticated inference-list request on the private data listener returned all 37 model IDs without consuming provider inference quota.
+The page omits the rejected eligibility explainer, private-view/version eyebrow, declaration-order sentence, and empty recent-outcomes section. It contained no JavaScript, Admin credential, caller key, provider-key reference, upstream URL, or raw AISIX response. It returned `Cache-Control: no-store` and a restrictive `default-src 'none'` CSP. Root, Admin, Scalar, playground, metrics, inference, and unknown paths returned 404; `POST /status` returned 405. An authenticated inference-list request on the private data listener returned all 37 model IDs without consuming provider inference quota.
 
 A temporary SSH local forward to `172.30.68.2:3002` returned 401 without the Admin key and 200 with it. After stopping SSH, the forwarded local endpoint was unreachable. This is the maintenance procedure; there is no standing Admin relay or publication.
 
-The page labels `eligible` only as not currently excluded. It reports a first eligible candidate only for deterministic tag-free failover and calls dynamic strategies request-dependent. AISIX exposes no authoritative retained current or last-served target, so the page explicitly says this and does not join independent logs to invent one.
+The page reports a first eligible candidate only for deterministic tag-free failover and calls dynamic strategies request-dependent. It does not join independent logs to invent a current or last-served target.
 
 ## Protocol acceptance
 
@@ -98,7 +109,7 @@ Final local verification passed:
 - `gofmt -d` on all changed models-enricher Go files: clean.
 - Focused AISIX/difference/cache/concurrency tests: pass.
 - `go test -race ./...` and `go vet ./...` in both `aisix-status` and `models-enricher`: pass.
-- `actionlint` over both GitHub workflows: pass.
+- `actionlint` over both GitHub workflows: pass; GitHub Validate run [`34704629876`](https://github.com/xz-dev/AI-gateway/actions/runs/34704629876) also passed both jobs.
 - Bash syntax and ShellCheck through the full validator: pass.
 - `openspec validate add-aisix-model-routing --strict`: pass.
 - `scripts/validate.sh .env.example` against the base template with an explicit empty temporary override: pass, including Compose render, APISIX/Squid parsing, fail-closed egress, TLS, relay boundaries, namespace guard, and secret-path checks.
@@ -109,7 +120,7 @@ Production syntax and Compose rendering also passed using the real `.env` and pr
 
 ## Retained evidence and accepted limitations
 
-Private snapshots remain under `/root/AI-gateway/.migration-evidence/` with tightened modes. The retained Sub2API SQL recovery point is 848,698,229 bytes. All 24 files covered by the retained cutover `SHA256SUMS` verified successfully. The redacted production receipt is mode 0600 and its final SHA-256 is `b3adbeeba9918bc5d33fd39a484c992f5e3c16b5482f031cf5adf52eaa510c9d`.
+Private snapshots remain under `/root/AI-gateway/.migration-evidence/` with tightened modes. The retained Sub2API SQL recovery point is 848,698,229 bytes. All 24 files covered by the retained cutover `SHA256SUMS` verified successfully. The original redacted production receipt is mode 0600 and has SHA-256 `b3adbeeba9918bc5d33fd39a484c992f5e3c16b5482f031cf5adf52eaa510c9d`. A separate mode-0600 refinements receipt records the exact-name migration, tiered routing, status 0.1.1 artifact, page acceptance, and unchanged boundaries at `.migration-evidence/aisix-production-refinements-20260912T162158Z.json`; its SHA-256 is `f1934fe6be0d79f5dee00d9df76901fd3b64c4d5fb0b6783fdc830e10774f4dd`.
 
 Accepted limitations:
 

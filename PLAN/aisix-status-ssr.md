@@ -4,9 +4,10 @@ The operator approved a sidecar design so AISIX upgrades do not carry a long-liv
 
 ## Agreed external examples
 
-- `GET /status` returns complete server-rendered HTML without JavaScript and shows routing target order, strategy, deterministic failover candidate where valid, and direct-target eligibility/cooldown/unavailable details.
+- `GET /status` returns complete server-rendered HTML without JavaScript and shows routing target order, strategy, deterministic failover candidate where valid, direct-target eligibility/cooldown/unavailable details, and sorted direct combo memberships.
 - Dynamic text is escaped. Admin credentials, provider-key references, upstream URLs, request content, and raw AISIX JSON never appear.
-- `eligible` means not currently excluded, not independently health-checked. Routing models have no persistent current target. No last-served value is inferred from logs.
+- Eligible targets use concise runtime detail; only dynamic cooldown/reason/check information is expanded. The page does not invent a persistent current target or last-served value.
+- The page refreshes every 10 seconds so copying text is not interrupted unnecessarily.
 - Every non-`/status` path on the page listener is rejected; Admin, Scalar, playground, metrics, and inference APIs are not proxied.
 - AISIX Admin remains continuously reachable only from the dedicated internal management network. Operator access is temporary through SSH or a default-off maintenance relay.
 
