@@ -1,0 +1,60 @@
+name: Publish AISIX images
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["aisix-images-v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-aisix-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: aisix
+            context: ./aisix
+          - component: aisix-status
+            context: ./aisix-status
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read immutable image version
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(tr -d '\n' < "${{ matrix.context }}/VERSION")
+          [[ "$version" =~ ^[0-9][0-9A-Za-z._+-]*$ ]]
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "name=ghcr.io/$owner/ai-gateway-${{ matrix.component }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          pull: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
+            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          build-args: |
+            STATUS_VERSION=${{ steps.image.outputs.version }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          provenance: mode=max
+          sbom: true

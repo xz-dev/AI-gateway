@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="5">
+<title>{{if .Error}}AISIX status unavailable{{else}}AISIX routing status{{end}}</title>
+<style>
+:root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background: #0b1020; color: #e7ecf4; }
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(circle at top, #16213d, #0b1020 40rem); }
+main { width: min(1180px, calc(100% - 2rem)); margin: auto; padding: 2.5rem 0 5rem; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { margin-bottom: .4rem; font-size: clamp(2rem, 5vw, 3.4rem); }
+h2 { margin-bottom: .25rem; font-size: 1.35rem; }
+h3 { margin: 0; overflow-wrap: anywhere; }
+.page-head, .summary, .card-head, .candidate, .target-main { display: flex; gap: .75rem; align-items: center; }
+.page-head { justify-content: space-between; align-items: flex-end; margin-bottom: 1.5rem; }
+.eyebrow { margin-bottom: .35rem; color: #7dd3fc; font-size: .72rem; font-weight: 800; letter-spacing: .14em; }
+.subtle, .target-meta { color: #9aa8bf; }
+.summary { flex-wrap: wrap; justify-content: flex-end; }
+.summary span, .strategy { border: 1px solid #31405f; border-radius: 999px; background: #111a2f; padding: .45rem .7rem; white-space: nowrap; }
+.notice, .empty { border: 1px solid #31405f; border-radius: 12px; background: #111a2f; padding: 1rem 1.1rem; }
+.notice { margin-bottom: 2rem; border-left: 4px solid #7dd3fc; }
+section { margin-top: 2rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 1rem; }
+.card { min-width: 0; border: 1px solid #263553; border-radius: 16px; background: rgba(17, 26, 47, .92); padding: 1rem; }
+.card-head { justify-content: space-between; align-items: flex-start; }
+.strategy { padding: .25rem .55rem; color: #bac7dd; font-family: ui-monospace, monospace; font-size: .75rem; }
+.candidate { justify-content: space-between; margin: .9rem 0; border-radius: 10px; background: #0a1223; padding: .75rem; }
+.candidate span { color: #9aa8bf; font-size: .82rem; }
+.candidate strong { overflow-wrap: anywhere; text-align: right; }
+.targets { margin: 0; padding: 0; list-style: none; }
+.targets li { padding: .75rem 0; border-top: 1px solid #263553; }
+.target-main { flex-wrap: wrap; }
+.order { width: 2rem; color: #70809c; font-family: ui-monospace, monospace; }
+.target-meta { margin: .35rem 0 0 2.75rem; font-size: .78rem; line-height: 1.45; }
+.pill { margin-left: auto; border-radius: 999px; padding: .22rem .55rem; font-size: .72rem; font-weight: 800; text-transform: uppercase; }
+.pill.eligible { background: #123c32; color: #86efac; }
+.pill.cooldown { background: #4a3010; color: #fde68a; }
+.pill.unavailable { background: #4a1f2b; color: #fda4af; }
+.pill.unresolved { background: #283247; color: #cbd5e1; }
+.table-wrap { overflow-x: auto; border: 1px solid #263553; border-radius: 14px; background: rgba(17, 26, 47, .92); }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: .8rem 1rem; border-bottom: 1px solid #263553; text-align: left; vertical-align: top; }
+th { color: #9aa8bf; font-size: .75rem; text-transform: uppercase; }
+tr:last-child td { border-bottom: 0; }
+td .pill { display: inline-block; margin-left: 0; }
+time { white-space: nowrap; }
+@media (max-width: 720px) { .page-head { align-items: flex-start; flex-direction: column; } .summary { justify-content: flex-start; } }
+</style>
+</head>
+<body><main>
+{{if .Error}}
+<h1>AISIX status unavailable</h1>
+<p class="empty">The private routing state could not be read. This page will retry automatically.</p>
+{{else}}
+<header class="page-head">
+  <div><p class="eyebrow">PRIVATE MANAGEMENT VIEW · aisix-status/{{.Version}}</p><h1>AISIX routing status</h1><p class="subtle">Generated <time>{{.Generated}}</time>; refreshes every 5s without JavaScript.</p></div>
+  <div class="summary"><span><strong>{{len .Combos}}</strong> combos</span><span><strong>{{.Eligible}}</strong> eligible</span><span><strong>{{.Excluded}}</strong> excluded</span><span><strong>{{.Unresolved}}</strong> unresolved</span></div>
+</header>
+<aside class="notice"><strong>Eligibility is not a health proof.</strong> <code>eligible</code> means AISIX is not currently excluding the direct target. It is not independently health-checked. Routing decisions are made per request; a combo has no persistent current target.</aside>
+<section>
+<h2>Routing combos</h2>
+<p class="subtle">Configured declaration order is shown. Priority can move a target ahead at runtime.</p>
+{{if .Combos}}<div class="cards">{{range .Combos}}
+<article class="card">
+  <div class="card-head"><h3>{{.Name}}</h3><span class="strategy">{{.Strategy}}</span></div>
+  <p class="subtle">Fallback budget: {{.Budget}}</p>
+  <p class="candidate"><span>Runtime first candidate</span><strong>{{.Candidate}}</strong></p>
+  <ol class="targets">{{range .Targets}}<li>
+    <div class="target-main"><span class="order">#{{.Order}}</span><strong>{{.Name}}</strong><span class="pill {{.State}}">{{.State}}</span></div>
+    <div class="target-meta">priority {{.Priority}} · weight {{.Weight}}{{if .Tags}} · tags {{range $index, $tag := .Tags}}{{if $index}}, {{end}}{{$tag}}{{end}}{{end}} · {{.Detail}}</div>
+  </li>{{end}}</ol>
+</article>
+{{end}}</div>{{else}}<div class="empty">No routing combos are configured.</div>{{end}}
+</section>
+<section>
+<h2>Direct targets</h2>
+<p class="subtle">Current AISIX runtime eligibility and exclusion state.</p>
+<div class="table-wrap"><table><thead><tr><th>ID</th><th>Target</th><th>State</th><th>Runtime detail</th></tr></thead><tbody>
+{{range .Direct}}<tr><td><code>{{.ID}}</code></td><td><strong>{{.Name}}</strong></td><td><span class="pill {{.State}}">{{.State}}</span></td><td>{{.Detail}}</td></tr>{{else}}<tr><td colspan="4">No direct targets are configured.</td></tr>{{end}}
+</tbody></table></div>
+</section>
+<section><h2>Recent actual outcomes</h2><div class="empty">Not shown: AISIX exposes no authoritative retained last-served history. This page does not infer outcomes by joining independent text log lines.</div></section>
+{{end}}
+</main></body>
+</html>

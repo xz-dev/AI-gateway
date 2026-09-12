@@ -1,0 +1,35 @@
+_format_version: "1"
+
+provider_keys:
+  - display_name: cpa-pool
+    provider: openai
+    api_base: http://cpa:8317/v1
+    api_key: replace-with-cpa-client-key
+
+models:
+  - display_name: concrete-model
+    provider: openai
+    model_name: provider/concrete-model
+    provider_key: cpa-pool
+    cooldown:
+      enabled: true
+      default_seconds: 60
+      max_seconds: 300
+      honor_retry_after: true
+
+  - display_name: logical-model
+    routing:
+      strategy: failover
+      retries: 1
+      retry_on_429: true
+      max_fallbacks: 0
+      targets:
+        - model: concrete-model
+
+api_keys:
+  - display_name: sub2api
+    key_hash: replace-with-sha256-of-sub2api-caller-key
+    allowed_models: ["*"]
+  - display_name: enricher-catalog
+    key_hash: replace-with-sha256-of-catalog-caller-key
+    allowed_models: ["*"]

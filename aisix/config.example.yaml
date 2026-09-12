@@ -1,0 +1,9 @@
+proxy:
+  addr: 0.0.0.0:3000
+resources_file: /etc/aisix/resources.yaml
+admin:
+  addr: 172.30.68.2:3002
+  admin_keys:
+    - replace-with-generated-aisix-admin-key
+observability:
+  access_log: true
