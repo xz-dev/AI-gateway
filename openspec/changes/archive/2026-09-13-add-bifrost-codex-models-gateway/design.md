@@ -90,7 +90,7 @@ CPA management key mounted as env `CPA_MANAGEMENT_KEY` from the existing secret 
 - **S5 sources: mixed.** `https://models.dev/api.json` reachable (200, ~4.4 MB, needs browser UA else 403). `https://modelparams.dev/api` returns HTML, not JSON — the correct JSON endpoint must be verified during implementation.
 - Extra Bifrost operational requirements found: `allow_private_network: true` on the provider, air-gapped `pricing_url`/`model_parameters_url` as `file://` or it may fail to boot without getbifrost.ai.
 
-**Go/no-go: Bifrost as the Sub2API↔CPA middle gateway is NO-GO (WS non-transparent + response re-encoding + custom source build). Decision on the fallback recorded below after user consultation.**
+**Go/no-go: Bifrost as the Sub2API↔CPA middle gateway is NO-GO (WS non-transparent + response re-encoding + custom source build). The APISIX fallback was selected and completed by `add-apisix-models-gateway`; `add-aisix-model-routing` later became the production logical-routing path. The remaining Bifrost implementation was intentionally cancelled.**
 
 ## Risks / Trade-offs
 

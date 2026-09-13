@@ -6,7 +6,9 @@
 - [x] 1.2 Prove plain + SSE passthrough: semantic pass (non-stream chat content identical; streaming SSE via mock proven). CAVEAT: Bifrost re-encodes JSON and injects `extra_fields` — NOT byte-equal; CPA fixture limitation prevented end-to-end `/v1/responses` SSE via CPA
 - [ ] 1.3 Prove WebSocket passthrough: **FAILED** — Bifrost terminates/interprets `/v1/responses` WS (101 upgrade works, frames are parsed, not tunneled). No opaque-passthrough mode found in source
 - [x] 1.4 Prove plugin seam: **PASS with caveat** — stock image cannot load `.so` (static musl); source-built dynamic glibc binary + same-core plugin short-circuits `/v1/models?client_version=x` exactly, other traffic unaffected
-- [ ] 1.5 Go/no-go decision recorded in design.md: spike results recorded; **Bifrost NO-GO**; awaiting user decision on fallback architecture
+- [x] 1.5 Go/no-go decision recorded in design.md: **Bifrost NO-GO**; the APISIX fallback was selected and completed
+
+> Closure: all unchecked implementation and deployment tasks below were intentionally cancelled after the NO-GO decision. Their delta specs are historical only and must not be synchronized into the main specs.
 
 ## 2. Plugin: codex-models-enricher
 
