@@ -153,14 +153,25 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		registered = append(registered, map[string]string{"name": fmt.Sprintf("growth-%d", i)})
 	}
 	kind, _ := json.Marshal(map[string]any{"openai-compatibility": []any{map[string]any{"name": "fixture", "prefix": "c", "base-url": "https://unused.invalid", "auth-index": "fixture", "models": registered}}})
-	fake := &fakeCPA{native: native, channelsBody: kind, nativeByVersion: map[string][]byte{"growth": growth, "concurrent-growth": growth, "oversized": oversized, "native-fail": []byte(`invalid-json`), "v0.65.0": growth}}
+	fake := &fakeCPA{native: native, channelsBody: kind}
+	var canonicalNative atomic.Value
+	canonicalNative.Store(native)
+	backend := fake.handler()
 	var concurrentBasic atomic.Int32
 	bothAdmitted := make(chan struct{})
-	cpa := httptest.NewServer(fake.handler())
+	cpa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" && r.URL.Query().Get("client_version") == cpaCatalogClientVersion {
+			fake.nativeCalls.Add(1)
+			_, _ = w.Write(canonicalNative.Load().([]byte))
+			return
+		}
+		backend.ServeHTTP(w, r)
+	}))
 	defer cpa.Close()
 	stubSources(t)
 	external := os.Getenv("CATALOG_HTTP_EXTERNAL_APISIX") == "1"
 	var enricherRequests atomic.Int32
+	var cacheOffset atomic.Int64
 	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"source":"CPA"}`)
 	}))
@@ -174,6 +185,7 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		pool.cache.clock = func() time.Time { return time.Now().Add(time.Duration(cacheOffset.Load())) }
 		handler := handleModels(testCfg(), newCPAClient(cpa.URL, "m", "c", pool, testLog()), nil, pool, testLog())
 		serve("127.0.0.4:8090", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			enricherRequests.Add(1)
@@ -325,8 +337,20 @@ func TestCatalogHTTPFixture(t *testing.T) {
 	}
 	for _, path := range []string{"/v1/models", "/v1/models?client_version="} {
 		status, body, _ := request("127.0.0.1:9080", path, false)
-		if status != 200 || string(body) != `{"source":"CPA"}` {
-			t.Fatalf("no-version request did not reach CPA: %s %d", path, status)
+		var standard standardModelsResponse
+		if status != 200 || json.Unmarshal(body, &standard) != nil || standard.Object != "list" || len(standard.Data) == 0 {
+			t.Fatalf("no-version request did not reach the standard sidecar projection: %s %d %.200s", path, status, body)
+		}
+	}
+	beforePublicStandard := enricherRequests.Load()
+	status, publicStandardBody, _ := request("127.0.0.1:9000", "/v1/models", true)
+	var publicStandard Manifest
+	if status != http.StatusOK || decodeJSON(publicStandardBody, &publicStandard) != nil || len(publicStandard.Models) != 5 || enricherRequests.Load() != beforePublicStandard {
+		t.Fatalf("public no-version authorization projection changed: status=%d body=%.300s", status, publicStandardBody)
+	}
+	for _, model := range publicStandard.Models {
+		if model["slug"] == "c/denied" {
+			t.Fatal("public no-version projection leaked an unauthorized model")
 		}
 	}
 	beforeEnricher := enricherRequests.Load()
@@ -362,6 +386,12 @@ func TestCatalogHTTPFixture(t *testing.T) {
 	}
 	if !external && enricherRequests.Load() != beforeEnricher+2 {
 		t.Fatal("same-version requests did not both reach enricher")
+	}
+	canonicalNative.Store(growth)
+	cacheOffset.Store(int64(6 * time.Minute))
+	status, internalGrown, _ := request("127.0.0.1:9080", "/v1/models?client_version=growth", false)
+	if status != http.StatusOK || len(internalGrown) <= 8<<20 {
+		t.Fatalf("internal expanded catalog: status=%d bytes=%d body=%.200s", status, len(internalGrown), internalGrown)
 	}
 	status, grown, _ := request("127.0.0.1:9000", "/v1/models?client_version=growth", true)
 	if status != 200 || len(grown) <= 8<<20 || len(grown) > 16<<20 {
@@ -415,17 +445,24 @@ func TestCatalogHTTPFixture(t *testing.T) {
 	if status != 404 || fake.nativeCalls.Load() != before {
 		t.Fatal("unauthorized request reached cold enriched inventory")
 	}
+	canonicalNative.Store([]byte(`invalid-json`))
+	cacheOffset.Store(int64(12 * time.Minute))
 	status, _, _ = request("127.0.0.1:9000", "/v1/models?client_version=native-fail", true)
 	if status != 502 {
 		t.Fatalf("native must fail closed: %d", status)
 	}
+	canonicalNative.Store(oversized)
+	cacheOffset.Store(int64(18 * time.Minute))
 	status, _, _ = request("127.0.0.1:9000", "/v1/models?client_version=oversized", true)
 	if status != 502 {
 		t.Fatalf("16 MiB path boundary: %d", status)
 	}
+	canonicalNative.Store(growth)
+	cacheOffset.Store(int64(24 * time.Minute))
 	status, plain, _ := request("127.0.0.3:8080", "/v1/models", false)
-	if status != 200 || string(plain) != `{"source":"CPA"}` {
-		t.Fatalf("sidecar no-version CPA passthrough: %d", status)
+	var standard standardModelsResponse
+	if status != 200 || json.Unmarshal(plain, &standard) != nil || standard.Object != "list" || len(standard.Data) == 0 {
+		t.Fatalf("sidecar no-version standard projection: %d %.200s", status, plain)
 	}
 	status, page, pageHeaders := request("127.0.0.3:8080", "/models-table", false)
 	if status != 200 || !strings.HasPrefix(pageHeaders.Get("Content-Type"), "text/html") || strings.Count(string(page), "<td") != len(growthRows)*11 || len(page) > 1<<20 || strings.Contains(string(page), "<script") {

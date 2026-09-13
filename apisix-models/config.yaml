@@ -4,6 +4,7 @@ apisix:
   enable_admin: false
   enable_control: false
   enable_ipv6: false
+  extra_lua_path: "/opt/apisix/custom/?.lua"
   dns_resolver:
     - 127.0.0.11
 

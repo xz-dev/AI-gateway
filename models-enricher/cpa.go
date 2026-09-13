@@ -64,6 +64,24 @@ func (c *CPAClient) Discover(ctx context.Context) ([]Channel, error) {
 	return out, errors.Join(failures...)
 }
 
+func decodeCPANativeManifest(body []byte) (*Manifest, error) {
+	var envelope struct {
+		Models *[]map[string]any `json:"models"`
+	}
+	if err := decodeJSON(body, &envelope); err != nil {
+		return nil, err
+	}
+	if envelope.Models == nil {
+		return nil, errors.New("CPA native manifest is missing a models array")
+	}
+	for index, model := range *envelope.Models {
+		if exactManifestModelID(model) == "" {
+			return nil, fmt.Errorf("CPA native manifest model %d has no valid slug or id", index)
+		}
+	}
+	return &Manifest{Models: *envelope.Models}, nil
+}
+
 func (c *CPAClient) NativeManifest(ctx context.Context) (*Manifest, error) {
 	u := c.base + "/v1/models?client_version=" + cpaCatalogClientVersion
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -72,17 +90,13 @@ func (c *CPAClient) NativeManifest(ctx context.Context) (*Manifest, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.clientKey)
 	body, err := c.pool.readJSON(req, 32<<20, true, func(body []byte) error {
-		var manifest Manifest
-		return decodeJSON(body, &manifest)
+		_, err := decodeCPANativeManifest(body)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	var m Manifest
-	if err := decodeJSON(body, &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
+	return decodeCPANativeManifest(body)
 }
 
 // APICall 经 CPA /v0/management/api-call 转发渠道请求；凭证不出 CPA（$TOKEN$ 由 CPA

@@ -318,12 +318,34 @@ func TestHandlerFailClosedOnNativeFailure(t *testing.T) {
 	}
 }
 
-func TestHandlerRejectsMissingClientVersion(t *testing.T) {
-	h := newTestHandler(t, testCfg(), httptest.NewServer((&fakeCPA{}).handler()))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("missing client_version must be 400, got %d", rec.Code)
+func TestHandlerStandardModelsWithoutClientVersion(t *testing.T) {
+	fake := &fakeCPA{
+		native:          []byte(`invalid-json`),
+		nativeByVersion: map[string][]byte{"1": []byte(`{"models":[{"slug":"oauth/m1","id":"oauth/m1"}]}`)},
+		oauthModels:     []string{"m1"},
+	}
+	server := httptest.NewServer(fake.handler())
+	t.Cleanup(server.Close)
+	h := newTestHandler(t, testCfg(), server)
+	for _, target := range []string{"/v1/models", "/v1/models?client_version="} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: HTTP %d: %s", target, rec.Code, rec.Body.String())
+		}
+		var got struct {
+			Object string `json:"object"`
+			Data   []struct {
+				ID     string `json:"id"`
+				Object string `json:"object"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Object != "list" || len(got.Data) != 1 || got.Data[0].ID != "oauth/m1" || got.Data[0].Object != "model" {
+			t.Fatalf("standard models response = %+v", got)
+		}
 	}
 }
 
@@ -466,8 +488,8 @@ func TestHandlerConcurrentBuildsAreVersionScoped(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := fake.nativeCalls.Load(); got != 2 {
-		t.Fatalf("native manifest calls = %d, want 2 (one per client_version)", got)
+	if got := fake.nativeCalls.Load(); got != 1 {
+		t.Fatalf("native manifest calls = %d, want 1 (client versions share one raw snapshot)", got)
 	}
 	for i, code := range codes {
 		if code != 200 {

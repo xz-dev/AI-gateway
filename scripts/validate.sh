@@ -329,6 +329,7 @@ direct_aisix_edges = {
     "sub2api-aisix": {"sub2api-netns", "aisix-netns"},
     "aisix-cpa": {"aisix-netns", "cpa-netns"},
     "enricher-aisix": {"models-enricher-netns", "aisix-netns"},
+    "apisix-models-aisix": {"apisix-models-netns", "aisix-netns"},
 }
 for name, expected_members in direct_aisix_edges.items():
     if network_members.get(name) != expected_members:
@@ -364,6 +365,20 @@ for port in aisix_ports:
         raise SystemExit("AISIX status port must not use a wildcard host binding")
     if target != 3001:
         raise SystemExit("AISIX namespace may publish only the status relay port 3001")
+
+routing_service = services.get("models-enricher", {})
+if routing_service.get("network_mode") != "service:models-enricher-netns" or routing_service.get("ports"):
+    raise SystemExit("models-enricher routing index must remain inside its route-stripped namespace")
+if (routing_service.get("healthcheck") or {}).get("test") != ["CMD", "/models-enricher", "healthcheck"]:
+    raise SystemExit("models-enricher must report canonical-snapshot readiness without publishing the index")
+relay_dependencies = services.get("apisix-models-enricher-relay", {}).get("depends_on") or {}
+if (relay_dependencies.get("models-enricher") or {}).get("condition") != "service_started":
+    raise SystemExit("the selector relay must start during a cold snapshot so classified requests can return 503")
+selector_service = services.get("apisix-models", {})
+if selector_service.get("ports") or selector_service.get("network_mode") != "service:apisix-models-netns":
+    raise SystemExit("catalog routing selector must not publish an application port")
+if "/opt/apisix/custom/routing_selector.lua" not in volume_targets(selector_service):
+    raise SystemExit("catalog routing selector module must be mounted read-only into APISIX")
 
 if service_networks(status_service) != {"aisix-status-admin"}:
     raise SystemExit("AISIX status renderer must attach only to aisix-status-admin")
@@ -586,8 +601,62 @@ if "Bearer " in route or 'clear_header("X-API-Key")' in route:
     raise SystemExit("Pi Codex normalization must not embed or clear the Sub2API credential")
 PY
 
+python3 - "$root/apisix-models/apisix.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def route(route_id):
+    marker = f"  - id: {route_id}\n"
+    if text.count(marker) != 1:
+        raise SystemExit(f"APISIX models must declare exactly one {route_id} route")
+    start = text.index(marker)
+    end = text.find("\n  - id:", start + len(marker))
+    return text[start:] if end < 0 else text[start:end]
+
+selector = route("catalog-routing-selector")
+for required in (
+    "priority: 100",
+    "      - /v1/chat/completions\n      - /v1/responses",
+    "      - POST",
+    'require("routing_selector").run(_, ctx, "__CPA_API_KEY__")',
+    "disable_proxy_buffering: true",
+):
+    if required not in selector:
+        raise SystemExit(f"incomplete catalog routing selector: {required}")
+for forbidden in ("ai-proxy-multi", "alias-gpt-", "alias-grok-", "alias-team-"):
+    if forbidden in text:
+        raise SystemExit(f"legacy HTTP alias still conflicts with catalog selection: {forbidden}")
+ws = route("ws-alias")
+if "      - GET" not in ws or 'http_upgrade", "==", "websocket"' not in ws or "enable_websocket: true" not in ws:
+    raise SystemExit("legacy direct-WS route changed or entered HTTP classification")
+models = route("codex-models")
+if "      - GET" not in models or "arg_client_version" in models or "upstream_id: enricher" not in models:
+    raise SystemExit("standard and Codex model lists must both reach models-enricher")
+if text.count("__CPA_API_KEY__") != 1:
+    raise SystemExit("CPA service credential placeholder must occur only at the selector boundary")
+if '  - id: aisix\n' not in text or '      "aisix:3000": 1' not in text:
+    raise SystemExit("catalog selector AISIX upstream is missing")
+PY
+
 apisix_image=$(value_from_env APISIX_IMAGE)
 [ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.18.0-debian
+sed 's|__CPA_API_KEY__|fixture-cpa-key|g' "$root/apisix-models/apisix.yaml" >"$tmpdir/apisix-models.yaml"
+"${RUNTIME[@]}" run --rm --network none \
+  -e APISIX_STAND_ALONE=true \
+  -v "$root/apisix-models/config.yaml:/usr/local/apisix/conf/config.yaml:ro" \
+  -v "$tmpdir/apisix-models.yaml:/usr/local/apisix/conf/apisix.yaml:ro" \
+  -v "$root/apisix-models/routing_selector.lua:/opt/apisix/custom/routing_selector.lua:ro" \
+  "$apisix_image" apisix test >/dev/null
+"${RUNTIME[@]}" run --rm --network none \
+  -v "$root/apisix-models:/work:ro" \
+  --entrypoint /usr/local/openresty/bin/resty \
+  "$apisix_image" /work/routing_selector_test.lua >/dev/null
+"${RUNTIME[@]}" run --rm --network none \
+  -v "$root/apisix/lua:/work:ro" \
+  --entrypoint /usr/local/openresty/bin/resty \
+  "$apisix_image" /work/model_list_intersection_test.lua >/dev/null
 "${RUNTIME[@]}" run --rm \
   -e APISIX_STAND_ALONE=true \
   -v "$root/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro" \

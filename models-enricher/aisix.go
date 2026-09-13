@@ -64,6 +64,7 @@ func validateAISIXModelsResponse(body []byte) error {
 //   - 502/503/504 或网络超时允许回退既有有效缓存（stale fallback）
 //   - 401/403 认证失败或响应体校验失败直接返回错误并失效缓存，不复活陈旧数据
 //   - 有效空列表 {"data":[]} 正常缓存并覆盖旧数据，与故障区分
+//
 // 保留所接受 ID 的原始字节（包括空白、大小写与厂商前缀），拒绝全空白 ID。
 func (c *AISIXClient) FetchModelIDs(ctx context.Context) ([]string, error) {
 	if c == nil || c.endpoint == "" {
@@ -99,6 +100,16 @@ func (c *AISIXClient) FetchModelIDs(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+func exactManifestModelID(model map[string]any) string {
+	for _, field := range []string{"slug", "id"} {
+		id, _ := model[field].(string)
+		if strings.TrimSpace(id) != "" {
+			return id
+		}
+	}
+	return ""
+}
+
 // extractCPAIDs 提取 CPA 原始清单的全部模型 ID（在本地身份过滤前）。
 // 必须完整包含所有 slug/id，防止已过滤掉的 CPA 模型被误判为 AISIX 增量。
 func extractCPAIDs(base *Manifest) map[string]bool {
@@ -106,12 +117,8 @@ func extractCPAIDs(base *Manifest) map[string]bool {
 		return nil
 	}
 	ids := make(map[string]bool, len(base.Models))
-	for _, m := range base.Models {
-		id := asString(m["slug"])
-		if id == "" {
-			id = asString(m["id"])
-		}
-		if id != "" {
+	for _, model := range base.Models {
+		if id := exactManifestModelID(model); id != "" {
 			ids[id] = true
 		}
 	}
