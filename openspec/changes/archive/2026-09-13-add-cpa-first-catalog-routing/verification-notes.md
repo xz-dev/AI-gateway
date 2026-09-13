@@ -1,8 +1,22 @@
 # Verification and coordination notes
 
-## Implementation boundary
+## Production outcome — 2026-09-13
 
-This change prepares the local source, Compose topology, and offline acceptance evidence only. It does not publish an image, deploy or restart a service, mutate a Sub2API account, or edit the parallel changes `fix-sub2api-error-propagation`, `preserve-end-to-end-session-affinity`, or `add-headroom-context-compression`.
+The separately authorized production rollout completed solo at `2026-09-13T08:45:06Z`. Accounts 1/4/5/6 now serve through the internal APISIX entrance, not directly through AISIX.
+
+- **Deployment:** models-enricher runs `ghcr.io/xz-dev/ai-gateway-models-enricher:cpa-first-routing-20260913@sha256:b8c7206a606de7214d5f29043f44a92e35fa885ffed39fa204323f4bfd9fff86`. It was the only service whose image changed; Sub2API's image remained unchanged. Production tracked drift and unowned files were preserved, with no change to published bindings.
+- **Account preservation:** a row-locked transaction changed only `credentials.base_url` to `http://cli-proxy-api:8317/v1` and `updated_at`. Every other credential key and account column was checked inside the transaction. The post-check confirmed exact credential preservation apart from the URL, including caller keys, `model_mapping`, `pool_mode=true`, `pool_mode_retry_count=1`, and `[400,401,403,404,429,500,502,503,504]`. No Headroom placement was overwritten.
+- **Routing:** real requests and access logs proved CPA-only `xl/gpt-6-astra` and overlap `zcode/glm-5.3` went to CPA and returned 200. `axis/gpt-6-astra` went to AISIX and returned 400, with no cross-backend attempt. The operator had intentionally disabled axis; AISIX declarations were left unchanged.
+- **Accepted boundary:** delivery proves correct classification/forwarding and checks for migration regressions, not that every catalog model is currently callable. Existing or intentionally disabled upstream failures are not, by themselves, deployment failures. This applies beyond the axis trio; `z-ai/glm-5.3-flash` was classified to AISIX without requiring a successful inference.
+- **Client checks:** internal standard and Codex catalogs both returned 200 with the same 238 IDs in that captured generation. Public and Sub2API catalog/SSE calls returned 200; SSE included terminal events. Public unauthorized access returned an empty 404. Five one-minute health/integrity samples passed.
+- **WS limitation:** the public WebSocket handshake succeeded and response events arrived, but inference terminated with `response.failed`. This is not recorded as successful end-to-end WS inference; its cause was not established. Offline legacy-WS compatibility evidence remains separate from this live result.
+- **Coordination:** the parallel owner confirmed no production, account, shared-file, or Sub2API-image changes during this rollout. This archive does not claim completion of error propagation, session affinity, or Headroom work.
+
+Private evidence is retained under `/root/rollouts/add-cpa-first-catalog-routing-20260913T081506Z-solo`: `SUCCESS`, `receipts/backend-provenance.json`, `receipts/account-migration.json`, `receipts/account-postcheck.json`, `receipts/final-post-check.log`, `receipts/observation.log`, `receipts/public-websocket.json`, and backup/checksum files. The earlier attempt under `/root/rollouts/add-cpa-first-catalog-routing-20260913T070838Z` remains frozen with its rollback evidence; its `PHASE1_OK` is not the final deployment receipt. Archiving changes local documentation only and does not remove production recovery assets.
+
+## Implementation boundary (historical)
+
+The implementation phase prepared local source, Compose topology, and offline acceptance evidence without production mutation. Publication and deployment followed under separate operator approval, as recorded above. This change did not edit the parallel changes `fix-sub2api-error-propagation`, `preserve-end-to-end-session-affinity`, or `add-headroom-context-compression`.
 
 ## Parallel-change coordination
 
@@ -10,11 +24,11 @@ This change prepares the local source, Compose topology, and offline acceptance 
 - The selector reads only the JSON `model` field. It leaves session-affinity headers untouched; the real APISIX fixture sends `session_id: session-exact` and the selected CPA fake observes the exact value.
 - Headroom remains separate, unimplemented, and independently approved. Ordinary accounts will target the internal APISIX entrance. Any combined rollout for a Headroom-opted-in account waits for the Headroom owner's approved rebase so Headroom forwards to the internal entrance (`Sub2API → Headroom → internal APISIX → CPA/AISIX`). This change must not blindly overwrite such an account's `base_url`.
 
-## Future Sub2API account/config work
+## Pre-rollout Sub2API account/config requirements (historical)
 
-Production work remains blocked on separate approval and a fresh authorized read of each complete account/config object. The latest live global switch/timeout policy is currently unknown because the parallel owner's protected read was denied; source defaults must not substitute for live state.
+At implementation handoff, production work required separate approval and a fresh authorized read of each complete account/config object. The parallel owner's protected read had not established live global switch/timeout policy; source defaults were not a substitute. The completed rollout above preserved current account policy rather than applying a future peer unset.
 
-Before any account update:
+The pre-write requirements were:
 
 1. Exchange current field-level diffs with the `fix-sub2api-error-propagation` owner (their source baseline is pinned to Sub2API v0.2.4 / `5de5e2b`).
 2. Re-read each latest complete credentials/config object, then change only this migration's owned `base_url` and strictly necessary routing fields. Preserve credentials, caller keys, `model_mapping`, `pool_mode=true`, `retry_count=1`, and all unrelated fields.
@@ -41,8 +55,8 @@ The first fresh, read-only review returned `CHANGES_REQUESTED`. The local implem
 - An isolated `--network none` fixture using the intended AISIX `1.2.0+deadlockfix.7d6d14b` image (source revision `adcf0523b9f84deed64fbdea311df292c5bc541b+7d6d14bbf5f5ec4577466da48ce7763d519d81bb`) observes AISIX's own `retries: 1` boundary: a fake target returning 429 once and success next is called exactly twice, and the client receives the successful response. This entrance change does not modify that retry/cooldown configuration.
 - `scripts/validate.sh .env.example` passes against a task-scoped empty Compose override: Compose, firewall, one-way/two-member internal edges, private paths, APISIX schemas, and Lua checks are valid. The empty override is necessary only to avoid mixing this public baseline check with the local private `compose.override.yaml`.
 
-## Separately approved follow-up
+## Follow-up disposition at archive
 
-1. Verify actual invocation reachability for the four remaining AISIX-only direct declarations (the axis GPT trio and `z-ai/glm-5.3-flash`). Catalog membership alone is not reachability proof.
-2. With explicit production approval: build and stage immutable images; capture backups and current complete account objects; verify the Headroom gate and owner diff exchange; deploy the internal APISIX→AISIX edge and selector; migrate only approved account fields; run real Responses/catalog/backend-selection canaries; observe stop thresholds; then clean up only superseded routing records.
-3. If any stop threshold fails, repair in place or restore the captured prior direct-AISIX placement without reverting parallel error-propagation, session-affinity, Headroom, pool, retry, credentials, or model-mapping changes.
+1. Per-model upstream reachability is outside this delivery's acceptance scope. The operator explicitly accepted intentional unavailability and requested that AISIX configuration remain unchanged; no repair or deletion of axis or other declarations was performed.
+2. The separately approved publication, production deployment, account migration, and observation are complete, with the live WS limitation recorded above. No additional cutover is pending for this change.
+3. Private recovery evidence remains retained. No production cleanup or parallel-change implementation is authorized by this archive.
