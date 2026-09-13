@@ -12,6 +12,9 @@ aisix_timeout: 5s
 
 bare_models_takeover: true
 source_priority: [models.dev/zai, models.dev/xai, models.dev/moonshotai, models.dev/openai, models.dev/anthropic]
+# AISIX-only 的 axis 前缀仅映射元数据来源，不改变推理路由。
+provider_prefix_map:
+  axis: openai
 http_concurrency: 8
 channels:
   axis:
