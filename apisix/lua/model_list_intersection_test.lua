@@ -123,10 +123,10 @@ end)
 
 test("admission queue and byte limits remain enforced", function()
     -- 阈值内直接放行；占满时短暂排队后仍拒绝，且不触达上游。
-    local status = run(original, {active = 2})
+    local status = run(original, {active = 0})
     assert(status == 200, "in-threshold request must be admitted")
     local headers, calls
-    status, _, headers, calls = run(original, {active = 3})
+    status, _, headers, calls = run(original, {active = 1})
     assert(status == 503 and headers["Retry-After"] == "1" and #calls == 0)
     status = run(original, {headers = {["Content-Length"] = tostring(64 * 1024 * 1024 + 1)}})
     assert(status == 502, "original response size limit widened")

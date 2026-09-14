@@ -128,6 +128,24 @@ routes:
     priority: 100
     upstream_id: sub2api
     plugin_config_id: apisix-native-upstream-404
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - >-
+            return function(_, ctx)
+              local status, body, headers = require("model_list_intersection").admit(_, ctx)
+              if status then
+                return status, body, headers
+              end
+            end
+      serverless-post-function:
+        phase: log
+        functions:
+          - >-
+            return function(_, ctx)
+              require("model_list_intersection").release(_, ctx)
+            end
 
   - id: ai-api-v1-get
     uris:

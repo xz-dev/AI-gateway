@@ -12,6 +12,7 @@ nginx_config:
   worker_processes: 1
   error_log_level: warn
   http_server_configuration_snippet: |
+    more_clear_headers X-Client-Request-ID;
     error_page 413 = @payload_too_large;
     location @payload_too_large {
       default_type application/json;

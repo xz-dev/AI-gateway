@@ -36,8 +36,9 @@ local KEEPALIVE_POOL_SIZE = 100
 local READ_CHUNK_BYTES = 64 * 1024
 local ACTIVE_DICT_NAME = "model-list-intersection"
 local ACTIVE_KEY = "active"
-local ACTIVE_LEASE_SECONDS = 120
-local MAX_INFLIGHT = 3
+local ACTIVE_LEASE_SECONDS = 660
+-- One shared key serializes every external models request across callers and workers.
+local MAX_INFLIGHT = 1
 -- 槽位占满时短暂排队等待：构建已被边车缓存加速，占用窗口通常<2s，
 -- 瞬时并发的请求等一拍比直接503重试更省一次往返。
 local ACQUIRE_WAIT_SECONDS = 4
@@ -466,21 +467,28 @@ local function merge_vary(value)
     return table_concat(merged, ", ")
 end
 
-function _M.run(_, ctx)
+function _M.admit(_, ctx)
     local path = ngx.var.uri
     if ngx.req.get_method() ~= "GET" or
        (path ~= "/v1/models" and path ~= "/models") then
         return
     end
 
-    local raw_query = ngx.var.args
-    if not raw_query or raw_query == "" then
-        return
-    end
-
     local acquired, acquire_err = acquire(ctx)
     if not acquired then
         return busy_response(acquire_err)
+    end
+end
+
+function _M.run(_, ctx)
+    local status, body, headers = _M.admit(_, ctx)
+    if status then
+        return status, body, headers
+    end
+
+    local raw_query = ngx.var.args
+    if not raw_query or raw_query == "" then
+        return
     end
 
     -- 串行双腿：basic 先行（隐式鉴权 + entitlement）；非 2xx 原样透传且不发 original 腿
