@@ -12,11 +12,11 @@ Raise only existing model-catalog read, intersection, final-response, and comple
 - [x] Raise models-enricher CPA native/API-call reads and completed-result cache to 64 MiB.
 - [x] Update existing limit assertions and current README values.
 - [x] Build local amd64 models-enricher candidate without running tests.
-- [ ] Publish candidate under immutable GHCR digest.
-- [ ] Back up and patch only production `.env`, Compose limit default, and APISIX Lua file.
-- [ ] Recreate models-enricher and Sub2API; gracefully reload public APISIX.
-- [ ] Verify direct origin and `pi --list-models --refresh`; send no inference request.
+- [x] Publish candidate under immutable GHCR digest.
+- [x] Capture production backups and attempt the scoped `.env`, Compose, APISIX, and image cutover.
+- [x] Stop and restore every production file/image reference after Sub2API hit its 256 MiB cgroup ceiling.
+- [ ] Verify direct origin and `pi --list-models --refresh`; blocked because the direct-origin gate failed before the Pi refresh. No inference request was sent.
 
 ## Accepted risk
 
-Owner explicitly selected a limit-only change and no additional capacity tests. This does not establish that a near-64-MiB catalog is safe under current concurrency or memory ceilings. Historical evidence records APISIX OOM in a different 128-MiB fixture after a 32-MiB limit experiment; current production public APISIX has a 256-MiB limit and current catalog is about 31 MiB. Stop and roll back on any OOM, restart, unhealthy state, or failed catalog refresh.
+Owner explicitly selected a limit-only change and no additional capacity tests. Production evidence now establishes that even the current approximately 31 MiB catalog drives Sub2API beyond its 256 MiB cgroup ceiling during the 64 MiB cutover. The kernel killed Sub2API at approximately 260 MiB RSS, the direct-origin gate returned 502, and the rollout was stopped and fully rolled back. Completing delivery therefore requires a separately authorized memory optimization or capacity change.
