@@ -78,6 +78,8 @@ test("authorized records retain exact JSON numbers and unknown metadata", functi
     assert(status == 200, "status " .. tostring(status))
     assert(body == expected, "JSON fidelity failed: " .. tostring(body))
     assert(#calls == 2 and calls[1].host == "ai-sse-keepalive-ingress-relay", "basic must run first")
+    assert(calls[1].request.path == "/v1/models" and calls[2].request.path == "/v1/models",
+        "models path changed")
     assert(calls[1].request.headers.Authorization == "Bearer fixture-only", "client auth changed")
     assert(headers["Cache-Control"] == "private, no-cache", "cache policy changed")
     assert(headers["Vary"] == "Authorization", "authorization variance lost")

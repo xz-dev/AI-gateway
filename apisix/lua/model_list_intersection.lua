@@ -486,6 +486,7 @@ function _M.run(_, ctx)
         return status, body, headers
     end
 
+    local path = ngx.var.uri
     local raw_query = ngx.var.args
     if not raw_query or raw_query == "" then
         return
