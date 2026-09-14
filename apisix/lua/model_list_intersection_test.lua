@@ -128,9 +128,9 @@ test("admission queue and byte limits remain enforced", function()
     local headers, calls
     status, _, headers, calls = run(original, {active = 3})
     assert(status == 503 and headers["Retry-After"] == "1" and #calls == 0)
-    status = run(original, {headers = {["Content-Length"] = tostring(16 * 1024 * 1024 + 1)}})
+    status = run(original, {headers = {["Content-Length"] = tostring(64 * 1024 * 1024 + 1)}})
     assert(status == 502, "original response size limit widened")
-    status, _, _, calls = run(original, {basic_headers = {["Content-Length"] = tostring(16 * 1024 * 1024 + 1)}})
+    status, _, _, calls = run(original, {basic_headers = {["Content-Length"] = tostring(64 * 1024 * 1024 + 1)}})
     assert(status == 502 and #calls == 1, "basic response limit changed or original requested")
 end)
 

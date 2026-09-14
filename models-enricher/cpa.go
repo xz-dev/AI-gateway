@@ -89,7 +89,7 @@ func (c *CPAClient) NativeManifest(ctx context.Context) (*Manifest, error) {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.clientKey)
-	body, err := c.pool.readJSON(req, 32<<20, true, func(body []byte) error {
+	body, err := c.pool.readJSON(req, 64<<20, true, func(body []byte) error {
 		_, err := decodeCPANativeManifest(body)
 		return err
 	})
@@ -127,7 +127,7 @@ func (c *CPAClient) APICall(ctx context.Context, ch Channel, method, absURL stri
 	// 外层POST只是CPA转发封装；只缓存内层GET或Ollama的只读/api/show。
 	endpoint, _ := url.Parse(absURL)
 	cacheable := method == http.MethodGet || (method == http.MethodPost && endpoint != nil && endpoint.Path == "/api/show")
-	body, err := c.pool.readJSON(req, 32<<20, cacheable, func(body []byte) error {
+	body, err := c.pool.readJSON(req, 64<<20, cacheable, func(body []byte) error {
 		_, _, err := parseAPIRead(body)
 		return err
 	})

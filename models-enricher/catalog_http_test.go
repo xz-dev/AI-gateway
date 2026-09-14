@@ -143,7 +143,7 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		growthWant[model["slug"].(string)] = model
 	}
 	growthACL, _ := json.Marshal(map[string]any{"models": growthAllowed})
-	oversized, _ := json.Marshal(map[string]any{"models": []any{map[string]any{"slug": "c/vision", "blob": strings.Repeat("x", 16<<20)}}})
+	oversized, _ := json.Marshal(map[string]any{"models": []any{map[string]any{"slug": "c/vision", "blob": strings.Repeat("x", 64<<20)}}})
 	// 此夹具验证传输与资源；独立声明管理模型，避免以身份缺失绕过大响应断言。
 	var registered []map[string]string
 	for _, name := range []string{"vision", "image", "audio", "video", "unknown", "denied"} {
@@ -394,7 +394,7 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		t.Fatalf("internal expanded catalog: status=%d bytes=%d body=%.200s", status, len(internalGrown), internalGrown)
 	}
 	status, grown, _ := request("127.0.0.1:9000", "/v1/models?client_version=growth", true)
-	if status != 200 || len(grown) <= 8<<20 || len(grown) > 16<<20 {
+	if status != 200 || len(grown) <= 8<<20 || len(grown) > 64<<20 {
 		t.Fatalf("representative expanded catalog: status=%d bytes=%d", status, len(grown))
 	}
 	var grownResult Manifest
@@ -455,7 +455,7 @@ func TestCatalogHTTPFixture(t *testing.T) {
 	cacheOffset.Store(int64(18 * time.Minute))
 	status, _, _ = request("127.0.0.1:9000", "/v1/models?client_version=oversized", true)
 	if status != 502 {
-		t.Fatalf("16 MiB path boundary: %d", status)
+		t.Fatalf("64 MiB path boundary: %d", status)
 	}
 	canonicalNative.Store(growth)
 	cacheOffset.Store(int64(24 * time.Minute))
@@ -488,5 +488,5 @@ func TestCatalogHTTPFixture(t *testing.T) {
 			t.Fatalf("sidecar restricted path %s returned %d, want closed connection", path, status)
 		}
 	}
-	t.Logf("real HTTP: Go enricher → uncached APISIX → sidecar nginx → front APISIX; %d original bytes, %d filtered bytes; numeric fidelity, entitlement-first, native failure, 16 MiB path cap, page and sidecar path restrictions PASS", len(original), len(body))
+	t.Logf("real HTTP: Go enricher → uncached APISIX → sidecar nginx → front APISIX; %d original bytes, %d filtered bytes; numeric fidelity, entitlement-first, native failure, 64 MiB path cap, page and sidecar path restrictions PASS", len(original), len(body))
 }

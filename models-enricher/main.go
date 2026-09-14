@@ -29,7 +29,7 @@ func main() {
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	catalogCacheTTL.Store(int64(5 * time.Minute))
-	catalogCacheMaxBytes.Store(16 << 20)
+	catalogCacheMaxBytes.Store(64 << 20)
 	cfgPath := env("CONFIG_PATH", "/app/config.yaml")
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {

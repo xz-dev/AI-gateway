@@ -483,11 +483,11 @@ func TestPublicMetadataResponseBounds(t *testing.T) {
 	}
 
 	// 有效 JSON 后的空白仍是响应字节，不能静默截掉并返回成功。
-	fake.native = append([]byte(`{"models":[]}`), []byte(strings.Repeat(" ", 32<<20))...)
+	fake.native = append([]byte(`{"models":[]}`), []byte(strings.Repeat(" ", 64<<20))...)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/v1/models?client_version=over-limit", nil))
 	if response.Code != http.StatusBadGateway {
-		t.Errorf("native response over 32 MiB accepted: %d", response.Code)
+		t.Errorf("native response over 64 MiB accepted: %d", response.Code)
 	}
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, "{}", strings.Repeat(" ", 16<<20))
