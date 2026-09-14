@@ -2,12 +2,13 @@
 
 ## Scope
 
-Raise only existing model-catalog read, intersection, final-response, and completed-result cache limits from 16/32 MiB to 64 MiB. Keep inference-body and unrelated metadata-source limits unchanged. Do not add streaming or memory optimizations.
+Raise only existing model-catalog read, intersection, final-response, and completed-result cache limits from 16/32 MiB to 64 MiB. Keep inference-body and unrelated metadata-source limits unchanged. Do not add streaming or memory optimizations. Serialize all external OpenAI models requests through one APISIX-wide admission slot, independent of caller identity.
 
 ## Progress
 
 - [x] Raise Sub2API catalog-read environment default to 64 MiB.
 - [x] Raise public APISIX basic/original/final catalog limits to 64 MiB.
+- [x] Enforce one global APISIX admission slot across versioned and standard external models requests.
 - [x] Raise models-enricher CPA native/API-call reads and completed-result cache to 64 MiB.
 - [x] Update existing limit assertions and current README values.
 - [x] Build local amd64 models-enricher candidate without running tests.
