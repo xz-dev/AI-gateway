@@ -7,7 +7,7 @@ max_frame_bytes: 16777216
 dial_timeout: 15s
 aliases:
   gpt-5.6-sol:   [axis/gpt-5.6-sol]     # codex 池成员待额度恢复后取消注释
-  gpt-5.6-terra: [axis/gpt-5.6-terra]   # codex/gpt-5.6-terra
+  gpt-5.6-terra: [axis/gpt-5.6-terra, aihub/gpt-5.6-terra]   # axis → aihub 链尾 fallback
   gpt-5.6-luna:  [axis/gpt-5.6-luna]    # codex/gpt-5.6-luna
   grok-4.6:      [grok-4.6, xl/grok-4.6] # oauth grok + xl 双通道 LB
   team-a/gpt-5.6-sol: [axis/gpt-5.6-sol]  # 含斜杠别名 drill
