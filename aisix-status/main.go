@@ -10,12 +10,15 @@ import (
 	"html/template"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,8 +26,10 @@ import (
 )
 
 const (
-	refreshSeconds = 5
-	maxAdminBody   = 1 << 20
+	maxAdminBody         = 1 << 20
+	maxMetricsBody       = 8 << 20
+	fallbackWindow       = time.Minute
+	fallbackPollInterval = 10 * time.Second
 )
 
 var version = "dev"
@@ -93,8 +98,8 @@ type targetView struct {
 }
 
 type comboView struct {
-	Name, Strategy, Budget, Candidate string
-	Targets                           []targetView
+	Name, Strategy, Budget, Candidate, Fallback string
+	Targets                                     []targetView
 }
 
 type directView struct {
@@ -110,11 +115,30 @@ type pageData struct {
 	Unresolved         int
 }
 
+type fallbackMetricKey struct {
+	Model, Target, Outcome string
+}
+
+type fallbackEvent struct {
+	Target, Outcome string
+	At              time.Time
+}
+
+type fallbackTracker struct {
+	mu          sync.Mutex
+	initialized bool
+	previous    map[fallbackMetricKey]uint64
+	recent      map[fallbackMetricKey]fallbackEvent
+	window      time.Duration
+}
+
 type statusHandler struct {
-	adminURL string
-	adminKey string
-	client   *http.Client
-	now      func() time.Time
+	adminURL   string
+	adminKey   string
+	metricsURL string
+	client     *http.Client
+	fallbacks  *fallbackTracker
+	now        func() time.Time
 }
 
 func main() {
@@ -128,6 +152,10 @@ func main() {
 		log.Error("configuration failed", "err", err)
 		os.Exit(1)
 	}
+
+	samplerCtx, stopSampler := context.WithCancel(context.Background())
+	defer stopSampler()
+	go handler.sampleFallbacks(samplerCtx)
 
 	server := &http.Server{
 		Addr:              env("LISTEN_ADDR", ":8080"),
@@ -147,12 +175,13 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+	stopSampler()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(ctx)
 }
 
-func newStatusHandler(adminURL, configPath string, now func() time.Time) (http.Handler, error) {
+func newStatusHandler(adminURL, configPath string, now func() time.Time) (*statusHandler, error) {
 	parsed, err := url.Parse(adminURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("invalid AISIX admin URL")
@@ -164,14 +193,25 @@ func newStatusHandler(adminURL, configPath string, now func() time.Time) (http.H
 	if now == nil {
 		now = time.Now
 	}
+	metricsURL := &url.URL{
+		Scheme: parsed.Scheme,
+		Host:   net.JoinHostPort(parsed.Hostname(), "9090"),
+		Path:   "/metrics",
+	}
 	return &statusHandler{
-		adminURL: strings.TrimRight(adminURL, "/"),
-		adminKey: key,
+		adminURL:   strings.TrimRight(adminURL, "/"),
+		adminKey:   key,
+		metricsURL: env("AISIX_METRICS_URL", metricsURL.String()),
 		client: &http.Client{
 			Timeout: 3 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+		},
+		fallbacks: &fallbackTracker{
+			previous: make(map[fallbackMetricKey]uint64),
+			recent:   make(map[fallbackMetricKey]fallbackEvent),
+			window:   fallbackWindow,
 		},
 		now: now,
 	}, nil
@@ -213,7 +253,7 @@ func (h *statusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	h.writePage(w, r.Method == http.MethodHead, http.StatusOK, buildPage(models, statuses, h.now()))
+	h.writePage(w, r.Method == http.MethodHead, http.StatusOK, buildPage(models, statuses, h.fallbacks, h.now()))
 }
 
 func (h *statusHandler) getJSON(ctx context.Context, path string, dst any) error {
@@ -241,7 +281,171 @@ func (h *statusHandler) getJSON(ctx context.Context, path string, dst any) error
 	return nil
 }
 
-func buildPage(models []modelEntry, statuses []runtimeStatus, now time.Time) pageData {
+func (h *statusHandler) sampleFallbacks(ctx context.Context) {
+	h.sampleFallbacksOnce(ctx)
+	ticker := time.NewTicker(fallbackPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.sampleFallbacksOnce(ctx)
+		}
+	}
+}
+
+func (h *statusHandler) sampleFallbacksOnce(ctx context.Context) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.metricsURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Accept", "text/plain")
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetricsBody+1))
+	if err != nil || len(body) > maxMetricsBody {
+		return
+	}
+	h.fallbacks.observe(parseFallbackCounters(string(body)), h.now())
+}
+
+func parseFallbackCounters(body string) map[fallbackMetricKey]uint64 {
+	const (
+		successMetric = "aisix_routing_successful_fallbacks_total"
+		failedMetric  = "aisix_routing_failed_fallbacks_total"
+	)
+	counters := make(map[fallbackMetricKey]uint64)
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		open := strings.IndexByte(line, '{')
+		close := strings.LastIndexByte(line, '}')
+		if open < 0 || close <= open {
+			continue
+		}
+		metric := line[:open]
+		outcome := ""
+		switch metric {
+		case successMetric:
+			outcome = "success"
+		case failedMetric:
+			outcome = "failed"
+		default:
+			continue
+		}
+		model := prometheusLabel(line[open+1:close], "model")
+		target := prometheusLabel(line[open+1:close], "fallback_model")
+		fields := strings.Fields(line[close+1:])
+		if model == "" || target == "" || len(fields) == 0 {
+			continue
+		}
+		value, err := strconv.ParseFloat(fields[0], 64)
+		if err != nil || value < 0 {
+			continue
+		}
+		counters[fallbackMetricKey{Model: model, Target: target, Outcome: outcome}] = uint64(value)
+	}
+	return counters
+}
+
+func prometheusLabel(labels, name string) string {
+	needle := name + `="`
+	for offset := 0; offset < len(labels); {
+		index := strings.Index(labels[offset:], needle)
+		if index < 0 {
+			return ""
+		}
+		index += offset
+		if index == 0 || labels[index-1] == ',' {
+			start := index + len(needle)
+			end := strings.IndexByte(labels[start:], '"')
+			if end >= 0 {
+				return labels[start : start+end]
+			}
+			return ""
+		}
+		offset = index + len(needle)
+	}
+	return ""
+}
+
+func (tracker *fallbackTracker) observe(current map[fallbackMetricKey]uint64, now time.Time) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if !tracker.initialized {
+		for key, value := range current {
+			tracker.previous[key] = value
+		}
+		tracker.initialized = true
+		return
+	}
+	for key, value := range current {
+		previous, seen := tracker.previous[key]
+		if (!seen && value > 0) || (seen && value > previous) {
+			tracker.recent[key] = fallbackEvent{Target: key.Target, Outcome: key.Outcome, At: now}
+		}
+	}
+	tracker.previous = make(map[fallbackMetricKey]uint64, len(current))
+	for key, value := range current {
+		tracker.previous[key] = value
+	}
+	tracker.pruneLocked(now)
+}
+
+func (tracker *fallbackTracker) recentForModel(model string, now time.Time) []fallbackEvent {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	tracker.pruneLocked(now)
+
+	events := make([]fallbackEvent, 0)
+	for key, event := range tracker.recent {
+		if key.Model == model {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func (tracker *fallbackTracker) pruneLocked(now time.Time) {
+	for key, event := range tracker.recent {
+		if now.Sub(event.At) > tracker.window {
+			delete(tracker.recent, key)
+		}
+	}
+}
+
+func fallbackDetail(events []fallbackEvent, now time.Time) string {
+	if len(events) == 0 {
+		return ""
+	}
+	sort.Slice(events, func(i, j int) bool {
+		if !events[i].At.Equal(events[j].At) {
+			return events[i].At.After(events[j].At)
+		}
+		if events[i].Target != events[j].Target {
+			return events[i].Target < events[j].Target
+		}
+		return events[i].Outcome < events[j].Outcome
+	})
+	parts := make([]string, 0, len(events))
+	for _, event := range events {
+		age := max(int64(0), int64(now.Sub(event.At)/time.Second))
+		parts = append(parts, fmt.Sprintf("%s · %s · %ds ago", event.Target, event.Outcome, age))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func buildPage(models []modelEntry, statuses []runtimeStatus, fallbacks *fallbackTracker, now time.Time) pageData {
 	byID := make(map[string]runtimeStatus, len(statuses))
 	byName := make(map[string]runtimeStatus, len(statuses))
 	for _, status := range statuses {
@@ -259,7 +463,7 @@ func buildPage(models []modelEntry, statuses []runtimeStatus, now time.Time) pag
 		if name == "" {
 			name = entry.ID
 		}
-		data.Combos = append(data.Combos, buildCombo(name, entry.Value.Routing, byName, now))
+		data.Combos = append(data.Combos, buildCombo(name, entry.Value.Routing, byName, fallbacks, now))
 		for _, target := range entry.Value.Routing.Targets {
 			combosByTarget[target.Model] = append(combosByTarget[target.Model], name)
 		}
@@ -295,12 +499,15 @@ func buildPage(models []modelEntry, statuses []runtimeStatus, now time.Time) pag
 	return data
 }
 
-func buildCombo(name string, routing *routingConfig, statuses map[string]runtimeStatus, now time.Time) comboView {
+func buildCombo(name string, routing *routingConfig, statuses map[string]runtimeStatus, fallbacks *fallbackTracker, now time.Time) comboView {
 	combo := comboView{
 		Name:      name,
 		Strategy:  routing.Strategy,
 		Budget:    fallbackBudget(routing),
 		Candidate: firstCandidate(routing, statuses),
+	}
+	if fallbacks != nil {
+		combo.Fallback = fallbackDetail(fallbacks.recentForModel(name, now), now)
 	}
 	for index, target := range routing.Targets {
 		status, ok := statuses[target.Model]

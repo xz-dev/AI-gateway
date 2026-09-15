@@ -36,6 +36,7 @@ section { margin-top: 2rem; }
 .pill { margin-left: auto; border-radius: 999px; padding: .22rem .55rem; font-size: .72rem; font-weight: 800; text-transform: uppercase; }
 .pill.eligible { background: #123c32; color: #86efac; }
 .pill.cooldown { background: #4a3010; color: #fde68a; }
+.pill.fallback { background: #153b5b; color: #93c5fd; }
 .pill.unavailable { background: #4a1f2b; color: #fda4af; }
 .pill.unresolved { background: #283247; color: #cbd5e1; }
 .table-wrap { overflow-x: auto; border: 1px solid #263553; border-radius: 14px; background: rgba(17, 26, 47, .92); }
@@ -61,9 +62,10 @@ time { white-space: nowrap; }
 <h2>Routing combos</h2>
 {{if .Combos}}<div class="cards">{{range .Combos}}
 <article class="card">
-  <div class="card-head"><h3>{{.Name}}</h3><span class="strategy">{{.Strategy}}</span></div>
+  <div class="card-head"><h3>{{.Name}}</h3><span class="strategy">{{.Strategy}}</span>{{if .Fallback}}<span class="pill fallback">fallback</span>{{end}}</div>
   <p class="subtle">Fallback budget: {{.Budget}}</p>
   <p class="candidate"><span>Runtime first candidate</span><strong>{{.Candidate}}</strong></p>
+  {{if .Fallback}}<p class="subtle">Recent fallback: {{.Fallback}}</p>{{end}}
   <ol class="targets">{{range .Targets}}<li>
     <div class="target-main"><span class="order">#{{.Order}}</span><strong>{{.Name}}</strong><span class="pill {{.State}}">{{.State}}</span></div>
     <div class="target-meta">priority {{.Priority}} · weight {{.Weight}}{{if .Tags}} · tags {{range $index, $tag := .Tags}}{{if $index}}, {{end}}{{$tag}}{{end}}{{end}} · {{.Detail}}</div>

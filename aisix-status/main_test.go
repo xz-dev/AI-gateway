@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -158,6 +159,142 @@ func TestStatusListenerRejectsEveryOtherSurface(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("rejected routes reached AISIX %d times", calls.Load())
+	}
+}
+
+func TestFallbackCountersAndWindow(t *testing.T) {
+	metrics := `
+# TYPE aisix_routing_successful_fallbacks_total counter
+aisix_routing_successful_fallbacks_total{model="combo",fallback_model="target-b"} 7
+aisix_routing_failed_fallbacks_total{model="combo",fallback_model="target-c"} 2
+aisix_routing_successful_fallbacks_total{model="other",fallback_model="target-z"} 1
+other_metric{model="combo",fallback_model="ignored"} 99
+`
+	counters := parseFallbackCounters(metrics)
+	if got := counters[fallbackMetricKey{Model: "combo", Target: "target-b", Outcome: "success"}]; got != 7 {
+		t.Fatalf("successful fallback count = %d, want 7", got)
+	}
+	if got := counters[fallbackMetricKey{Model: "combo", Target: "target-c", Outcome: "failed"}]; got != 2 {
+		t.Fatalf("failed fallback count = %d, want 2", got)
+	}
+	if len(counters) != 3 {
+		t.Fatalf("parsed %d counters, want 3", len(counters))
+	}
+
+	start := time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC)
+	tracker := &fallbackTracker{
+		previous: make(map[fallbackMetricKey]uint64),
+		recent:   make(map[fallbackMetricKey]fallbackEvent),
+		window:   time.Minute,
+	}
+	tracker.observe(counters, start)
+	if events := tracker.recentForModel("combo", start); len(events) != 0 {
+		t.Fatalf("initial baseline produced %d fallback events", len(events))
+	}
+
+	counters[fallbackMetricKey{Model: "combo", Target: "target-b", Outcome: "success"}] = 8
+	counters[fallbackMetricKey{Model: "combo", Target: "target-c", Outcome: "failed"}] = 0
+	tracker.observe(counters, start.Add(10*time.Second))
+	events := tracker.recentForModel("combo", start.Add(10*time.Second))
+	if len(events) != 1 || events[0].Target != "target-b" || events[0].Outcome != "success" {
+		t.Fatalf("unexpected recent events: %#v", events)
+	}
+	if detail := fallbackDetail(events, start.Add(28*time.Second)); detail != "target-b · success · 18s ago" {
+		t.Fatalf("fallback detail = %q", detail)
+	}
+	if events := tracker.recentForModel("combo", start.Add(71*time.Second)); len(events) != 0 {
+		t.Fatalf("expired event remained visible: %#v", events)
+	}
+
+	resetKey := keyFor("combo", "target-b", "success")
+	tracker.observe(map[fallbackMetricKey]uint64{resetKey: 0}, start.Add(80*time.Second))
+	if events := tracker.recentForModel("combo", start.Add(80*time.Second)); len(events) != 0 {
+		t.Fatalf("counter reset produced fallback events: %#v", events)
+	}
+	tracker.observe(map[fallbackMetricKey]uint64{resetKey: 1}, start.Add(90*time.Second))
+	if events := tracker.recentForModel("combo", start.Add(90*time.Second)); len(events) != 1 {
+		t.Fatalf("post-reset increment produced %d fallback events", len(events))
+	}
+
+	tracker.observe(map[fallbackMetricKey]uint64{}, start.Add(151*time.Second))
+	tracker.observe(map[fallbackMetricKey]uint64{resetKey: 1}, start.Add(152*time.Second))
+	if events := tracker.recentForModel("combo", start.Add(152*time.Second)); len(events) != 1 {
+		t.Fatalf("reappearing nonzero series produced %d fallback events", len(events))
+	}
+}
+
+func keyFor(model, target, outcome string) fallbackMetricKey {
+	return fallbackMetricKey{Model: model, Target: target, Outcome: outcome}
+}
+
+func TestStatusPageShowsRecentFallbackOnCombo(t *testing.T) {
+	fixed := time.Date(2026, 9, 15, 8, 0, 30, 0, time.UTC)
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/v1/models":
+			_, _ = w.Write([]byte(`[
+				{"id":"direct-a","value":{"display_name":"target-a"}},
+				{"id":"routing-combo","value":{"display_name":"combo","routing":{"strategy":"failover","targets":[{"model":"target-a"}]}}}
+			]`))
+		case "/admin/v1/models/status":
+			_, _ = w.Write([]byte(`[
+				{"id":"direct-a","display_name":"target-a","kind":"direct","status":"healthy"},
+				{"id":"routing-combo","display_name":"combo","kind":"routing","status":"not_applicable"}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer admin.Close()
+
+	handler, err := newStatusHandler(admin.URL, writeTestConfig(t), func() time.Time { return fixed })
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := fallbackMetricKey{Model: "combo", Target: "target-a", Outcome: "success"}
+	handler.fallbacks.observe(map[fallbackMetricKey]uint64{key: 2}, fixed.Add(-20*time.Second))
+	handler.fallbacks.observe(map[fallbackMetricKey]uint64{key: 3}, fixed.Add(-10*time.Second))
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/status", nil))
+	body := w.Body.String()
+	for _, want := range []string{`class="pill fallback">fallback`, "Recent fallback:", "target-a · success · 10s ago"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("response missing %q", want)
+		}
+	}
+	if !strings.Contains(body, `class="pill eligible">eligible`) {
+		t.Error("direct target state was overwritten by fallback event")
+	}
+}
+
+func TestMetricsFailureDoesNotFailStatusPage(t *testing.T) {
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/v1/models", "/admin/v1/models/status":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer admin.Close()
+	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
+	}))
+	defer metrics.Close()
+
+	handler, err := newStatusHandler(admin.URL, writeTestConfig(t), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.metricsURL = metrics.URL
+	handler.sampleFallbacksOnce(context.Background())
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/status", nil))
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "AISIX status unavailable") {
+		t.Fatalf("metrics failure changed status page: HTTP %d", w.Code)
 	}
 }
 
