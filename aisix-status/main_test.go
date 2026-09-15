@@ -167,59 +167,61 @@ func TestFallbackCountersAndWindow(t *testing.T) {
 # TYPE aisix_routing_successful_fallbacks_total counter
 aisix_routing_successful_fallbacks_total{model="combo",fallback_model="target-b"} 7
 aisix_routing_failed_fallbacks_total{model="combo",fallback_model="target-c"} 2
-aisix_routing_successful_fallbacks_total{model="other",fallback_model="target-z"} 1
+aisix_deployment_failure_responses_total{model="target-a"} 4
+aisix_deployment_failure_responses_total{model="target-b"} 1
 other_metric{model="combo",fallback_model="ignored"} 99
 `
 	counters := parseFallbackCounters(metrics)
-	if got := counters[fallbackMetricKey{Model: "combo", Target: "target-b", Outcome: "success"}]; got != 7 {
-		t.Fatalf("successful fallback count = %d, want 7", got)
+	if got := counters[fallbackMetricKey{Model: "combo", Target: "", Outcome: "combo"}]; got != 9 {
+		t.Fatalf("combo fallback count = %d, want 9", got)
 	}
-	if got := counters[fallbackMetricKey{Model: "combo", Target: "target-c", Outcome: "failed"}]; got != 2 {
-		t.Fatalf("failed fallback count = %d, want 2", got)
+	if got := counters[fallbackMetricKey{Model: "", Target: "target-a", Outcome: "skipped"}]; got != 4 {
+		t.Fatalf("skipped target-a count = %d, want 4", got)
 	}
-	if len(counters) != 3 {
-		t.Fatalf("parsed %d counters, want 3", len(counters))
+	if _, ok := counters[fallbackMetricKey{Model: "combo", Target: "target-b", Outcome: "success"}]; ok {
+		t.Fatal("winner target should not be parsed as a skip event")
 	}
 
 	start := time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC)
 	tracker := &fallbackTracker{
-		previous: make(map[fallbackMetricKey]uint64),
-		recent:   make(map[fallbackMetricKey]fallbackEvent),
-		window:   time.Minute,
+		previous:     make(map[fallbackMetricKey]uint64),
+		recentCombos: make(map[string]time.Time),
+		recentSkips:  make(map[string]time.Time),
+		window:       time.Minute,
 	}
 	tracker.observe(counters, start)
 	if events := tracker.recentForModel("combo", start); len(events) != 0 {
 		t.Fatalf("initial baseline produced %d fallback events", len(events))
 	}
 
-	counters[fallbackMetricKey{Model: "combo", Target: "target-b", Outcome: "success"}] = 8
-	counters[fallbackMetricKey{Model: "combo", Target: "target-c", Outcome: "failed"}] = 0
-	tracker.observe(counters, start.Add(10*time.Second))
+	next := parseFallbackCounters(`
+aisix_routing_successful_fallbacks_total{model="combo",fallback_model="target-b"} 8
+aisix_routing_failed_fallbacks_total{model="combo",fallback_model="target-c"} 2
+aisix_deployment_failure_responses_total{model="target-a"} 5
+aisix_deployment_failure_responses_total{model="target-b"} 1
+`)
+	tracker.observe(next, start.Add(10*time.Second))
 	events := tracker.recentForModel("combo", start.Add(10*time.Second))
-	if len(events) != 1 || events[0].Target != "target-b" || events[0].Outcome != "success" {
+	if len(events) != 1 || events[0].Target != "target-a" || events[0].Outcome != "skipped" {
 		t.Fatalf("unexpected recent events: %#v", events)
 	}
-	if detail := fallbackDetail(events, start.Add(28*time.Second)); detail != "success · 18s ago" {
+	if detail := fallbackDetail(events, start.Add(28*time.Second)); detail != "18s ago" {
 		t.Fatalf("fallback detail = %q", detail)
+	}
+	if events := fallbackEventsForTarget(events, "target-b"); len(events) != 0 {
+		t.Fatalf("winner target was marked skipped: %#v", events)
 	}
 	if events := tracker.recentForModel("combo", start.Add(71*time.Second)); len(events) != 0 {
 		t.Fatalf("expired event remained visible: %#v", events)
 	}
 
-	resetKey := keyFor("combo", "target-b", "success")
-	tracker.observe(map[fallbackMetricKey]uint64{resetKey: 0}, start.Add(80*time.Second))
+	skipOnly := parseFallbackCounters(`
+aisix_routing_successful_fallbacks_total{model="combo",fallback_model="target-b"} 8
+aisix_deployment_failure_responses_total{model="target-a"} 6
+`)
+	tracker.observe(skipOnly, start.Add(80*time.Second))
 	if events := tracker.recentForModel("combo", start.Add(80*time.Second)); len(events) != 0 {
-		t.Fatalf("counter reset produced fallback events: %#v", events)
-	}
-	tracker.observe(map[fallbackMetricKey]uint64{resetKey: 1}, start.Add(90*time.Second))
-	if events := tracker.recentForModel("combo", start.Add(90*time.Second)); len(events) != 1 {
-		t.Fatalf("post-reset increment produced %d fallback events", len(events))
-	}
-
-	tracker.observe(map[fallbackMetricKey]uint64{}, start.Add(151*time.Second))
-	tracker.observe(map[fallbackMetricKey]uint64{resetKey: 1}, start.Add(152*time.Second))
-	if events := tracker.recentForModel("combo", start.Add(152*time.Second)); len(events) != 1 {
-		t.Fatalf("reappearing nonzero series produced %d fallback events", len(events))
+		t.Fatalf("failure without combo fallback produced events: %#v", events)
 	}
 }
 
@@ -252,9 +254,16 @@ func TestStatusPageShowsRecentFallbackOnCombo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := fallbackMetricKey{Model: "combo", Target: "target-a", Outcome: "success"}
-	handler.fallbacks.observe(map[fallbackMetricKey]uint64{key: 2}, fixed.Add(-20*time.Second))
-	handler.fallbacks.observe(map[fallbackMetricKey]uint64{key: 3}, fixed.Add(-10*time.Second))
+	baseline := map[fallbackMetricKey]uint64{
+		{Model: "combo", Target: "", Outcome: "combo"}:      2,
+		{Model: "", Target: "target-a", Outcome: "skipped"}: 4,
+	}
+	increment := map[fallbackMetricKey]uint64{
+		{Model: "combo", Target: "", Outcome: "combo"}:      3,
+		{Model: "", Target: "target-a", Outcome: "skipped"}: 5,
+	}
+	handler.fallbacks.observe(baseline, fixed.Add(-20*time.Second))
+	handler.fallbacks.observe(increment, fixed.Add(-10*time.Second))
 
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/status", nil))
@@ -268,7 +277,7 @@ func TestStatusPageShowsRecentFallbackOnCombo(t *testing.T) {
 		t.Fatal("combo target row is incomplete")
 	}
 	targetRow := body[targetStart : targetStart+targetEnd]
-	for _, want := range []string{`class="pill eligible">eligible`, `class="pill fallback">fallback`, "success · 10s ago"} {
+	for _, want := range []string{`class="pill eligible">eligible`, `class="pill fallback">fallback`, "10s ago"} {
 		if !strings.Contains(targetRow, want) {
 			t.Errorf("target row missing %q: %s", want, targetRow)
 		}

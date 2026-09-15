@@ -125,11 +125,12 @@ type fallbackEvent struct {
 }
 
 type fallbackTracker struct {
-	mu          sync.Mutex
-	initialized bool
-	previous    map[fallbackMetricKey]uint64
-	recent      map[fallbackMetricKey]fallbackEvent
-	window      time.Duration
+	mu           sync.Mutex
+	initialized  bool
+	previous     map[fallbackMetricKey]uint64
+	recentCombos map[string]time.Time
+	recentSkips  map[string]time.Time
+	window       time.Duration
 }
 
 type statusHandler struct {
@@ -209,9 +210,10 @@ func newStatusHandler(adminURL, configPath string, now func() time.Time) (*statu
 			},
 		},
 		fallbacks: &fallbackTracker{
-			previous: make(map[fallbackMetricKey]uint64),
-			recent:   make(map[fallbackMetricKey]fallbackEvent),
-			window:   fallbackWindow,
+			previous:     make(map[fallbackMetricKey]uint64),
+			recentCombos: make(map[string]time.Time),
+			recentSkips:  make(map[string]time.Time),
+			window:       fallbackWindow,
 		},
 		now: now,
 	}, nil
@@ -320,8 +322,11 @@ func parseFallbackCounters(body string) map[fallbackMetricKey]uint64 {
 	const (
 		successMetric = "aisix_routing_successful_fallbacks_total"
 		failedMetric  = "aisix_routing_failed_fallbacks_total"
+		skipMetric    = "aisix_deployment_failure_responses_total"
 	)
 	counters := make(map[fallbackMetricKey]uint64)
+	comboTotals := make(map[string]uint64)
+	skips := make(map[string]uint64)
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -333,26 +338,35 @@ func parseFallbackCounters(body string) map[fallbackMetricKey]uint64 {
 			continue
 		}
 		metric := line[:open]
-		outcome := ""
-		switch metric {
-		case successMetric:
-			outcome = "success"
-		case failedMetric:
-			outcome = "failed"
-		default:
-			continue
-		}
-		model := prometheusLabel(line[open+1:close], "model")
-		target := prometheusLabel(line[open+1:close], "fallback_model")
+		labels := line[open+1 : close]
 		fields := strings.Fields(line[close+1:])
-		if model == "" || target == "" || len(fields) == 0 {
+		if len(fields) == 0 {
 			continue
 		}
 		value, err := strconv.ParseFloat(fields[0], 64)
 		if err != nil || value < 0 {
 			continue
 		}
-		counters[fallbackMetricKey{Model: model, Target: target, Outcome: outcome}] = uint64(value)
+		switch metric {
+		case successMetric, failedMetric:
+			model := prometheusLabel(labels, "model")
+			if model == "" {
+				continue
+			}
+			comboTotals[model] += uint64(value)
+		case skipMetric:
+			target := prometheusLabel(labels, "model")
+			if target == "" {
+				continue
+			}
+			skips[target] += uint64(value)
+		}
+	}
+	for model, total := range comboTotals {
+		counters[fallbackMetricKey{Model: model, Target: "", Outcome: "combo"}] = total
+	}
+	for target, total := range skips {
+		counters[fallbackMetricKey{Model: "", Target: target, Outcome: "skipped"}] = total
 	}
 	return counters
 }
@@ -391,8 +405,15 @@ func (tracker *fallbackTracker) observe(current map[fallbackMetricKey]uint64, no
 	}
 	for key, value := range current {
 		previous, seen := tracker.previous[key]
-		if (!seen && value > 0) || (seen && value > previous) {
-			tracker.recent[key] = fallbackEvent{Target: key.Target, Outcome: key.Outcome, At: now}
+		increased := (!seen && value > 0) || (seen && value > previous)
+		if !increased {
+			continue
+		}
+		switch key.Outcome {
+		case "combo":
+			tracker.recentCombos[key.Model] = now
+		case "skipped":
+			tracker.recentSkips[key.Target] = now
 		}
 	}
 	tracker.previous = make(map[fallbackMetricKey]uint64, len(current))
@@ -407,19 +428,30 @@ func (tracker *fallbackTracker) recentForModel(model string, now time.Time) []fa
 	defer tracker.mu.Unlock()
 	tracker.pruneLocked(now)
 
+	comboAt, comboActive := tracker.recentCombos[model]
+	if !comboActive {
+		return nil
+	}
 	events := make([]fallbackEvent, 0)
-	for key, event := range tracker.recent {
-		if key.Model == model {
-			events = append(events, event)
+	for target, skipAt := range tracker.recentSkips {
+		at := skipAt
+		if comboAt.After(at) {
+			at = comboAt
 		}
+		events = append(events, fallbackEvent{Target: target, Outcome: "skipped", At: at})
 	}
 	return events
 }
 
 func (tracker *fallbackTracker) pruneLocked(now time.Time) {
-	for key, event := range tracker.recent {
-		if now.Sub(event.At) > tracker.window {
-			delete(tracker.recent, key)
+	for model, at := range tracker.recentCombos {
+		if now.Sub(at) > tracker.window {
+			delete(tracker.recentCombos, model)
+		}
+	}
+	for target, at := range tracker.recentSkips {
+		if now.Sub(at) > tracker.window {
+			delete(tracker.recentSkips, target)
 		}
 	}
 }
@@ -440,7 +472,7 @@ func fallbackDetail(events []fallbackEvent, now time.Time) string {
 	parts := make([]string, 0, len(events))
 	for _, event := range events {
 		age := max(int64(0), int64(now.Sub(event.At)/time.Second))
-		parts = append(parts, fmt.Sprintf("%s · %ds ago", event.Outcome, age))
+		parts = append(parts, fmt.Sprintf("%ds ago", age))
 	}
 	return strings.Join(parts, " | ")
 }
