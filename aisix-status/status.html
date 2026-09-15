@@ -62,13 +62,12 @@ time { white-space: nowrap; }
 <h2>Routing combos</h2>
 {{if .Combos}}<div class="cards">{{range .Combos}}
 <article class="card">
-  <div class="card-head"><h3>{{.Name}}</h3><span class="strategy">{{.Strategy}}</span>{{if .Fallback}}<span class="pill fallback">fallback</span>{{end}}</div>
+  <div class="card-head"><h3>{{.Name}}</h3><span class="strategy">{{.Strategy}}</span></div>
   <p class="subtle">Fallback budget: {{.Budget}}</p>
   <p class="candidate"><span>Runtime first candidate</span><strong>{{.Candidate}}</strong></p>
-  {{if .Fallback}}<p class="subtle">Recent fallback: {{.Fallback}}</p>{{end}}
   <ol class="targets">{{range .Targets}}<li>
-    <div class="target-main"><span class="order">#{{.Order}}</span><strong>{{.Name}}</strong><span class="pill {{.State}}">{{.State}}</span></div>
-    <div class="target-meta">priority {{.Priority}} · weight {{.Weight}}{{if .Tags}} · tags {{range $index, $tag := .Tags}}{{if $index}}, {{end}}{{$tag}}{{end}}{{end}} · {{.Detail}}</div>
+    <div class="target-main"><span class="order">#{{.Order}}</span><strong>{{.Name}}</strong><span class="pill {{.State}}">{{.State}}</span>{{if .Fallback}}<span class="pill fallback">fallback</span>{{end}}</div>
+    <div class="target-meta">priority {{.Priority}} · weight {{.Weight}}{{if .Tags}} · tags {{range $index, $tag := .Tags}}{{if $index}}, {{end}}{{$tag}}{{end}}{{end}} · {{.Detail}}{{if .Fallback}} · {{.Fallback}}{{end}}</div>
   </li>{{end}}</ol>
 </article>
 {{end}}</div>{{else}}<div class="empty">No routing combos are configured.</div>{{end}}

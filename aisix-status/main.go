@@ -92,14 +92,14 @@ type runtimeStatus struct {
 }
 
 type targetView struct {
-	Order, Priority, Weight int
-	Name, State, Detail     string
-	Tags                    []string
+	Order, Priority, Weight       int
+	Name, State, Detail, Fallback string
+	Tags                          []string
 }
 
 type comboView struct {
-	Name, Strategy, Budget, Candidate, Fallback string
-	Targets                                     []targetView
+	Name, Strategy, Budget, Candidate string
+	Targets                           []targetView
 }
 
 type directView struct {
@@ -440,9 +440,19 @@ func fallbackDetail(events []fallbackEvent, now time.Time) string {
 	parts := make([]string, 0, len(events))
 	for _, event := range events {
 		age := max(int64(0), int64(now.Sub(event.At)/time.Second))
-		parts = append(parts, fmt.Sprintf("%s · %s · %ds ago", event.Target, event.Outcome, age))
+		parts = append(parts, fmt.Sprintf("%s · %ds ago", event.Outcome, age))
 	}
 	return strings.Join(parts, " | ")
+}
+
+func fallbackEventsForTarget(events []fallbackEvent, target string) []fallbackEvent {
+	matched := make([]fallbackEvent, 0)
+	for _, event := range events {
+		if event.Target == target {
+			matched = append(matched, event)
+		}
+	}
+	return matched
 }
 
 func buildPage(models []modelEntry, statuses []runtimeStatus, fallbacks *fallbackTracker, now time.Time) pageData {
@@ -506,8 +516,9 @@ func buildCombo(name string, routing *routingConfig, statuses map[string]runtime
 		Budget:    fallbackBudget(routing),
 		Candidate: firstCandidate(routing, statuses),
 	}
+	var events []fallbackEvent
 	if fallbacks != nil {
-		combo.Fallback = fallbackDetail(fallbacks.recentForModel(name, now), now)
+		events = fallbacks.recentForModel(name, now)
 	}
 	for index, target := range routing.Targets {
 		status, ok := statuses[target.Model]
@@ -517,6 +528,7 @@ func buildCombo(name string, routing *routingConfig, statuses map[string]runtime
 			Name:     target.Model,
 			State:    state,
 			Detail:   detail,
+			Fallback: fallbackDetail(fallbackEventsForTarget(events, target.Model), now),
 			Priority: intOr(target.Priority, 0),
 			Weight:   intOr(target.Weight, 1),
 			Tags:     target.Tags,

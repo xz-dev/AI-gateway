@@ -199,7 +199,7 @@ other_metric{model="combo",fallback_model="ignored"} 99
 	if len(events) != 1 || events[0].Target != "target-b" || events[0].Outcome != "success" {
 		t.Fatalf("unexpected recent events: %#v", events)
 	}
-	if detail := fallbackDetail(events, start.Add(28*time.Second)); detail != "target-b · success · 18s ago" {
+	if detail := fallbackDetail(events, start.Add(28*time.Second)); detail != "success · 18s ago" {
 		t.Fatalf("fallback detail = %q", detail)
 	}
 	if events := tracker.recentForModel("combo", start.Add(71*time.Second)); len(events) != 0 {
@@ -259,13 +259,29 @@ func TestStatusPageShowsRecentFallbackOnCombo(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/status", nil))
 	body := w.Body.String()
-	for _, want := range []string{`class="pill fallback">fallback`, "Recent fallback:", "target-a · success · 10s ago"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("response missing %q", want)
+	targetStart := strings.Index(body, "<strong>target-a</strong>")
+	if targetStart < 0 {
+		t.Fatal("combo target row missing")
+	}
+	targetEnd := strings.Index(body[targetStart:], "</li>")
+	if targetEnd < 0 {
+		t.Fatal("combo target row is incomplete")
+	}
+	targetRow := body[targetStart : targetStart+targetEnd]
+	for _, want := range []string{`class="pill eligible">eligible`, `class="pill fallback">fallback`, "success · 10s ago"} {
+		if !strings.Contains(targetRow, want) {
+			t.Errorf("target row missing %q: %s", want, targetRow)
 		}
 	}
-	if !strings.Contains(body, `class="pill eligible">eligible`) {
-		t.Error("direct target state was overwritten by fallback event")
+	headEnd := strings.Index(body, "Runtime first candidate")
+	if headEnd < 0 {
+		t.Fatal("combo header missing")
+	}
+	if strings.Contains(body[:headEnd], `class="pill fallback">fallback`) {
+		t.Error("fallback pill remained on combo header")
+	}
+	if strings.Contains(body, "Recent fallback:") {
+		t.Error("combo-level recent fallback line remained")
 	}
 }
 
