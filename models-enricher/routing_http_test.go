@@ -83,7 +83,6 @@ func TestRoutingHTTPFixture(t *testing.T) {
 
 	var cpaCalls atomic.Int64
 	var aisixCalls atomic.Int64
-	var wsCalls atomic.Int64
 	streamRelease := make(chan struct{})
 	serve("127.0.0.2:8317", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/fixture-ready" {
@@ -146,12 +145,6 @@ func TestRoutingHTTPFixture(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write(body)
 	}))
-	serve("127.0.0.5:8090", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		wsCalls.Add(1)
-		w.Header().Set("X-Backend", "wsalias")
-		_, _ = w.Write([]byte("legacy-ws"))
-	}))
-
 	load := func(path string) map[string]any {
 		t.Helper()
 		body, err := os.ReadFile(path)
@@ -178,9 +171,8 @@ func TestRoutingHTTPFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	addresses := map[string]string{
-		"cpa":     "127.0.0.2:8317",
-		"aisix":   "127.0.0.3:3000",
-		"wsalias": "127.0.0.5:8090",
+		"cpa":   "127.0.0.2:8317",
+		"aisix": "127.0.0.3:3000",
 	}
 	var upstreams []any
 	for _, raw := range standalone["upstreams"].([]any) {
@@ -403,18 +395,19 @@ func TestRoutingHTTPFixture(t *testing.T) {
 	}
 
 	before = indexCalls.Load()
+	cpaBefore := cpaCalls.Load()
 	req, _ = http.NewRequest(http.MethodGet, target+"/v1/responses", nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Authorization", "Bearer fixture-cpa")
 	response, err = client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	responseBody, _ = io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || string(responseBody) != "legacy-ws" || wsCalls.Load() != 1 || indexCalls.Load() != before {
-		t.Fatalf("legacy WS route entered classifier: status=%d body=%s ws=%d", response.StatusCode, responseBody, wsCalls.Load())
+	if response.StatusCode != http.StatusCreated || cpaCalls.Load() != cpaBefore+1 || indexCalls.Load() != before {
+		t.Fatalf("authenticated downstream WS did not use direct CPA route: status=%d cpa=%d", response.StatusCode, cpaCalls.Load()-cpaBefore)
 	}
 
-	t.Logf("real APISIX: CPA-first, overlap, AISIX-only, exact ID/body, 404/503, lookup failure, 429/502/timeout, client-visible committed disconnect, complete SSE event order and WS selector exclusion PASS; CPA=%d AISIX=%d index=%d", cpaCalls.Load(), aisixCalls.Load(), indexCalls.Load())
+	t.Logf("real APISIX: CPA-first, overlap, AISIX-only, exact ID/body, 404/503, lookup failure, 429/502/timeout, client-visible committed disconnect, complete SSE event order and direct downstream WS PASS; CPA=%d AISIX=%d index=%d", cpaCalls.Load(), aisixCalls.Load(), indexCalls.Load())
 }

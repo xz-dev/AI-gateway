@@ -10,7 +10,6 @@ __pycache__/
 .DS_Store
 models-enricher/models-enricher
 aisix-status/aisix-status
-ws-alias-proxy/ws-alias-proxy
 aisix/config.yaml
 aisix/resources.yaml
 aisix/caller-keys.json

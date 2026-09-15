@@ -7,14 +7,6 @@ upstreams:
       connect: 5
       send: 30
       read: 30
-  - id: wsalias
-    type: roundrobin
-    nodes:
-      "ws-alias-proxy:8090": 1
-    timeout:
-      connect: 5
-      send: 3600
-      read: 3600
   - id: aisix
     type: roundrobin
     nodes:
@@ -56,17 +48,6 @@ routes:
               end
             end
     upstream_id: cpa
-  # WS 别名覆盖：GET /v1/responses + Upgrade → ws-alias-proxy 边车（帧级 model 改写）
-  - id: ws-alias
-    uris:
-      - /v1/responses
-    methods:
-      - GET
-    priority: 30
-    vars:
-      - ["http_upgrade", "==", "websocket"]
-    enable_websocket: true
-    upstream_id: wsalias
   # HTML只接收目录边车的真实连接来源，不信任转发头中的地址。
   - id: models-table
     uri: /models-table
@@ -93,8 +74,7 @@ routes:
       # CPA kimi_executor 不剥字段，导致 400→500 转换后 sub2api 重试 10 次、
       # 客户端表现为长时间 hang + 最终 Connection error。
       # 在此统一剥除该字段，避免无效上游调用和重试风暴。
-      # 注意：WS 路径不经过此插件（APISIX WS 代理跳过 body 插件），
-      #       WS 侧由 ws-alias-proxy 的 rewriteBody 同步剥除。
+      # 注意：APISIX 的 WS 代理跳过 body 插件；WS 帧不做此字段改写。
       serverless-pre-function:
         phase: rewrite
         functions:
