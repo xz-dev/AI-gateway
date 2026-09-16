@@ -658,6 +658,12 @@ if "      - GET" not in ws or 'http_upgrade", "==", "websocket"' not in ws or "e
 models = route("codex-models")
 if "      - GET" not in models or "arg_client_version" in models or "upstream_id: enricher" not in models:
     raise SystemExit("standard and Codex model lists must both reach models-enricher")
+table = route("models-table")
+if "uri: /models-table" not in table or "methods: [GET]" not in table or 'realip_remote_addr", "==", "172.30.42.3"' not in table or "upstream_id: enricher" not in table:
+    raise SystemExit("models table diagnostic route changed")
+refresh = route("models-table-refresh")
+if "uri: /models-table/refresh" not in refresh or "methods: [POST]" not in refresh or 'realip_remote_addr", "==", "172.30.42.3"' not in refresh or "upstream_id: enricher" not in refresh:
+    raise SystemExit("models table refresh route must remain exact and sidecar-only")
 if text.count("__CPA_API_KEY__") != 1:
     raise SystemExit("CPA service credential placeholder must occur only at the selector boundary")
 if '  - id: aisix\n' not in text or '      "aisix:3000": 1' not in text:

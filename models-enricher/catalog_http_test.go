@@ -233,7 +233,7 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		ids  map[string]bool
 	}{
 		{front, "9000", map[string]bool{"ai-api-models-intersect": true, "ai-api-models-get": true}},
-		{catalog, "9080", map[string]bool{"codex-models": true, "models-table": true, "catch-all": true}},
+		{catalog, "9080", map[string]bool{"codex-models": true, "models-table": true, "models-table-refresh": true, "catch-all": true}},
 	} {
 		for _, raw := range bundle.data["routes"].([]any) {
 			route := raw.(map[string]any)
@@ -241,7 +241,7 @@ func TestCatalogHTTPFixture(t *testing.T) {
 				continue
 			}
 			vars, _ := route["vars"].([]any)
-			if route["id"] == "models-table" {
+			if route["id"] == "models-table" || route["id"] == "models-table-refresh" {
 				// 仅替换夹具网络地址，保留实际路由的来源匹配条件。
 				for _, raw := range vars {
 					condition := raw.([]any)
@@ -308,9 +308,9 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		})
 	}
 	client := &http.Client{Timeout: 60 * time.Second}
-	request := func(address, path string, authorized bool) (int, []byte, http.Header) {
+	requestMethod := func(method, address, path string, authorized bool) (int, []byte, http.Header) {
 		t.Helper()
-		req, _ := http.NewRequest("GET", "http://"+address+path, nil)
+		req, _ := http.NewRequest(method, "http://"+address+path, nil)
 		if authorized {
 			req.Header.Set("Authorization", "Bearer fixture-only")
 		}
@@ -325,6 +325,9 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		}
 		return response.StatusCode, body, response.Header
 	}
+	request := func(address, path string, authorized bool) (int, []byte, http.Header) {
+		return requestMethod(http.MethodGet, address, path, authorized)
+	}
 	for deadline := time.Now().Add(60 * time.Second); ; {
 		status, _, _ := request("127.0.0.1:9000", "/v1/models", true)
 		if status == 200 {
@@ -334,6 +337,25 @@ func TestCatalogHTTPFixture(t *testing.T) {
 			t.Fatalf("APISIX startup: HTTP %d", status)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+	if os.Getenv("CATALOG_HTTP_REFRESH_ONLY") == "1" {
+		status, page, _ := request("127.0.0.3:8080", "/models-table", false)
+		if status != http.StatusOK || !strings.Contains(string(page), `action="/models-table/refresh"`) {
+			t.Fatalf("refresh fixture page: HTTP %d %.300s", status, page)
+		}
+		beforeRefreshCalls := fake.nativeCalls.Load()
+		status, refreshedPage, _ := requestMethod(http.MethodPost, "127.0.0.3:8080", "/models-table/refresh", false)
+		if status != http.StatusOK || !strings.Contains(string(refreshedPage), `id="notice"`) || fake.nativeCalls.Load() <= beforeRefreshCalls {
+			t.Fatalf("refresh fixture POST: HTTP %d native=%d→%d notice=%t", status, beforeRefreshCalls, fake.nativeCalls.Load(), strings.Contains(string(refreshedPage), `id="notice"`))
+		}
+		if status, _, _ := request("127.0.0.3:8080", "/models-table/refresh", false); status != http.StatusForbidden {
+			t.Fatalf("refresh fixture GET returned %d, want 403", status)
+		}
+		if status, _, _ := requestMethod(http.MethodPost, "127.0.0.1:9000", "/models-table/refresh", false); status == http.StatusOK {
+			t.Fatal("public entrance exposed models-table refresh")
+		}
+		t.Logf("refresh route HTTP: GET=200 POST=200 GET-refresh=403 public-POST!=200 native=%d→%d", beforeRefreshCalls, fake.nativeCalls.Load())
+		return
 	}
 	for _, path := range []string{"/v1/models", "/v1/models?client_version="} {
 		status, body, _ := request("127.0.0.1:9080", path, false)
@@ -465,8 +487,19 @@ func TestCatalogHTTPFixture(t *testing.T) {
 		t.Fatalf("sidecar no-version standard projection: %d %.200s", status, plain)
 	}
 	status, page, pageHeaders := request("127.0.0.3:8080", "/models-table", false)
-	if status != 200 || !strings.HasPrefix(pageHeaders.Get("Content-Type"), "text/html") || strings.Count(string(page), "<td") != len(growthRows)*11 || len(page) > 1<<20 || strings.Contains(string(page), "<script") {
+	if status != 200 || !strings.HasPrefix(pageHeaders.Get("Content-Type"), "text/html") || strings.Count(string(page), "<td") != len(growthRows)*11 || len(page) > 1<<20 || strings.Contains(string(page), "<script") || !strings.Contains(string(page), `action="/models-table/refresh"`) {
 		t.Fatalf("sidecar SSR: HTTP %d, %d bytes, %d cells", status, len(page), strings.Count(string(page), "<td"))
+	}
+	beforeRefreshCalls := fake.nativeCalls.Load()
+	status, refreshedPage, _ := requestMethod(http.MethodPost, "127.0.0.3:8080", "/models-table/refresh", false)
+	if status != http.StatusOK || !strings.Contains(string(refreshedPage), `id="notice"`) || !strings.Contains(string(refreshedPage), "growth-0") || fake.nativeCalls.Load() <= beforeRefreshCalls {
+		t.Fatalf("sidecar refresh: HTTP %d native=%d→%d %.300s", status, beforeRefreshCalls, fake.nativeCalls.Load(), refreshedPage)
+	}
+	if status, _, _ := request("127.0.0.3:8080", "/models-table/refresh", false); status != http.StatusForbidden {
+		t.Fatalf("sidecar GET refresh returned %d, want 403", status)
+	}
+	if status, _, _ := requestMethod(http.MethodPost, "127.0.0.1:9000", "/models-table/refresh", false); status == http.StatusOK {
+		t.Fatal("public entrance exposed models-table refresh")
 	}
 	// 即使伪造来源头，非边车连接也不能进入完整目录HTML路由。
 	beforeEnricher = enricherRequests.Load()

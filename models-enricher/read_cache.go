@@ -23,6 +23,17 @@ const readCacheEntries = 256
 
 type readStatusError struct{ status int }
 
+type bypassReadCacheKey struct{}
+
+func withReadCacheBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, bypassReadCacheKey{}, true)
+}
+
+func bypassReadCache(ctx context.Context) bool {
+	bypass, _ := ctx.Value(bypassReadCacheKey{}).(bool)
+	return bypass
+}
+
 func (e readStatusError) Error() string { return fmt.Sprintf("upstream status %d", e.status) }
 
 func staleReadAllowed(err error) bool {
@@ -165,14 +176,20 @@ func (c *readCache) load(ctx context.Context, key string, fetch func() ([]byte, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	flightKey := key
+	if bypassReadCache(ctx) {
+		flightKey += ":force"
+	}
 	c.mu.Lock()
-	if entry, ok := c.entries[key]; ok && c.clock().Sub(entry.stored) < readCacheTTL {
-		if body, ok := c.read(key); ok {
-			c.mu.Unlock()
-			return body, nil
+	if !bypassReadCache(ctx) {
+		if entry, ok := c.entries[key]; ok && c.clock().Sub(entry.stored) < readCacheTTL {
+			if body, ok := c.read(key); ok {
+				c.mu.Unlock()
+				return body, nil
+			}
 		}
 	}
-	if f := c.flights[key]; f != nil {
+	if f := c.flights[flightKey]; f != nil {
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -182,7 +199,7 @@ func (c *readCache) load(ctx context.Context, key string, fetch func() ([]byte, 
 		}
 	}
 	f := &readFlight{done: make(chan struct{})}
-	c.flights[key] = f
+	c.flights[flightKey] = f
 	c.mu.Unlock()
 	body, err := fetch()
 	c.mu.Lock()
@@ -191,7 +208,7 @@ func (c *readCache) load(ctx context.Context, key string, fetch func() ([]byte, 
 		if storeErr := c.store(key, body); storeErr != nil {
 			c.log.Warn("read cache store failed", "key", key, "err", storeErr)
 		}
-	} else if staleReadAllowed(err) {
+	} else if staleReadAllowed(err) && !bypassReadCache(ctx) {
 		if old, ok := c.read(key); ok {
 			c.log.Warn("read cache stale fallback", "key", key, "age_seconds", c.clock().Sub(c.entries[key].stored).Seconds(), "err", err)
 			body, err = old, nil
@@ -203,7 +220,7 @@ func (c *readCache) load(ctx context.Context, key string, fetch func() ([]byte, 
 		}
 	}
 	f.body, f.err = body, err
-	delete(c.flights, key)
+	delete(c.flights, flightKey)
 	close(f.done)
 	return body, err
 }

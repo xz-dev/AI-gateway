@@ -49,6 +49,13 @@ routes:
             end
     upstream_id: cpa
   # HTML只接收目录边车的真实连接来源，不信任转发头中的地址。
+  - id: models-table-refresh
+    uri: /models-table/refresh
+    methods: [POST]
+    priority: 21
+    vars:
+      - ["realip_remote_addr", "==", "172.30.42.3"]
+    upstream_id: enricher
   - id: models-table
     uri: /models-table
     methods: [GET]

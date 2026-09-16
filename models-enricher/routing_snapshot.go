@@ -112,6 +112,10 @@ func (o *routingSnapshotOwner) refresh(parent context.Context) error {
 	return o.refreshLocked(parent)
 }
 
+func (o *routingSnapshotOwner) forceRefresh(parent context.Context) error {
+	return o.refresh(withReadCacheBypass(parent))
+}
+
 func (o *routingSnapshotOwner) ensureInitialized(parent context.Context) error {
 	o.refreshMu.Lock()
 	defer o.refreshMu.Unlock()

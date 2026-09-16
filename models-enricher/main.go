@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"os"
@@ -68,6 +70,7 @@ func main() {
 	catalog := handleModels(cfg, cpa, aisix, pool, log, snapshots)
 	mux.HandleFunc("/v1/models", catalog)
 	mux.HandleFunc("/models-table", catalog)
+	mux.HandleFunc("/models-table/refresh", catalog)
 	mux.HandleFunc("/routing-index", snapshots.handleRoutingIndex())
 
 	addr := env("LISTEN_ADDR", ":8090")
@@ -207,113 +210,212 @@ func standardModelsProjection(body []byte) ([]byte, error) {
 	return json.Marshal(response)
 }
 
-// handleModels：标准OpenAI目录、Codex目录与HTML表格共用同一原始快照。
-// 未显式传入owner的测试调用保留按缓存MISS刷新原始目录的行为；生产由周期生命周期刷新。
-func handleModels(cfg *Config, cpa *CPAClient, aisix *AISIXClient, pool *httpPool, log *slog.Logger, owners ...*routingSnapshotOwner) http.HandlerFunc {
-	refreshOnMiss := len(owners) == 0 || owners[0] == nil
-	var owner *routingSnapshotOwner
-	if refreshOnMiss {
-		// 旧的请求驱动测试入口给可选AISIX读取独立的渠道预算，避免消耗CPA合成预算。
-		owner = newRoutingSnapshotOwner(cpa, aisix, readCacheTTL, cfg.ChannelTimeout, log)
-	} else {
-		owner = owners[0]
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		table := r.URL.Path == "/models-table"
-		write := func(status int, body []byte) {
-			if table {
-				writeModelsTable(w, status, body)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(status)
-			_, _ = w.Write(body)
-		}
-		if r.Method != http.MethodGet {
-			if table {
-				write(errorJSON(http.StatusMethodNotAllowed, "method_not_allowed", "GET only"))
-			} else {
-				writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-			}
-			return
-		}
+type refreshResult struct {
+	done   chan struct{}
+	status int
+	body   []byte
+	at     time.Time
+}
 
-		format := catalogCodex
-		cv := r.URL.Query().Get("client_version")
-		if table {
-			format, cv = catalogTable, tableInventoryClientVersion
-		} else if cv == "" {
-			format, cv = catalogStandard, cpaCatalogClientVersion
+type modelsHandler struct {
+	cfg           *Config
+	cpa           *CPAClient
+	pool          *httpPool
+	log           *slog.Logger
+	owner         *routingSnapshotOwner
+	refreshOnMiss bool
+
+	refreshMu sync.Mutex
+	refresh   *refreshResult
+	lastGood  atomic.Pointer[renderedModelsTable]
+}
+
+func newModelsHandler(cfg *Config, cpa *CPAClient, aisix *AISIXClient, pool *httpPool, log *slog.Logger, owners ...*routingSnapshotOwner) *modelsHandler {
+	h := &modelsHandler{cfg: cfg, cpa: cpa, pool: pool, log: log, refreshOnMiss: len(owners) == 0 || owners[0] == nil}
+	if h.refreshOnMiss {
+		h.owner = newRoutingSnapshotOwner(cpa, aisix, readCacheTTL, cfg.ChannelTimeout, log)
+	} else {
+		h.owner = owners[0]
+	}
+	return h
+}
+
+// handleModels：标准OpenAI目录、Codex目录与HTML表格共用同一原始快照。
+func handleModels(cfg *Config, cpa *CPAClient, aisix *AISIXClient, pool *httpPool, log *slog.Logger, owners ...*routingSnapshotOwner) http.HandlerFunc {
+	return newModelsHandler(cfg, cpa, aisix, pool, log, owners...).ServeHTTP
+}
+
+func (h *modelsHandler) write(w http.ResponseWriter, table bool, status int, body []byte) {
+	if table {
+		renderedAt := time.Now()
+		status, html := renderModelsTable(status, body, renderedAt, tableNotice{})
+		if status == http.StatusOK {
+			h.lastGood.Store(&renderedModelsTable{body: append([]byte(nil), html...), at: renderedAt})
 		}
-		serve := func(f *flightResult) bool {
-			if f == nil {
-				return false
-			}
-			select {
-			case <-f.done:
-			case <-r.Context().Done():
-				return true
-			}
-			write(f.status, f.body)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(status)
+		_, _ = w.Write(html)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+func (h *modelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/models-table/refresh" {
+		h.handleForceRefresh(w, r)
+		return
+	}
+	table := r.URL.Path == "/models-table"
+	if r.Method != http.MethodGet {
+		status, body := errorJSON(http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
+		h.write(w, table, status, body)
+		return
+	}
+
+	format := catalogCodex
+	cv := r.URL.Query().Get("client_version")
+	if table {
+		format, cv = catalogTable, tableInventoryClientVersion
+	} else if cv == "" {
+		format, cv = catalogStandard, cpaCatalogClientVersion
+	}
+	serve := func(f *flightResult) bool {
+		if f == nil {
+			return false
+		}
+		select {
+		case <-f.done:
+		case <-r.Context().Done():
 			return true
 		}
+		h.write(w, table, f.status, f.body)
+		return true
+	}
 
-		wasCold := owner.current().generation == 0
-		if wasCold {
-			if err := owner.ensureInitialized(r.Context()); err != nil {
-				log.Warn("routing snapshot initialization incomplete", "err", err)
-			}
+	wasCold := h.owner.current().generation == 0
+	if wasCold {
+		if err := h.owner.ensureInitialized(r.Context()); err != nil {
+			h.log.Warn("routing snapshot initialization incomplete", "err", err)
 		}
-		snapshot := owner.current()
-		key := catalogCacheKey(owner, snapshot, format, cv)
+	}
+	snapshot := h.owner.current()
+	key := catalogCacheKey(h.owner, snapshot, format, cv)
+	if serve(existingCatalogFlight(key)) {
+		return
+	}
+	if h.refreshOnMiss && !wasCold {
+		if err := h.owner.refresh(r.Context()); err != nil {
+			h.log.Warn("routing snapshot request refresh incomplete", "err", err)
+		}
+		snapshot = h.owner.current()
+		key = catalogCacheKey(h.owner, snapshot, format, cv)
 		if serve(existingCatalogFlight(key)) {
 			return
 		}
-		if refreshOnMiss && !wasCold {
-			if err := owner.refresh(r.Context()); err != nil {
-				log.Warn("routing snapshot request refresh incomplete", "err", err)
-			}
-			snapshot = owner.current()
-			key = catalogCacheKey(owner, snapshot, format, cv)
-			if serve(existingCatalogFlight(key)) {
-				return
-			}
-		}
-
-		f, leader := claimCatalogFlight(key)
-		if !leader {
-			serve(f)
-			return
-		}
-		// 完整目录构建串行化，避免并发峰值越过容器内存边界。
-		catalogBuildMu.Lock()
-		status, body := buildCatalog(r, cfg, cpa, pool, log, cv, snapshot)
-		if status >= 200 && status < 300 && format == catalogStandard {
-			projected, err := standardModelsProjection(body)
-			if err != nil {
-				status, body = errorJSON(http.StatusInternalServerError, "standard_models_encode_failed", err.Error())
-			} else {
-				body = projected
-			}
-		}
-		catalogBuildMu.Unlock()
-		f.status, f.body = status, body
-		close(f.done)
-
-		catalogFlights.Lock()
-		if catalogFlights.byKey[key] == f {
-			if status >= 200 && status < 300 && catalogCacheTTL.Load() > 0 {
-				// 只缓存成功结果；失败保持每次重建，避免把瞬时错误钉死在前门。
-				f.stored = time.Now()
-				f.complete = true
-				evictOldestCachedFlightLocked()
-			} else {
-				delete(catalogFlights.byKey, key)
-			}
-		}
-		catalogFlights.Unlock()
-		write(status, body)
 	}
+
+	f, leader := claimCatalogFlight(key)
+	if !leader {
+		serve(f)
+		return
+	}
+	status, body := h.build(r, cv, snapshot, format)
+	f.status, f.body = status, body
+	close(f.done)
+	catalogFlights.Lock()
+	if catalogFlights.byKey[key] == f {
+		if status >= 200 && status < 300 && catalogCacheTTL.Load() > 0 {
+			f.stored = time.Now()
+			f.complete = true
+			evictOldestCachedFlightLocked()
+		} else {
+			delete(catalogFlights.byKey, key)
+		}
+	}
+	catalogFlights.Unlock()
+	h.write(w, table, status, body)
+}
+
+func (h *modelsHandler) build(r *http.Request, cv string, snapshot *routingSnapshot, format catalogFormat) (int, []byte) {
+	catalogBuildMu.Lock()
+	defer catalogBuildMu.Unlock()
+	status, body := buildCatalog(r, h.cfg, h.cpa, h.pool, h.log, cv, snapshot)
+	if status >= 200 && status < 300 && format == catalogStandard {
+		projected, err := standardModelsProjection(body)
+		if err != nil {
+			return errorJSON(http.StatusInternalServerError, "standard_models_encode_failed", err.Error())
+		}
+		body = projected
+	}
+	return status, body
+}
+
+func (h *modelsHandler) forceRefresh(r *http.Request) (int, []byte) {
+	ctx, cancel := context.WithTimeout(withReadCacheBypass(context.Background()), h.cfg.OverallDeadline+5*time.Second)
+	defer cancel()
+	if err := h.owner.forceRefresh(ctx); err != nil {
+		return errorJSON(http.StatusBadGateway, "forced_refresh_failed", err.Error())
+	}
+	clone := r.Clone(ctx)
+	return h.build(clone, tableInventoryClientVersion, h.owner.current(), catalogTable)
+}
+
+func (h *modelsHandler) handleForceRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		status, body := errorJSON(http.StatusMethodNotAllowed, "method_not_allowed", "POST only")
+		h.write(w, true, status, body)
+		return
+	}
+	h.refreshMu.Lock()
+	f := h.refresh
+	if f == nil {
+		f = &refreshResult{done: make(chan struct{})}
+		h.refresh = f
+		go func() {
+			f.status, f.body = h.forceRefresh(r)
+			f.at = time.Now()
+			close(f.done)
+			h.refreshMu.Lock()
+			h.refresh = nil
+			h.refreshMu.Unlock()
+		}()
+	}
+	h.refreshMu.Unlock()
+	select {
+	case <-f.done:
+	case <-r.Context().Done():
+		return
+	}
+	attemptedAt := f.at
+	if f.status == http.StatusOK {
+		_, clean := renderModelsTable(f.status, f.body, attemptedAt, tableNotice{})
+		status, html := renderModelsTable(f.status, f.body, attemptedAt, tableNotice{Class: "success", Text: "刷新成功 · " + attemptedAt.UTC().Format(time.RFC3339)})
+		h.lastGood.Store(&renderedModelsTable{body: clean, at: attemptedAt})
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(status)
+		_, _ = w.Write(html)
+		return
+	}
+	if last := h.lastGood.Load(); last != nil {
+		warning := tableNotice{Class: "warning", Text: fmt.Sprintf("刷新失败 · %s · 显示最后可用表格（%s）", attemptedAt.UTC().Format(time.RFC3339), last.at.UTC().Format(time.RFC3339))}
+		html := injectTableNotice(last.body, warning)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(html)
+		return
+	}
+	h.write(w, true, f.status, f.body)
+}
+
+func injectTableNotice(body []byte, notice tableNotice) []byte {
+	marker := []byte(`<div id="err"></div>`)
+	banner := []byte(fmt.Sprintf(`<div id="notice" class="%s">%s</div>`, template.HTMLEscapeString(notice.Class), template.HTMLEscapeString(notice.Text)))
+	if bytes.Contains(body, marker) {
+		return bytes.Replace(body, marker, append(banner, marker...), 1)
+	}
+	return body
 }
 
 // buildCatalog 执行完整合成管线，返回 HTTP 状态与响应体（供单飞共享）。

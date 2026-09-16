@@ -7,6 +7,10 @@
   body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 16px; }
   h1 { font-size: 18px; margin: 0 0 8px; }
   #meta { color: #555; font-size: 12px; margin-bottom: 12px; }
+  #refresh { margin: 0 0 12px; }
+  #notice { border: 1px solid; margin-bottom: 12px; padding: 8px; white-space: pre-wrap; }
+  #notice.success { background: #edf7ed; border-color: #2e7d32; color: #1b5e20; }
+  #notice.warning { background: #fff4e5; border-color: #ed6c02; color: #8a4200; }
   table { border-collapse: collapse; font-size: 12px; }
   th, td { border: 1px solid #888; padding: 4px 8px; text-align: left; vertical-align: top; }
   th { background: #eee; position: sticky; top: 0; }
@@ -17,7 +21,9 @@
 </head>
 <body>
 <h1>models-table</h1>
+<form id="refresh" method="post" action="/models-table/refresh"><button type="submit">强制刷新</button></form>
 <div id="meta">{{.Meta}}</div>
+{{if .Notice.Text}}<div id="notice" class="{{.Notice.Class}}">{{.Notice.Text}}</div>{{end}}
 <div id="err">{{.Error}}</div>
 {{if not .Error}}
 <table id="tbl">

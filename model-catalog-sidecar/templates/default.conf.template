@@ -2,7 +2,7 @@ server {
     listen 8080;
     server_name _;
 
-    # 边车仅暴露两个 path：/v1/models 与 /models-table；其余一律 444。
+    # 边车仅暴露目录读取与诊断强刷 path；其余一律 444。
 
     # 清单转发（查询原样透传；无凭证注入，边界=网络隔离）
     location = /v1/models {
@@ -17,6 +17,17 @@ server {
 
     # 诊断页由Go完整渲染；浏览器不再请求JSON或执行页面脚本。
     location = /models-table {
+        limit_except GET { deny all; }
+        proxy_pass http://172.30.42.2:9080;
+        proxy_http_version 1.1;
+        proxy_set_header Host "apisix-models";
+        proxy_set_header Connection "";
+        proxy_read_timeout 60s;
+        proxy_max_temp_file_size 0;
+    }
+
+    location = /models-table/refresh {
+        limit_except POST { deny all; }
         proxy_pass http://172.30.42.2:9080;
         proxy_http_version 1.1;
         proxy_set_header Host "apisix-models";

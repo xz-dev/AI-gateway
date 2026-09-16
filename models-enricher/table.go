@@ -48,6 +48,24 @@ type tableCell struct {
 	Null bool
 }
 
+type tableNotice struct {
+	Class string
+	Text  string
+}
+
+type modelsTableView struct {
+	Columns []struct{ Label, Key string }
+	Rows    [][]tableCell
+	Meta    string
+	Error   string
+	Notice  tableNotice
+}
+
+type renderedModelsTable struct {
+	body []byte
+	at   time.Time
+}
+
 // 输入是管线已编码的JSON，数字通过decodeJSON保留为json.Number。
 func modelTableCell(model map[string]any, key string) tableCell {
 	v, exists := model[key]
@@ -67,13 +85,8 @@ func modelTableCell(model map[string]any, key string) tableCell {
 	return tableCell{Text: strings.TrimSuffix(text.String(), "\n")}
 }
 
-// 不缓存最终HTML，不重新请求JSON端点；复用当前单飞构建的结果。
-func writeModelsTable(w http.ResponseWriter, status int, body []byte) {
-	data := struct {
-		Columns     []struct{ Label, Key string }
-		Rows        [][]tableCell
-		Meta, Error string
-	}{Columns: tableColumns}
+func renderModelsTable(status int, body []byte, renderedAt time.Time, notice tableNotice) (int, []byte) {
+	data := modelsTableView{Columns: tableColumns, Notice: notice}
 	if status == http.StatusOK {
 		var manifest Manifest
 		if err := decodeJSON(body, &manifest); err != nil {
@@ -89,7 +102,7 @@ func writeModelsTable(w http.ResponseWriter, status int, body []byte) {
 				}
 				data.Rows = append(data.Rows, row)
 			}
-			data.Meta = fmt.Sprintf("%d models · client_version=%s · %s", len(data.Rows), cpaCatalogClientVersion, time.Now().UTC().Format(time.RFC3339))
+			data.Meta = fmt.Sprintf("%d models · client_version=%s · %s", len(data.Rows), cpaCatalogClientVersion, renderedAt.UTC().Format(time.RFC3339))
 		}
 	}
 	if status != http.StatusOK {
@@ -98,10 +111,14 @@ func writeModelsTable(w http.ResponseWriter, status int, body []byte) {
 	}
 	var html bytes.Buffer
 	if err := modelsTable.Execute(&html, data); err != nil {
-		http.Error(w, "table rendering failed", http.StatusInternalServerError)
-		return
+		return http.StatusInternalServerError, []byte("table rendering failed\n")
 	}
+	return status, html.Bytes()
+}
+
+func writeModelsTable(w http.ResponseWriter, status int, body []byte) {
+	status, html := renderModelsTable(status, body, time.Now(), tableNotice{})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = w.Write(html.Bytes())
+	_, _ = w.Write(html)
 }
