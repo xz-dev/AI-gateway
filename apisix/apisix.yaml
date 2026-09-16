@@ -181,6 +181,7 @@ routes:
       - /v1/alpha/search
       - /v1/chat/completions
       - /v1/embeddings
+      - /v1/rerank
       - /v1/images/generations
       - /v1/images/edits
       - /v1/images/generations/async
@@ -197,7 +198,7 @@ routes:
     methods:
       - POST
     vars:
-      - [uri, "~~", '^/v1/(?:messages(?:/count_tokens)?|live|responses(?:/.*)?|alpha/search|chat/completions|embeddings|images/(?:generations(?:/async)?|edits(?:/async)?|batches(?:/[^/]+/cancel)?)|videos(?:/(?:generations|edits|extensions))?|tts|stt|custom-voices|web_search|x_search)$']
+      - [uri, "~~", '^/v1/(?:messages(?:/count_tokens)?|live|responses(?:/.*)?|alpha/search|chat/completions|embeddings|rerank|images/(?:generations(?:/async)?|edits(?:/async)?|batches(?:/[^/]+/cancel)?)|videos(?:/(?:generations|edits|extensions))?|tts|stt|custom-voices|web_search|x_search)$']
     upstream_id: sub2api
     plugin_config_id: apisix-native-upstream-404
     plugins:
