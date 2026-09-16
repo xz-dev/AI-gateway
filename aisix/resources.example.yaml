@@ -5,6 +5,10 @@ provider_keys:
     provider: openai
     api_base: http://cpa:8317/v1
     api_key: replace-with-cpa-client-key
+    request:
+      # Forward only the validated routing identity. AISIX keeps the configured
+      # CPA credential and does not pass caller credentials or cookies.
+      forward_client_headers: [session_id]
 
 models:
   # Keep each direct alias byte-identical to the CPA model name.
@@ -14,18 +18,58 @@ models:
     provider_key: cpa-pool
     cooldown:
       enabled: true
-      default_seconds: 60
-      max_seconds: 300
+      default_seconds: 300
+      max_seconds: 1800
       honor_retry_after: true
 
-  - display_name: logical-model
+  # Use consistent hashing only when the approved production route dynamically
+  # balances multiple targets inside one active priority tier.
+  - display_name: dynamic-logical-model
+    routing:
+      strategy: consistent_hash
+      hash_on:
+        - type: header
+          name: session_id
+        - type: api_key
+      retries: 1
+      retry_on_429: true
+      # CPA passes target-local 4xx responses through so a bounded fallback can try another channel:
+      # 400: observed for disabled/unavailable model targets; malformed requests may also be retried by policy.
+      # 401: target credentials are invalid or revoked.
+      # 402: target payment, credit, balance, or quota is unavailable; later targets must remain reachable.
+      # 403: the target account or model denies access.
+      # 404: the target model is absent or not exposed. retries/max_fallbacks still cap total attempts.
+      fallback_on_statuses: [400, 401, 402, 403, 404]
+      max_fallbacks: 1
+      targets:
+        - model: provider/concrete-model
+          weight: 3
+        - model: provider/peer-model
+          weight: 1
+
+  - display_name: provider/peer-model
+    provider: openai
+    model_name: provider/peer-model
+    provider_key: cpa-pool
+    cooldown:
+      enabled: true
+      default_seconds: 300
+      max_seconds: 1800
+      honor_retry_after: true
+
+  # Ordered routes keep failover semantics: a healthy backup is not used merely
+  # to distribute sessions.
+  - display_name: ordered-logical-model
     routing:
       strategy: failover
       retries: 1
       retry_on_429: true
-      max_fallbacks: 0
+      fallback_on_statuses: [400, 401, 402, 403, 404]
+      max_fallbacks: 1
       targets:
         - model: provider/concrete-model
+        - model: provider/peer-model
+          priority: -1
 
 api_keys:
   - display_name: sub2api

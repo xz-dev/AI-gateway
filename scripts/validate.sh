@@ -82,7 +82,11 @@ grep -Eq '^proxy-url:[[:space:]]*"?http://cpa-egress-relay:3128"?[[:space:]]*$' 
   exit 1
 }
 aisix_config=aisix/config.example.yaml
-[ "$runtime_mode" = 0 ] || aisix_config=aisix/config.yaml
+aisix_resources=aisix/resources.example.yaml
+if [ "$runtime_mode" = 1 ]; then
+  aisix_config=aisix/config.yaml
+  aisix_resources=aisix/resources.yaml
+fi
 python3 - "$aisix_config" <<'PY'
 import re
 import sys
@@ -93,9 +97,29 @@ match = re.search(r"(?ms)^admin:\s*\n(.*?)(?=^[A-Za-z_][A-Za-z0-9_]*:\s*(?:#.*)?
 if not match or not re.search(r"(?m)^\s+addr:\s*172\.30\.68\.2:3002\s*$", match.group(0)):
     raise SystemExit(f"{sys.argv[1]} must bind AISIX Admin only to 172.30.68.2:3002")
 PY
-
 tmpdir=$(mktemp -d /tmp/ai-gateway-validate.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
+resources_wrapper=$tmpdir/aisix-resources-compose.yaml
+resources_normalized=$tmpdir/aisix-resources-normalized
+{
+  printf 'x-aisix-resources:\n'
+  sed 's/^/  /' "$aisix_resources"
+  printf '\nservices: {}\n'
+} >"$resources_wrapper"
+if "${COMPOSE[@]}" -f "$resources_wrapper" config --format json >"$resources_normalized" 2>/dev/null; then
+  python3 scripts/check-aisix-resource-policy.py --compose-json "$resources_normalized"
+elif "${COMPOSE[@]}" -f "$resources_wrapper" config >"$resources_normalized" 2>/dev/null; then
+  python3 scripts/check-aisix-resource-policy.py --yaml "$resources_normalized"
+else
+  echo "$aisix_resources could not be parsed as YAML" >&2
+  exit 1
+fi
+python3 scripts/check-aisix-resource-policy.py --self-test
+python3 scripts/check-aisix-session-affinity.py --yaml "$aisix_resources"
+python3 scripts/check-aisix-session-affinity.py --self-test
+python3 scripts/check-cpa-session-affinity.py --config "${CPA_CONFIG:-data/cpa/conf/config.yaml}"
+python3 scripts/check-cpa-session-affinity.py --self-test
+
 python3 scripts/render-egress-policy.py egress-proxy/policy.example.json "$tmpdir/proxy-default"
 python3 - egress-proxy/policy.example.json <<'PY'
 import copy
