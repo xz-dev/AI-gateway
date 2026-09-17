@@ -1,0 +1,1028 @@
+diff --git a/crates/aisix-cache/src/key.rs b/crates/aisix-cache/src/key.rs
+index 94753df80a9470b6cb1b172bbde7b4c33c849c66..3c2df7aa218ecbe48ff221d20e5bc72c7a319211 100644
+--- a/crates/aisix-cache/src/key.rs
++++ b/crates/aisix-cache/src/key.rs
+@@ -277,6 +277,7 @@ fn message_pair(m: &ChatMessage) -> (String, String) {
+ fn role_str(role: Role) -> &'static str {
+     match role {
+         Role::System => "system",
++        Role::Developer => "developer",
+         Role::User => "user",
+         Role::Assistant => "assistant",
+         Role::Tool => "tool",
+@@ -328,6 +329,16 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn developer_and_system_roles_have_distinct_fingerprints() {
++        let system = req("m", vec![ChatMessage::system("same")], None);
++        let developer = req("m", vec![ChatMessage::developer("same")], None);
++        assert_ne!(
++            CacheKey::from_request(&system).fingerprint(),
++            CacheKey::from_request(&developer).fingerprint(),
++        );
++    }
++
+     #[test]
+     fn vision_messages_with_different_image_urls_have_distinct_fingerprints() {
+         // Regression test for the cache-key collision found in PR #184
+diff --git a/crates/aisix-gateway/src/chat.rs b/crates/aisix-gateway/src/chat.rs
+index 42889a2bd4f81143be2ce79f0a0eb4d41a95ce81..e7882c575345acbafcffcf9cf5233a967cbf0550 100644
+--- a/crates/aisix-gateway/src/chat.rs
++++ b/crates/aisix-gateway/src/chat.rs
+@@ -15,13 +15,13 @@
+ use serde::{Deserialize, Serialize};
+ use serde_json::Value;
+ 
+-/// Role of a chat message. Providers that only
+-/// support system/user/assistant are expected to reject `Tool` at their
+-/// own boundary rather than silently collapsing roles.
++/// Role of a chat message. Provider bridges are responsible for preserving
++/// roles that their upstream accepts and translating the others.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "lowercase")]
+ pub enum Role {
+     System,
++    Developer,
+     User,
+     Assistant,
+     Tool,
+@@ -191,6 +191,17 @@ impl ChatMessage {
+         }
+     }
+ 
++    pub fn developer(content: impl Into<String>) -> Self {
++        Self {
++            role: Role::Developer,
++            content: Some(content.into()),
++            content_blocks: None,
++            name: None,
++            tool_call_id: None,
++            extra: serde_json::Map::new(),
++        }
++    }
++
+     pub fn user(content: impl Into<String>) -> Self {
+         Self {
+             role: Role::User,
+@@ -724,6 +735,29 @@ mod tests {
+         assert!(m.content_blocks.is_none());
+     }
+ 
++    #[test]
++    fn chat_message_accepts_and_round_trips_developer_role() {
++        let m: ChatMessage = serde_json::from_str(
++            r#"{"role": "developer", "content": "Follow application instructions"}"#,
++        )
++        .expect("developer is a documented Chat Completions message role");
++
++        let value = serde_json::to_value(m).unwrap();
++        assert_eq!(value["role"], "developer");
++        assert_eq!(value["content"], "Follow application instructions");
++    }
++
++    #[test]
++    fn chat_message_rejects_unknown_and_mis_cased_roles() {
++        for role in ["Developer", "tool_result"] {
++            let raw = format!(r#"{{"role":"{role}","content":"x"}}"#);
++            assert!(
++                serde_json::from_str::<ChatMessage>(&raw).is_err(),
++                "role {role:?} must remain invalid"
++            );
++        }
++    }
++
+     #[test]
+     fn content_null_preserved_as_none() {
+         // #395: `content: null` (OpenAI's assistant-with-tool_calls shape)
+@@ -1117,6 +1151,7 @@ mod tests {
+     #[test]
+     fn message_constructors_set_role() {
+         assert_eq!(ChatMessage::system("x").role, Role::System);
++        assert_eq!(ChatMessage::developer("x").role, Role::Developer);
+         assert_eq!(ChatMessage::user("x").role, Role::User);
+         assert_eq!(ChatMessage::assistant("x").role, Role::Assistant);
+     }
+diff --git a/crates/aisix-provider-anthropic/src/wire.rs b/crates/aisix-provider-anthropic/src/wire.rs
+index e1c9b0a2c0f24b3a7f49c5c00dfbbbfae1e65b87..1a76f4a9f875926c281783d76f80b6097c0314f5 100644
+--- a/crates/aisix-provider-anthropic/src/wire.rs
++++ b/crates/aisix-provider-anthropic/src/wire.rs
+@@ -317,7 +317,9 @@ pub enum TranslateError {
+ }
+ 
+ /// Split the gateway's flat ChatFormat into Anthropic's (system, messages)
+-/// shape. Consecutive plain-text system messages at the head are
++/// shape. Developer messages always join Anthropic's top-level system
++/// field, including when interleaved with conversation turns. Consecutive
++/// plain-text system messages at the head are
+ /// concatenated with a blank line into the string form, matching how
+ /// users typically compose multi-paragraph system prompts in the OpenAI
+ /// format; when any head system message carried typed content blocks,
+@@ -348,6 +350,13 @@ pub fn split_system<'a>(
+                     system_msgs.push(m);
+                 }
+             }
++            Role::Developer => {
++                // Anthropic has no positional developer role. Keep the
++                // instruction at system authority instead of rewriting it as
++                // a user turn, even when that requires lifting it out of the
++                // conversational sequence.
++                system_msgs.push(m);
++            }
+             Role::User => {
+                 seen_non_system = true;
+                 messages.push(user_turn(m));
+@@ -2852,6 +2861,27 @@ mod tests {
+         assert_eq!(msgs[0].role, "user");
+     }
+ 
++    #[test]
++    fn split_system_merges_leading_developer_messages() {
++        let req = ChatFormat::new(
++            "claude",
++            vec![
++                ChatMessage::system("system instruction"),
++                ChatMessage::developer("developer instruction"),
++                ChatMessage::user("hi"),
++            ],
++        );
++        let (system, msgs) = split_system(&req).unwrap();
++        assert_eq!(
++            system,
++            Some(AnthropicSystem::Text(
++                "system instruction\n\ndeveloper instruction".into()
++            ))
++        );
++        assert_eq!(msgs.len(), 1);
++        assert_eq!(msgs[0].role, "user");
++    }
++
+     #[test]
+     fn split_system_mid_conversation_becomes_user_turn() {
+         let req = ChatFormat::new(
+@@ -2875,6 +2905,53 @@ mod tests {
+         assert_eq!(msgs[1].role, "assistant");
+     }
+ 
++    #[test]
++    fn split_system_mid_conversation_developer_stays_system() {
++        let req = ChatFormat::new(
++            "claude",
++            vec![
++                ChatMessage::user("hi"),
++                ChatMessage::developer("follow application instructions"),
++                ChatMessage::assistant("hello"),
++            ],
++        );
++        let (system, msgs) = split_system(&req).unwrap();
++        assert_eq!(
++            system,
++            Some(AnthropicSystem::Text(
++                "follow application instructions".into()
++            ))
++        );
++        assert_eq!(msgs.len(), 2);
++        assert_eq!(msgs[0].role, "user");
++        assert_eq!(msgs[1].role, "assistant");
++    }
++
++    #[test]
++    fn split_system_hoists_interleaved_developer_and_merges_surrounding_users() {
++        let req = ChatFormat::new(
++            "claude",
++            vec![
++                ChatMessage::system("system instruction"),
++                ChatMessage::user("first user turn"),
++                ChatMessage::developer("developer instruction"),
++                ChatMessage::user("second user turn"),
++            ],
++        );
++        let (system, msgs) = split_system(&req).unwrap();
++        assert_eq!(
++            system,
++            Some(AnthropicSystem::Text(
++                "system instruction\n\ndeveloper instruction".into()
++            ))
++        );
++        assert_eq!(msgs.len(), 1);
++        assert_eq!(msgs[0].role, "user");
++        assert_eq!(msgs[0].content.len(), 2);
++        assert_eq!(msgs[0].content[0]["text"], "first user turn");
++        assert_eq!(msgs[0].content[1]["text"], "second user turn");
++    }
++
+     #[test]
+     fn split_system_rejects_tool_role_without_tool_call_id() {
+         // Tool turn must carry a tool_call_id (the OpenAI shape
+diff --git a/crates/aisix-provider-azure-openai/src/bridge.rs b/crates/aisix-provider-azure-openai/src/bridge.rs
+index 85b034d65b6ecd016f24dbb5c47b280d071ffef1..66ebc6bb8dbe886096db15335b9c09bd973c65e9 100644
+--- a/crates/aisix-provider-azure-openai/src/bridge.rs
++++ b/crates/aisix-provider-azure-openai/src/bridge.rs
+@@ -36,7 +36,7 @@ use aisix_provider_openai::overrides::{
+ };
+ use aisix_provider_openai::wire::{
+     build_request, messages_from, response_into_chat_response, stream_chunk_into_chat_chunk,
+-    OpenAiResponse, OpenAiStreamChunk,
++    DeveloperRoleMode, OpenAiResponse, OpenAiStreamChunk,
+ };
+ 
+ use crate::aad_token_mint::TokenMinter;
+@@ -44,6 +44,12 @@ use crate::wire;
+ 
+ use std::sync::Arc;
+ 
++/// The bridge pins Azure API version `2024-10-21`, whose request-message
++/// union does not define `developer`. Azure documents developer instructions
++/// as functionally equivalent to system instructions, so both chat paths map
++/// them to the supported `system` wire role.
++const AZURE_DEVELOPER_ROLE_MODE: DeveloperRoleMode = DeveloperRoleMode::MapToSystem;
++
+ /// Family Bridge for Azure OpenAI Service.
+ pub struct AzureOpenAiBridge {
+     client: Client,
+@@ -716,7 +722,7 @@ impl Bridge for AzureOpenAiBridge {
+         // body's `model` field is ignored by Azure (or echoed back).
+         // We still set it to the deployment name for log-trace clarity
+         // and to mirror the upstream OpenAI SDK convention.
+-        let messages = messages_from(req);
++        let messages = messages_from(req, AZURE_DEVELOPER_ROLE_MODE);
+         let typed = build_request(req, deployment, &messages, false);
+         let body = prepare_outbound_body(
+             &typed,
+@@ -768,7 +774,7 @@ impl Bridge for AzureOpenAiBridge {
+ 
+         // See chat() — resolve auth before the request future.
+         let auth = self.resolve_auth(ctx).await?;
+-        let messages = messages_from(req);
++        let messages = messages_from(req, AZURE_DEVELOPER_ROLE_MODE);
+         let typed = build_request(req, deployment, &messages, true);
+         let body = prepare_outbound_body(
+             &typed,
+@@ -1696,7 +1702,13 @@ mod tests {
+         let bridge =
+             AzureOpenAiBridge::new().with_url_override(mock_chat_url(&server.uri(), "gpt4o-prod"));
+         let ctx = canonical_test_ctx();
+-        let req = ChatFormat::new("my-azure-gpt4", vec![ChatMessage::user("hi")]);
++        let req = ChatFormat::new(
++            "my-azure-gpt4",
++            vec![
++                ChatMessage::developer("follow application instructions"),
++                ChatMessage::user("hi"),
++            ],
++        );
+         bridge.chat(&req, &ctx).await.unwrap();
+ 
+         let body = responder.captured_body.lock().unwrap().clone().unwrap();
+@@ -1706,13 +1718,22 @@ mod tests {
+             "body.model must = deployment name; got body={body}"
+         );
+         let messages = body.get("messages").and_then(|v| v.as_array()).unwrap();
+-        assert_eq!(messages.len(), 1, "exactly one message; got body={body}");
++        assert_eq!(messages.len(), 2, "exactly two messages; got body={body}");
+         assert_eq!(
+             messages[0].get("role").and_then(|v| v.as_str()),
+-            Some("user")
++            Some("system"),
++            "Azure API version 2024-10-21 receives developer instructions as system"
+         );
+         assert_eq!(
+             messages[0].get("content").and_then(|v| v.as_str()),
++            Some("follow application instructions")
++        );
++        assert_eq!(
++            messages[1].get("role").and_then(|v| v.as_str()),
++            Some("user")
++        );
++        assert_eq!(
++            messages[1].get("content").and_then(|v| v.as_str()),
+             Some("hi")
+         );
+         assert_eq!(
+@@ -2117,14 +2138,15 @@ mod tests {
+             "data: {\"id\":\"x\",\"model\":\"gpt4o-prod\",\"choices\":[{\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}]}\n\n",
+             "data: [DONE]\n\n",
+         );
++        let responder = CapturingResponder::default().with_response(
++            ResponseTemplate::new(200)
++                .insert_header("content-type", "text/event-stream")
++                .set_body_string(sse_body),
++        );
+         Mock::given(method("POST"))
+             .and(path("/openai/deployments/gpt4o-prod/chat/completions"))
+             .and(header("accept", "text/event-stream"))
+-            .respond_with(
+-                ResponseTemplate::new(200)
+-                    .insert_header("content-type", "text/event-stream")
+-                    .set_body_string(sse_body),
+-            )
++            .respond_with(responder.clone())
+             .expect(1)
+             .mount(&server)
+             .await;
+@@ -2132,7 +2154,13 @@ mod tests {
+         let bridge =
+             AzureOpenAiBridge::new().with_url_override(mock_chat_url(&server.uri(), "gpt4o-prod"));
+         let ctx = canonical_test_ctx();
+-        let req = ChatFormat::new("my-azure-gpt4", vec![ChatMessage::user("hi")]);
++        let req = ChatFormat::new(
++            "my-azure-gpt4",
++            vec![
++                ChatMessage::developer("follow application instructions"),
++                ChatMessage::user("hi"),
++            ],
++        );
+         let mut stream = bridge.chat_stream(&req, &ctx).await.unwrap();
+         let mut chunks = Vec::new();
+         while let Some(item) = stream.next().await {
+@@ -2158,6 +2186,15 @@ mod tests {
+             last.finish_reason.is_some(),
+             "last chunk must carry finish_reason"
+         );
++        let body = responder.captured_body.lock().unwrap().clone().unwrap();
++        assert_eq!(
++            body.get("messages"),
++            Some(&serde_json::json!([
++                {"role": "system", "content": "follow application instructions"},
++                {"role": "user", "content": "hi"}
++            ])),
++            "streaming Azure requests map developer instructions to system: {body}"
++        );
+     }
+ 
+     #[tokio::test]
+diff --git a/crates/aisix-provider-bedrock/src/bridge.rs b/crates/aisix-provider-bedrock/src/bridge.rs
+index 9bb4f2c8f8f6ece7a78a691c665179b84360b2ba..81f6f3396ca3033177a86316db727e3c3c5b8161 100644
+--- a/crates/aisix-provider-bedrock/src/bridge.rs
++++ b/crates/aisix-provider-bedrock/src/bridge.rs
+@@ -1099,8 +1099,8 @@ impl BedrockBridge {
+ /// Translate the gateway [`ChatFormat`] into the SDK's typed
+ /// `(Vec<SystemContentBlock>, Vec<Message>)` Converse inputs.
+ ///
+-/// System messages → top-level `system[]` blocks (Converse splits
+-/// them out of `messages[]` per AWS spec).
++/// System and developer messages → top-level `system[]` blocks
++/// (Converse splits instructions out of `messages[]` per AWS spec).
+ /// User messages → `messages[]` with a text content block.
+ /// Assistant messages → a text block plus a `toolUse` block per OpenAI
+ /// `tool_calls` entry (#560, multi-turn history).
+@@ -1129,7 +1129,7 @@ fn build_converse_inputs(
+             )?);
+         }
+         match msg.role {
+-            Role::System => {
++            Role::System | Role::Developer => {
+                 let content = msg.content_str();
+                 if !content.is_empty() {
+                     systems.push(SystemContentBlock::Text(content.to_string()));
+@@ -3876,6 +3876,26 @@ mod tests {
+         assert_eq!(chat.usage.cache_creation_tokens, 0);
+     }
+ 
++    #[test]
++    fn build_converse_inputs_lifts_developer_to_system_blocks() {
++        let req = ChatFormat::new(
++            "m",
++            vec![
++                ChatMessage::developer("follow application instructions"),
++                ChatMessage::user("hello"),
++            ],
++        );
++
++        let (systems, messages) = build_converse_inputs(&req).unwrap();
++        assert_eq!(systems.len(), 1);
++        assert_eq!(
++            systems[0],
++            SystemContentBlock::Text("follow application instructions".into())
++        );
++        assert_eq!(messages.len(), 1);
++        assert_eq!(*messages[0].role(), ConversationRole::User);
++    }
++
+     #[test]
+     fn build_converse_inputs_translates_tool_history_and_coalesces_results() {
+         // Multi-turn replay: an assistant `tool_calls` history entry must
+diff --git a/crates/aisix-provider-openai/src/bridge.rs b/crates/aisix-provider-openai/src/bridge.rs
+index 25a5f0c0b6505b8d02cb2794f0057173bfed94e9..bc44eb567615d9ba28738339d8ad2c9a3ea2adcf 100644
+--- a/crates/aisix-provider-openai/src/bridge.rs
++++ b/crates/aisix-provider-openai/src/bridge.rs
+@@ -43,10 +43,28 @@ use crate::overrides::{
+ };
+ use crate::wire::{
+     build_request, embed_request_body, embed_response_into, messages_from,
+-    response_into_chat_response, stream_chunk_into_chat_chunk, OpenAiEmbedResponse, OpenAiResponse,
+-    OpenAiStreamChunk,
++    response_into_chat_response, stream_chunk_into_chat_chunk, DeveloperRoleMode,
++    OpenAiEmbedResponse, OpenAiResponse, OpenAiStreamChunk,
+ };
+ 
++fn developer_role_mode(ctx: &BridgeContext) -> DeveloperRoleMode {
++    let provider = ctx.provider_key.provider.trim();
++    // Mirror `resolve_base`: a legacy empty-provider key with no explicit
++    // base still reaches `OPENAI_DEFAULT_BASE`, so it must preserve the
++    // canonical OpenAI wire role too.
++    let uses_default_openai_base = provider.is_empty()
++        && ctx
++            .provider_key
++            .api_base
++            .as_deref()
++            .is_none_or(|base| base.trim().is_empty());
++    if provider.eq_ignore_ascii_case("openai") || uses_default_openai_base {
++        DeveloperRoleMode::Preserve
++    } else {
++        DeveloperRoleMode::MapToSystem
++    }
++}
++
+ /// Default OpenAI upstream host. Used only when `ProviderKey.api_base`
+ /// is empty AND the dispatching PK identifies the openai vendor — the
+ /// family-bridge safety guard in `resolve_base` refuses this fallback
+@@ -394,7 +412,7 @@ impl Bridge for OpenAiBridge {
+         let key = api_key(ctx)?;
+         let upstream = upstream_model(ctx)?;
+ 
+-        let messages = messages_from(req);
++        let messages = messages_from(req, developer_role_mode(ctx));
+         let typed = build_request(req, upstream, &messages, false);
+         let body = prepare_outbound_body(
+             &typed,
+@@ -611,7 +629,7 @@ impl Bridge for OpenAiBridge {
+         let key = api_key(ctx)?;
+         let upstream = upstream_model(ctx)?;
+ 
+-        let messages = messages_from(req);
++        let messages = messages_from(req, developer_role_mode(ctx));
+         let typed = build_request(req, upstream, &messages, true);
+         let body = prepare_outbound_body(
+             &typed,
+@@ -1332,6 +1350,50 @@ data: {\"error\":{\"message\":\"The server had an error processing your request\
+         serde_json::from_str(&cfg).unwrap()
+     }
+ 
++    #[test]
++    fn developer_role_mode_matches_provider_endpoint_identity() {
++        let legacy_pk: ProviderKey =
++            serde_json::from_str(r#"{"display_name":"x","secret":"k"}"#).unwrap();
++        let legacy_ctx = BridgeContext::new("rid", sample_model(), Arc::new(legacy_pk));
++        assert_eq!(
++            developer_role_mode(&legacy_ctx),
++            DeveloperRoleMode::Preserve,
++            "legacy empty-provider keys without api_base resolve to canonical OpenAI"
++        );
++
++        let custom_ctx = BridgeContext::new(
++            "rid",
++            sample_model(),
++            Arc::new(pk_with_base("https://compatible.example/v1")),
++        );
++        assert_eq!(
++            developer_role_mode(&custom_ctx),
++            DeveloperRoleMode::MapToSystem,
++            "an empty provider with a custom endpoint is not canonical OpenAI"
++        );
++
++        let deepseek_pk: ProviderKey = serde_json::from_str(
++            r#"{"display_name":"ds","secret":"k","provider":"deepseek","adapter":"openai","api_base":"https://api.deepseek.com"}"#,
++        )
++        .unwrap();
++        let deepseek_ctx = BridgeContext::new("rid", sample_model(), Arc::new(deepseek_pk));
++        assert_eq!(
++            developer_role_mode(&deepseek_ctx),
++            DeveloperRoleMode::MapToSystem
++        );
++
++        let openai_pk: ProviderKey = serde_json::from_str(
++            r#"{"display_name":"oai","secret":"k","provider":" OpenAI ","adapter":"openai","api_base":"https://proxy.example/v1"}"#,
++        )
++        .unwrap();
++        let openai_ctx = BridgeContext::new("rid", sample_model(), Arc::new(openai_pk));
++        assert_eq!(
++            developer_role_mode(&openai_ctx),
++            DeveloperRoleMode::Preserve,
++            "an explicitly declared OpenAI key preserves the canonical role through a proxy"
++        );
++    }
++
+     /// `OpenAiBridge::new()` is the `Adapter::Openai` family bridge.
+     /// When it serves a non-openai vendor with empty `api_base` it
+     /// MUST refuse rather than fall back to `OPENAI_DEFAULT_BASE` —
+diff --git a/crates/aisix-provider-openai/src/wire.rs b/crates/aisix-provider-openai/src/wire.rs
+index dd4d6a514ffe171a4ec4265037ae2645d9dc801a..323395541122ede13c114abe0dace1428a64046c 100644
+--- a/crates/aisix-provider-openai/src/wire.rs
++++ b/crates/aisix-provider-openai/src/wire.rs
+@@ -114,11 +114,24 @@ pub fn build_request<'a>(
+     }
+ }
+ 
+-pub fn messages_from(req: &ChatFormat) -> Vec<OpenAiMessage<'_>> {
++/// How an upstream Chat Completions endpoint represents developer
++/// instructions. Canonical OpenAI receives the distinct `developer` role;
++/// providers whose selected API contract does not define it are given the
++/// broadly supported `system` role instead.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum DeveloperRoleMode {
++    Preserve,
++    MapToSystem,
++}
++
++pub fn messages_from(
++    req: &ChatFormat,
++    developer_role_mode: DeveloperRoleMode,
++) -> Vec<OpenAiMessage<'_>> {
+     req.messages
+         .iter()
+         .map(|m| OpenAiMessage {
+-            role: role_str(m.role),
++            role: role_str(m.role, developer_role_mode),
+             // Vision / multimodal callers send `content` as an array
+             // of typed blocks; OpenAI accepts the array form natively
+             // (no translation needed for OpenAI / Gemini-OpenAI-compat /
+@@ -136,9 +149,11 @@ pub fn messages_from(req: &ChatFormat) -> Vec<OpenAiMessage<'_>> {
+         .collect()
+ }
+ 
+-fn role_str(role: Role) -> &'static str {
++fn role_str(role: Role, developer_role_mode: DeveloperRoleMode) -> &'static str {
+     match role {
+         Role::System => "system",
++        Role::Developer if developer_role_mode == DeveloperRoleMode::Preserve => "developer",
++        Role::Developer => "system",
+         Role::User => "user",
+         Role::Assistant => "assistant",
+         Role::Tool => "tool",
+@@ -626,6 +641,44 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn messages_from_preserves_developer_role() {
++        let req = ChatFormat::new(
++            "gpt-4o",
++            vec![
++                ChatMessage::developer("Follow application instructions"),
++                ChatMessage::user("hello"),
++            ],
++        );
++
++        let messages = messages_from(&req, DeveloperRoleMode::Preserve);
++        assert_eq!(messages[0].role, "developer");
++        assert!(matches!(
++            messages[0].content,
++            OpenAiContent::Text("Follow application instructions")
++        ));
++        assert_eq!(messages[1].role, "user");
++    }
++
++    #[test]
++    fn messages_from_maps_developer_to_system_for_compatible_upstreams() {
++        let req = ChatFormat::new(
++            "deepseek-chat",
++            vec![
++                ChatMessage::developer("Follow application instructions"),
++                ChatMessage::user("hello"),
++            ],
++        );
++
++        let messages = messages_from(&req, DeveloperRoleMode::MapToSystem);
++        assert_eq!(messages[0].role, "system");
++        assert!(matches!(
++            messages[0].content,
++            OpenAiContent::Text("Follow application instructions")
++        ));
++        assert_eq!(messages[1].role, "user");
++    }
++
+     #[test]
+     fn non_streaming_response_parses_into_chat_response() {
+         let body = r#"{
+@@ -1308,7 +1361,7 @@ mod tests {
+             stream: None,
+             extra: serde_json::Map::new(),
+         };
+-        let msgs = messages_from(&req);
++        let msgs = messages_from(&req, DeveloperRoleMode::Preserve);
+         let built = build_request(&req, "gpt-4o", &msgs, true);
+         let json = serde_json::to_value(&built).unwrap();
+         assert_eq!(json["model"], "gpt-4o");
+@@ -1337,7 +1390,7 @@ mod tests {
+             stream: Some(true),
+             extra: serde_json::Map::new(),
+         };
+-        let msgs = messages_from(&req);
++        let msgs = messages_from(&req, DeveloperRoleMode::Preserve);
+         let json = serde_json::to_value(build_request(&req, "gpt-4o", &msgs, true)).unwrap();
+         assert_eq!(
+             json["stream_options"],
+@@ -1363,7 +1416,7 @@ mod tests {
+             stream: Some(true),
+             extra,
+         };
+-        let msgs = messages_from(&req);
++        let msgs = messages_from(&req, DeveloperRoleMode::Preserve);
+         let raw = serde_json::to_string(&build_request(&req, "gpt-4o", &msgs, true)).unwrap();
+         // Exactly one stream_options key on the wire (flatten + typed
+         // field would double-emit if both were set).
+@@ -1388,7 +1441,7 @@ mod tests {
+             stream: None,
+             extra: serde_json::Map::new(),
+         };
+-        let msgs = messages_from(&req);
++        let msgs = messages_from(&req, DeveloperRoleMode::Preserve);
+         let json = serde_json::to_value(build_request(&req, "gpt-4o", &msgs, false)).unwrap();
+         assert!(json.get("stream_options").is_none());
+     }
+@@ -1407,7 +1460,7 @@ mod tests {
+             stream: None,
+             extra,
+         };
+-        let msgs = messages_from(&req);
++        let msgs = messages_from(&req, DeveloperRoleMode::Preserve);
+         let built = build_request(&req, "gpt-4o", &msgs, false);
+         let json = serde_json::to_value(&built).unwrap();
+         assert_eq!(json["seed"], 42);
+@@ -1439,7 +1492,7 @@ mod tests {
+             stream: None,
+             extra: serde_json::Map::new(),
+         };
+-        let msgs = messages_from(&req);
++        let msgs = messages_from(&req, DeveloperRoleMode::Preserve);
+         let built = build_request(&req, "gpt-4o", &msgs, false);
+         let json = serde_json::to_value(&built).unwrap();
+         let assistant = &json["messages"][1];
+diff --git a/crates/aisix-provider-vertex/src/bridge.rs b/crates/aisix-provider-vertex/src/bridge.rs
+index 83975a8487e15295f9519bde4a94bf2d4ba39ff8..e86fc6df8f6b2f6617862129d76fd3ecd75cf75a 100644
+--- a/crates/aisix-provider-vertex/src/bridge.rs
++++ b/crates/aisix-provider-vertex/src/bridge.rs
+@@ -61,8 +61,8 @@ use aisix_provider_anthropic::wire::{
+ use aisix_provider_openai::wire::{
+     build_request as build_openai_request, messages_from as openai_messages_from,
+     response_into_chat_response as openai_response_into_chat_response,
+-    stream_chunk_into_chat_chunk as openai_stream_chunk_into_chat_chunk, OpenAiResponse,
+-    OpenAiStreamChunk,
++    stream_chunk_into_chat_chunk as openai_stream_chunk_into_chat_chunk, DeveloperRoleMode,
++    OpenAiResponse, OpenAiStreamChunk,
+ };
+ 
+ // Per-`ProviderKey` request/response override pipeline (#302 §5 / #339).
+@@ -1216,7 +1216,7 @@ impl VertexBridge {
+             || self.openai_shim_url(&creds, ctx.provider_key.api_base.as_deref()),
+         )?;
+ 
+-        let messages = openai_messages_from(req);
++        let messages = openai_messages_from(req, DeveloperRoleMode::MapToSystem);
+         let typed = build_openai_request(req, upstream_id, &messages, false);
+         let mut body = serde_json::to_value(&typed)
+             .map_err(|e| BridgeError::Config(format!("serialize OpenAI shim request body: {e}")))?;
+@@ -1277,7 +1277,7 @@ impl VertexBridge {
+             || self.openai_shim_url(&creds, ctx.provider_key.api_base.as_deref()),
+         )?;
+ 
+-        let messages = openai_messages_from(req);
++        let messages = openai_messages_from(req, DeveloperRoleMode::MapToSystem);
+         let typed = build_openai_request(req, upstream_id, &messages, true);
+         let mut body = serde_json::to_value(&typed)
+             .map_err(|e| BridgeError::Config(format!("serialize OpenAI shim request body: {e}")))?;
+@@ -1421,7 +1421,7 @@ impl VertexBridge {
+         // OpenAI chat-completions body — same serializer the OpenAI-shim
+         // (Llama/MaaS) rail uses. The model is KEPT in the body (Mistral /
+         // AI21 on Vertex expect it in both the URL and the body).
+-        let messages = openai_messages_from(req);
++        let messages = openai_messages_from(req, DeveloperRoleMode::MapToSystem);
+         let typed = build_openai_request(req, upstream_id, &messages, false);
+         let mut body = serde_json::to_value(&typed)
+             .map_err(|e| BridgeError::Config(format!("serialize OpenAI request body: {e}")))?;
+@@ -1498,7 +1498,7 @@ impl VertexBridge {
+             },
+         )?;
+ 
+-        let messages = openai_messages_from(req);
++        let messages = openai_messages_from(req, DeveloperRoleMode::MapToSystem);
+         let typed = build_openai_request(req, upstream_id, &messages, true);
+         let mut body = serde_json::to_value(&typed)
+             .map_err(|e| BridgeError::Config(format!("serialize OpenAI request body: {e}")))?;
+@@ -1906,8 +1906,9 @@ struct GeminiGenerationConfig {
+ /// `generateContent` body.
+ ///
+ /// Translation rules:
+-/// - System messages → top-level `systemInstruction` (concatenated
+-///   with `\n\n` if multiple). They do NOT appear in `contents`.
++/// - System and developer messages → top-level `systemInstruction`
++///   (concatenated with `\n\n` if multiple). They do NOT appear in
++///   `contents`.
+ /// - User messages → `{"role":"user","parts":[{"text":...}]}`
+ /// - Assistant messages → `{"role":"model","parts":[{"text":...}]}`
+ ///   (Gemini uses `"model"` not `"assistant"`)
+@@ -1919,7 +1920,7 @@ fn build_gemini_request(req: &ChatFormat) -> GeminiGenerateContentRequest {
+     let mut contents: Vec<GeminiContent> = Vec::new();
+     for m in &req.messages {
+         match m.role {
+-            Role::System => system_parts.push(m.content_str().to_string()),
++            Role::System | Role::Developer => system_parts.push(m.content_str().to_string()),
+             Role::User | Role::Tool => contents.push(GeminiContent {
+                 role: "user",
+                 parts: vec![GeminiPart {
+@@ -2727,6 +2728,21 @@ mod tests {
+         assert_eq!(sys.parts[0].text, "you are helpful");
+     }
+ 
++    #[test]
++    fn build_gemini_request_lifts_developer_to_system_instruction() {
++        let req = ChatFormat::new(
++            "my-gemini",
++            vec![
++                ChatMessage::developer("follow application instructions"),
++                ChatMessage::user("hi"),
++            ],
++        );
++        let body = build_gemini_request(&req);
++        assert_eq!(body.contents.len(), 1);
++        let sys = body.system_instruction.as_ref().unwrap();
++        assert_eq!(sys.parts[0].text, "follow application instructions");
++    }
++
+     #[test]
+     fn build_gemini_request_concatenates_multiple_system_messages() {
+         let req = ChatFormat::new(
+@@ -3466,7 +3482,13 @@ mod tests {
+             sample_model_with("meta/llama-3.3-70b-instruct-maas"),
+             sample_pk_with_secret(valid_secret_json()),
+         );
+-        let req = ChatFormat::new("my-llama", vec![ChatMessage::user("hi")]);
++        let req = ChatFormat::new(
++            "my-llama",
++            vec![
++                ChatMessage::developer("Follow application instructions"),
++                ChatMessage::user("hi"),
++            ],
++        );
+         let chat = bridge.chat(&req, &ctx).await.unwrap();
+ 
+         // Customer-visible response decoded from the OpenAI envelope.
+@@ -3488,11 +3510,13 @@ mod tests {
+             Some("meta/llama-3.3-70b-instruct-maas"),
+             "openapi shim keys off the body `model` field (kept, not stripped): {body}"
+         );
+-        assert!(
+-            obj.get("messages")
+-                .and_then(|v| v.as_array())
+-                .is_some_and(|m| !m.is_empty()),
+-            "messages array must carry the user turn: {body}"
++        assert_eq!(
++            obj.get("messages"),
++            Some(&serde_json::json!([
++                {"role": "system", "content": "Follow application instructions"},
++                {"role": "user", "content": "hi"}
++            ])),
++            "the compatible shim must receive developer instructions as system: {body}"
+         );
+     }
+ 
+@@ -3573,7 +3597,13 @@ mod tests {
+             sample_model_with("meta/llama-3.3-70b-instruct-maas"),
+             sample_pk_with_secret(valid_secret_json()),
+         );
+-        let req = ChatFormat::new("my-llama", vec![ChatMessage::user("hi")]);
++        let req = ChatFormat::new(
++            "my-llama",
++            vec![
++                ChatMessage::developer("Follow application instructions"),
++                ChatMessage::user("hi"),
++            ],
++        );
+         let mut stream = bridge.chat_stream(&req, &ctx).await.unwrap();
+ 
+         let mut content = String::new();
+@@ -3613,6 +3643,14 @@ mod tests {
+             Some("meta/llama-3.3-70b-instruct-maas"),
+             "model id stays in the body (never the URL) on the stream path: {body}"
+         );
++        assert_eq!(
++            obj.get("messages"),
++            Some(&serde_json::json!([
++                {"role": "system", "content": "Follow application instructions"},
++                {"role": "user", "content": "hi"}
++            ])),
++            "the streaming compatible shim maps developer instructions to system: {body}"
++        );
+     }
+ 
+     /// D5.4 — Mistral on Vertex dispatches through the partner
+diff --git a/crates/aisix-proxy/src/ensemble.rs b/crates/aisix-proxy/src/ensemble.rs
+index 7ce2c4d3793c8fae90c376ff5f012b6d396c197a..72c79419e80bc8370268cf5c3a7bd3995d741715 100644
+--- a/crates/aisix-proxy/src/ensemble.rs
++++ b/crates/aisix-proxy/src/ensemble.rs
+@@ -455,6 +455,7 @@ fn label_candidates(candidates: &[ChatResponse]) -> String {
+ fn role_label(role: Role) -> &'static str {
+     match role {
+         Role::System => "System",
++        Role::Developer => "Developer",
+         Role::User => "User",
+         Role::Assistant => "Assistant",
+         Role::Tool => "Tool",
+diff --git a/crates/aisix-proxy/src/lib.rs b/crates/aisix-proxy/src/lib.rs
+index 8f86f584a86412225fbc64fb3136c8b64ae770f4..999cf80013fabd04cce42397927eb2753e73d80a 100644
+--- a/crates/aisix-proxy/src/lib.rs
++++ b/crates/aisix-proxy/src/lib.rs
+@@ -8655,9 +8655,11 @@ event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+     /// DeepSeek PK with `adapter: "openai"` and `api_base` pointing
+     /// at `https://api.deepseek.com`. The integration test pins
+     /// that an inbound OpenAI request resolves through the family
+-    /// bridge and round-trips DeepSeek's OpenAI-shape response.
++    /// bridge, maps the unsupported `developer` role to `system`,
++    /// and round-trips DeepSeek's OpenAI-shape response. DeepSeek's
++    /// Chat Completions schema documents system/user/assistant/tool.
+     #[tokio::test]
+-    async fn matrix_openai_in_deepseek_upstream_non_streaming() {
++    async fn matrix_openai_in_deepseek_upstream_maps_developer_to_system() {
+         use aisix_core::Adapter;
+         use aisix_provider_openai::OpenAiBridge;
+ 
+@@ -8665,6 +8667,12 @@ event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+         Mock::given(method("POST"))
+             .and(path("/chat/completions"))
+             .and(header("authorization", "Bearer sk-deepseek"))
++            .and(wiremock::matchers::body_partial_json(serde_json::json!({
++                "messages": [
++                    {"role": "system", "content": "Follow application instructions"},
++                    {"role": "user", "content": "hi"}
++                ]
++            })))
+             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                 "id": "cmpl-deepseek",
+                 "model": "deepseek-chat",
+@@ -8690,7 +8698,10 @@ event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+ 
+         let body = serde_json::json!({
+             "model": "my-deepseek",
+-            "messages": [{"role": "user", "content": "hi"}]
++            "messages": [
++                {"role": "developer", "content": "Follow application instructions"},
++                {"role": "user", "content": "hi"}
++            ]
+         });
+         let req = Request::builder()
+             .method("POST")
+diff --git a/crates/aisix-proxy/src/render.rs b/crates/aisix-proxy/src/render.rs
+index c1fecf0fa5529a814e454c0e6e4acbd5a07362b6..20c60255601db4cdde45fcfb58c1cf802526a64d 100644
+--- a/crates/aisix-proxy/src/render.rs
++++ b/crates/aisix-proxy/src/render.rs
+@@ -320,6 +320,7 @@ pub fn inject_ratelimit_headers(
+ fn role_to_str(role: Role) -> &'static str {
+     match role {
+         Role::System => "system",
++        Role::Developer => "developer",
+         Role::User => "user",
+         Role::Assistant => "assistant",
+         Role::Tool => "tool",
+diff --git a/crates/aisix-proxy/src/token_estimate.rs b/crates/aisix-proxy/src/token_estimate.rs
+index ebd1c47b0878df2c3cc02e22670606112c9d9deb..a3f6dcc629aaa3a3716f707fc8c7f843ac651997 100644
+--- a/crates/aisix-proxy/src/token_estimate.rs
++++ b/crates/aisix-proxy/src/token_estimate.rs
+@@ -233,7 +233,10 @@ fn count_chat_prompt(bpe: &CoreBPE, req: &aisix_gateway::chat::ChatFormat) -> u3
+     let mut has_system = false;
+     for m in &req.messages {
+         let role = role_label(&m.role);
+-        if role == "system" {
++        if matches!(
++            m.role,
++            aisix_gateway::chat::Role::System | aisix_gateway::chat::Role::Developer
++        ) {
+             has_system = true;
+         }
+         n = n.saturating_add(TOKENS_PER_MESSAGE);
+@@ -275,6 +278,7 @@ fn count_chat_prompt(bpe: &CoreBPE, req: &aisix_gateway::chat::ChatFormat) -> u3
+ fn role_label(role: &aisix_gateway::chat::Role) -> &'static str {
+     match role {
+         aisix_gateway::chat::Role::System => "system",
++        aisix_gateway::chat::Role::Developer => "developer",
+         aisix_gateway::chat::Role::User => "user",
+         aisix_gateway::chat::Role::Assistant => "assistant",
+         aisix_gateway::chat::Role::Tool => "tool",
+@@ -851,6 +855,25 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn tools_with_developer_message_discount() {
++        let tools = json!([{"type": "function", "function": {"name": "f"}}]);
++        let mut with_developer = ChatFormat::new(
++            "gpt-4",
++            vec![msg(Role::Developer, "Be brief"), msg(Role::User, "Hi")],
++        );
++        with_developer.extra.insert("tools".into(), tools.clone());
++        let mut without_developer = ChatFormat::new("gpt-4", vec![msg(Role::User, "Hi")]);
++        without_developer.extra.insert("tools".into(), tools);
++        let developer_msg_cost =
++            TOKENS_PER_MESSAGE + count_text("gpt-4", "developer") + count_text("gpt-4", "Be brief");
++        assert_eq!(
++            chat_est("gpt-4", with_developer).count_prompt(),
++            chat_est("gpt-4", without_developer).count_prompt() + developer_msg_cost
++                - TOOLS_WITH_SYSTEM_DISCOUNT
++        );
++    }
++
+     #[test]
+     fn anthropic_prompt_counts_system_blocks_and_tools() {
+         let body = json!({
+diff --git a/tests/e2e/src/cases/openai-sdk-compat.test.ts b/tests/e2e/src/cases/openai-sdk-compat.test.ts
+index bfec1ecb9fa6084b517539a4de6886133ffdba9a..591d9c054395e34ec98bf11c22af1493d2c2ac37 100644
+--- a/tests/e2e/src/cases/openai-sdk-compat.test.ts
++++ b/tests/e2e/src/cases/openai-sdk-compat.test.ts
+@@ -142,6 +142,71 @@ describe("openai SDK compat: drive gateway through real client", () => {
+     );
+   });
+ 
++  test("openai.chat.completions.create() — developer role", async (ctx) => {
++    if (!etcdReachable || !app || !nonStreamUpstream) {
++      ctx.skip();
++      return;
++    }
++
++    const client = new OpenAI({
++      apiKey: CALLER_PLAINTEXT,
++      baseURL: `${app.proxyUrl}/v1`,
++    });
++
++    await waitConfigPropagation(seedsPropagated);
++    const baseline = nonStreamUpstream.receivedRequests.length;
++
++    const completion = await client.chat.completions.create({
++      model: "sdk-compat-sync",
++      messages: [
++        // The harness pins openai 4.65.0, whose message union predates
++        // this role; the runtime request path forwards the JSON unchanged.
++        { role: "developer", content: "Follow application instructions" },
++        { role: "user", content: "hello" },
++      ] as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
++    });
++
++    expect(completion.object).toBe("chat.completion");
++    expect(nonStreamUpstream.receivedRequests.length - baseline).toBe(1);
++    const request = nonStreamUpstream.receivedRequests[baseline];
++    expect(request?.path).toBe("/v1/chat/completions");
++    const body = JSON.parse(request!.body) as {
++      messages: Array<{ role: string; content: string }>;
++    };
++    expect(body.messages).toEqual([
++      { role: "developer", content: "Follow application instructions" },
++      { role: "user", content: "hello" },
++    ]);
++  });
++
++  test("mis-cased developer role is rejected before upstream", async (ctx) => {
++    if (!etcdReachable || !app || !nonStreamUpstream) {
++      ctx.skip();
++      return;
++    }
++
++    await waitConfigPropagation(seedsPropagated);
++    const baseline = nonStreamUpstream.receivedRequests.length;
++    const response = await fetch(`${app.proxyUrl}/v1/chat/completions`, {
++      method: "POST",
++      headers: {
++        authorization: `Bearer ${CALLER_PLAINTEXT}`,
++        "content-type": "application/json",
++      },
++      body: JSON.stringify({
++        model: "sdk-compat-sync",
++        messages: [
++          { role: "Developer", content: "Follow application instructions" },
++          { role: "user", content: "hello" },
++        ],
++      }),
++    });
++    await response.text();
++
++    expect(response.status).toBe(400);
++    expect(nonStreamUpstream.receivedRequests.length - baseline).toBe(0);
++  });
++
+   test("openai.chat.completions.create({stream:true}) — streaming", async (ctx) => {
+     if (!etcdReachable || !app || !streamUpstream) {
+       ctx.skip();
+@@ -160,7 +225,10 @@ describe("openai SDK compat: drive gateway through real client", () => {
+     const baseline = streamUpstream.receivedRequests.length;
+     const stream = await client.chat.completions.create({
+       model: "sdk-compat-stream",
+-      messages: [{ role: "user", content: "say hello" }],
++      messages: [
++        { role: "developer", content: "Follow application instructions" },
++        { role: "user", content: "say hello" },
++      ] as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+       stream: true,
+     });
+ 
+@@ -190,6 +258,12 @@ describe("openai SDK compat: drive gateway through real client", () => {
+       .filter((r) => r.path === "/v1/chat/completions");
+     expect(testCalls).toHaveLength(1);
+     expect(testCalls[0]?.method).toBe("POST");
++    const requestBody = JSON.parse(testCalls[0]!.body) as {
++      messages: Array<{ role: string; content: string }>;
++    };
++    expect(requestBody.messages).toEqual([
++      { role: "developer", content: "Follow application instructions" },
++      { role: "user", content: "say hello" },
++    ]);
+   });
+-
+ });
