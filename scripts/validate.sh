@@ -119,6 +119,7 @@ python3 scripts/check-aisix-session-affinity.py --yaml "$aisix_resources"
 python3 scripts/check-aisix-session-affinity.py --self-test
 python3 scripts/check-cpa-session-affinity.py --config "${CPA_CONFIG:-data/cpa/conf/config.yaml}"
 python3 scripts/check-cpa-session-affinity.py --self-test
+python3 scripts/check-zcode-egress-policy.py --self-test
 
 python3 scripts/render-egress-policy.py egress-proxy/policy.example.json "$tmpdir/proxy-default"
 python3 - egress-proxy/policy.example.json <<'PY'
@@ -240,6 +241,7 @@ if "dns_nameservers 127.0.0.1" not in (root / "squid.conf").read_text().splitlin
     raise SystemExit("Squid must resolve exclusively through the filtered local resolver")
 PY
 if [ "$runtime_mode" = 1 ]; then
+  python3 scripts/check-zcode-egress-policy.py --policy data/egress-proxy/policy.json
   python3 scripts/render-egress-policy.py data/egress-proxy/policy.json "$tmpdir/proxy-runtime"
   diff -ru "$tmpdir/proxy-runtime" data/egress-proxy/generated >/dev/null || {
     echo 'stale egress config; run ./scripts/init-egress-proxy.sh' >&2
