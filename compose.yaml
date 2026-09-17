@@ -877,7 +877,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix:1.2.0-deadlockfix-7d6d14b}
+    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix:1.2.0-deadlockfix-7d6d14b-developerrole-52b0225}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped
