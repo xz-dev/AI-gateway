@@ -1,0 +1,54 @@
+# Rollback the last deploy of one managed file set + service.
+# Usage: ansible-playbook playbooks/rollback.yml -e service=cli-proxy-api
+
+- name: Component rollback
+  hosts: gateway
+  gather_facts: false
+  vars:
+    ai_ops_mode: apply
+    _compose: >-
+      {{ ai_ops_compose_cmd }} -p {{ ai_ops_compose_project }}
+      -f {{ ai_ops_deploy_root }}/compose.yaml
+      -f {{ ai_ops_deploy_root }}/compose.override.yaml
+      --env-file {{ ai_ops_deploy_root }}/.env
+  pre_tasks:
+    - name: Require service parameter
+      ansible.builtin.assert:
+        that: service is defined
+        fail_msg: "pass -e service=<name>"
+
+    - name: Preflight
+      ansible.builtin.include_tasks: ../tasks/preflight.yml
+
+  tasks:
+    - name: Rollback compose.yaml
+      ansible.builtin.include_tasks: ../tasks/rollback-file.yml
+      vars:
+        ai_file_label: compose.yaml
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.yaml"
+
+    - name: Rollback compose.override.yaml
+      ansible.builtin.include_tasks: ../tasks/rollback-file.yml
+      vars:
+        ai_file_label: compose.override.yaml
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.override.yaml"
+
+    - name: Rollback .env
+      ansible.builtin.include_tasks: ../tasks/rollback-file.yml
+      vars:
+        ai_file_label: .env
+        ai_file_remote: "{{ ai_ops_deploy_root }}/.env"
+      no_log: true
+
+    - name: "Recreate {{ service }} with restored config"
+      ansible.builtin.command: "{{ _compose }} up -d --no-deps --no-build {{ service }}"
+
+    - name: "Verify {{ service }} running after rollback"
+      ansible.builtin.command: "{{ _compose }} ps --format json"
+      register: _rb_ps
+      changed_when: false
+
+    - name: Assert service present after rollback
+      ansible.builtin.assert:
+        that: service in (_rb_ps.stdout | string)
+        fail_msg: "{{ service }} not running after rollback"

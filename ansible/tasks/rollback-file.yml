@@ -1,0 +1,54 @@
+# Rollback: upload the protected pre-deploy copy and reactivate.
+# Params: ai_file_label, ai_file_remote, ai_activate_cmd (optional).
+
+- name: "Rollback guard: remote still matches this deploy's output"
+  ansible.builtin.set_fact:
+    _ai_baseline: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_file_label | replace('/', '__') }}.baseline"
+    _ai_predeploy: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_file_label | replace('/', '__') }}.predeploy"
+
+- name: "Read remote current checksum"
+  ansible.builtin.stat:
+    path: "{{ ai_file_remote }}"
+    checksum_algorithm: sha256
+  register: _rb_remote
+
+- name: "Read deploy baseline checksum"
+  ansible.builtin.stat:
+    path: "{{ _ai_baseline }}"
+    checksum_algorithm: sha256
+  register: _rb_baseline
+
+- name: "Refuse rollback over independent remote change"
+  ansible.builtin.fail:
+    msg: >-
+      Remote {{ ai_file_label }} changed independently after this deploy
+      (remote={{ _rb_remote.stat.checksum }} deployed={{ _rb_baseline.stat.checksum }}).
+      Stop and reconcile manually; nothing was overwritten.
+  when:
+    - _rb_remote.stat.exists
+    - _rb_baseline.stat.exists
+    - _rb_remote.stat.checksum != _rb_baseline.stat.checksum
+
+- name: "Verify pre-deploy copy exists"
+  ansible.builtin.stat:
+    path: "{{ _ai_predeploy }}"
+  register: _rb_pre
+  failed_when: not _rb_pre.stat.exists
+
+- name: "Upload pre-deploy copy of {{ ai_file_label }}"
+  ansible.builtin.copy:
+    src: "{{ _ai_predeploy }}"
+    dest: "{{ ai_file_remote }}"
+    remote_src: true
+    mode: preserve
+
+- name: "Reactivate {{ ai_file_label }}"
+  ansible.builtin.command: "{{ ai_activate_cmd }}"
+  when: ai_activate_cmd is defined
+
+- name: "Restore baseline to pre-deploy content"
+  ansible.builtin.copy:
+    src: "{{ _ai_predeploy }}"
+    dest: "{{ _ai_baseline }}"
+    remote_src: true
+    mode: "0600"

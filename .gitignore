@@ -13,3 +13,4 @@ aisix-status/aisix-status
 aisix/config.yaml
 aisix/resources.yaml
 aisix/caller-keys.json
+ansible/inventory.local.ini

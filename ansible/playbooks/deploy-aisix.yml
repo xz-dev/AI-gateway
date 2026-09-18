@@ -1,0 +1,86 @@
+# AISIX resources deploy: validate locally, show orphan report, upload + recreate.
+# Usage: ansible-playbook playbooks/deploy-aisix.yml [-e ai_ops_mode=plan]
+#        [-e adopted_direct_models='["a","b"]'] [-e standalone_retained='["c"]']
+
+- name: AISIX resources deploy
+  hosts: gateway
+  gather_facts: false
+  vars:
+    ai_ops_mode: apply
+    _resources_local: "{{ ai_ops_config_dir }}/aisix/resources.yaml"
+    adopted_direct_models: "[]"
+    standalone_retained: "[]"
+  pre_tasks:
+    - name: Preflight
+      ansible.builtin.include_tasks: ../tasks/preflight.yml
+
+    - name: Validate fallback-status contract
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../../scripts/check-aisix-resource-policy.py
+        --yaml {{ _resources_local }}
+      delegate_to: localhost
+
+    - name: Reject unverified literal retries=-1
+      ansible.builtin.shell: |
+        grep -nE 'retries:\s*-1' "{{ _resources_local }}" && exit 1 || true
+      delegate_to: localhost
+      register: _retry_guard
+      changed_when: false
+      failed_when: _retry_guard.rc != 0
+
+    - name: Orphan report
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../../scripts/ops/check-aisix-orphans.py
+        {{ _resources_local }}
+        --adopted '{{ adopted_direct_models }}'
+        --standalone '{{ standalone_retained }}'
+      delegate_to: localhost
+      register: _orphans
+      changed_when: false
+
+    - name: Show orphan candidates (deletion requires explicit approval)
+      ansible.builtin.debug:
+        var: _orphans.stdout_lines
+
+  tasks:
+    - name: Deploy resources.yaml
+      ansible.builtin.include_tasks: ../tasks/deploy-file.yml
+      vars:
+        ai_file_label: aisix/resources.yaml
+        ai_file_local: "{{ _resources_local }}"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/aisix/resources.yaml"
+        ai_activate_cmd: >-
+          {{ ai_ops_compose_cmd }} -p {{ ai_ops_compose_project }}
+          -f {{ ai_ops_deploy_root }}/compose.yaml
+          -f {{ ai_ops_deploy_root }}/compose.override.yaml
+          --env-file {{ ai_ops_deploy_root }}/.env
+          up -d --no-deps --no-build aisix
+
+    - name: Verify effective routes via Admin API (read-only, internal peer)
+      ansible.builtin.command: >
+        {{ ai_ops_compose_cmd }} -p {{ ai_ops_compose_project }}
+        -f {{ ai_ops_deploy_root }}/compose.yaml
+        -f {{ ai_ops_deploy_root }}/compose.override.yaml
+        --env-file {{ ai_ops_deploy_root }}/.env
+        exec -T aisix-status-relay sh -c
+        'wget -qO- --header="Authorization: Bearer $AISIX_ADMIN_KEY" http://172.30.68.2:3002/admin/v1/models'
+      register: _aisix_models
+      changed_when: false
+      failed_when: false
+      when: ai_ops_mode == "apply"
+      no_log: true  # response may embed provider model names; keep receipt sanitized
+
+    - name: Admin API check is optional until the pinned fixture proves it
+      ansible.builtin.debug:
+        msg: "admin API read skipped/failed (rc={{ _aisix_models.rc | default('n/a') }}); profile pending fixture proof"
+      when: ai_ops_mode == "apply"
+
+    - name: Receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-aisix-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=aisix-deploy mode={{ ai_ops_mode }}
+          orphan_candidates={{ (_orphans.stdout | from_json).orphan_candidates }}
+          admin_api_checked={{ _aisix_models.rc | default(1) == 0 }}
+      when: ai_ops_mode == "apply"
