@@ -72,6 +72,18 @@ edited by hand: review the shown diff/failing files, adopt the change into the
 local config, and re-run. Rollback likewise refuses to overwrite a remote file
 that changed independently after the deploy.
 
+## Operational notes
+
+- **AISIX loads `resources.yaml` only at startup.** Because it is a bind mount, a
+  file-only change does not alter the container config hash and plain
+  `up -d` no-ops. `deploy-aisix` therefore activates with `--force-recreate`.
+  Fixture tests miss this (fixture containers are freshly created); caught live
+  on rainyun-la 2026-09-19.
+- **The post-deploy Admin API route check is optional** (`failed_when: false`):
+  the internal relay path currently returns 401, so effective-route verification
+  is pending a working credential path. Until then, verify via
+  `docker logs ai-gateway-aisix-1 | grep 'resources loaded'` and live traffic.
+
 ## Deliberate deviations from Ansible conventions
 
 These are accepted design decisions, not defects (see the
