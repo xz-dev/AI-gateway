@@ -126,8 +126,8 @@ func TestConfiguredSubscriptionChannels(t *testing.T) {
 		t.Fatal(err)
 	}
 	axis, xl := cfg.Channels["axis"], cfg.Channels["xl"]
-	if axis.fetchModelsEnabled() || !xl.fetchModelsEnabled() {
-		t.Fatal("Axis must skip inventory; XL must retain its own inventory")
+	if axis.fetchModelsEnabled() || xl.fetchModelsEnabled() {
+		t.Fatal("Axis and XL must skip inventory and enrich CPA members through their source chains")
 	}
 	if strings.Join(axis.SourcePriority, ",") != "models.dev/openai" {
 		t.Fatal("Axis must use only the OpenAI catalog source; subscription parameters proved redundant (zero-diff replay)")

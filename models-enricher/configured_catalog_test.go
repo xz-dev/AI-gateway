@@ -40,20 +40,38 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	if !exists || congee.fetchModelsEnabled() || !reflect.DeepEqual(congee.SourcePriority, []string{"models.dev/openai"}) {
 		t.Fatal("Congee must use only the explicit OpenAI source, without fetching its own inventory")
 	}
-	if !chainHas(cfg.Channels["xl"].SourcePriority, "models.dev/tencent") {
+	// 仅为现有 CPA 成员启用全局元数据链，不重复请求渠道自身目录。
+	for _, name := range []string{"cline", "aihub", "senseaudio"} {
+		ch, exists := cfg.Channels[name]
+		if !exists || ch.fetchModelsEnabled() || ch.SourcePriority != nil || !reflect.DeepEqual(sourceChain(ch, "model"), cfg.GlobalSourcePriority) {
+			t.Fatalf("%s must skip inventory and inherit only the global source chain: %#v", name, ch)
+		}
+	}
+	xl := cfg.Channels["xl"]
+	if !chainHas(xl.SourcePriority, "models.dev/tencent") {
 		t.Fatal("XL must include its explicit Tencent source")
+	}
+	if xl.fetchModelsEnabled() {
+		t.Fatal("XL must skip inventory and enrich CPA members through its existing source chain")
+	}
+	wantProviderPrefixes := providerPrefixes{{"axis", []string{"openai"}}}
+	if !reflect.DeepEqual(cfg.providerPrefixes, wantProviderPrefixes) {
+		t.Fatalf("unexpected global provider mappings: %#v", cfg.providerPrefixes)
 	}
 	wantModels := map[string]int{"xl": 1, "nim": 2}
 	for name, ch := range cfg.Channels {
-		if len(ch.Models) != wantModels[name] || len(ch.Overrides) != 0 || name != "commandcode" && name != "nim" && len(ch.providerPrefixes) != 0 {
-			t.Fatalf("%s has unapproved model configuration, provider mapping or manual overrides", name)
+		if len(ch.Models) != wantModels[name] || len(ch.Overrides) != 0 {
+			t.Fatalf("%s has unapproved model configuration or manual overrides", name)
+		}
+		if name != "commandcode" && name != "nim" && name != "xl" && !reflect.DeepEqual(ch.providerPrefixes, wantProviderPrefixes) {
+			t.Fatalf("%s has unapproved channel provider mapping: %#v", name, ch.providerPrefixes)
 		}
 	}
 	// 全局链与裸模型接管开关。
 	if !cfg.BareModelsTakeover {
 		t.Fatal("bare_models_takeover must be enabled")
 	}
-	wantGlobal := []string{"models.dev/zai", "models.dev/xai", "models.dev/moonshotai", "models.dev/openai", "models.dev/anthropic"}
+	wantGlobal := []string{"models.dev/zai", "models.dev/xai", "models.dev/moonshotai", "models.dev/openai", "models.dev/anthropic", "models.dev/deepseek"}
 	if !reflect.DeepEqual(cfg.GlobalSourcePriority, wantGlobal) {
 		t.Fatalf("global chain changed: %v", cfg.GlobalSourcePriority)
 	}
@@ -61,9 +79,11 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	wantInherit := map[string][]string{
 		"gpt-5.6-terra": nil,
 		"gpt-5.6-luna":  nil,
+		"gpt-5.6-sol":   nil,
 		"gpt-6-astra":   nil,
 		"glm-5.2":       nil,
-		"kimi-k3-256k":  {"kimi-k3"},
+		"glm-5.3":       nil,
+		"kimi-k3-500k":  {"kimi-k3"},
 	}
 	if len(cfg.StaticModels) != len(wantInherit) {
 		t.Fatalf("static model count: got %d, want %d", len(cfg.StaticModels), len(wantInherit))
@@ -78,22 +98,56 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 		}
 		overrides, _ := static["overrides"].(map[string]any)
 		switch slug {
-		case "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "kimi-k3-256k":
-			if toInt(overrides["context_window"]) != 372000 && slug != "kimi-k3-256k" {
+		case "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra":
+			if toInt(overrides["context_window"]) != 372000 || toInt(overrides["max_context_window"]) != 372000 {
 				t.Fatalf("gpt static %s must carry the 372000 context overrides: %v", slug, static)
-			}
-			if slug == "kimi-k3-256k" && toInt(overrides["context_window"]) != 256000 {
-				t.Fatalf("kimi-k3-256k static must carry the 256000 context overrides: %v", static)
 			}
 		case "glm-5.2":
 			if overrides["default_reasoning_level"] != "max" {
 				t.Fatalf("glm-5.2 static must retain default_reasoning_level max: %v", static)
 			}
+		case "glm-5.3":
+			if toInt(overrides["context_window"]) != 500000 || toInt(overrides["max_context_window"]) != 500000 {
+				t.Fatalf("glm-5.3 static must carry the 500000 context overrides: %v", static)
+			}
+		case "kimi-k3-500k":
+			if toInt(overrides["context_window"]) != 500000 {
+				t.Fatalf("kimi-k3-500k static must carry the 500000 context overrides: %v", static)
+			}
 		}
 	}
 	commandcode := cfg.Channels["commandcode"]
-	if len(commandcode.providerPrefixes) != 4 {
-		t.Fatal("Commandcode must use only the four verified provider aliases")
+	wantCommandcodePrefixes := providerPrefixes{
+		{"axis", []string{"openai"}},
+		{"minimaxai", []string{"minimax"}},
+		{"qwen", []string{"alibaba"}},
+		{"z-ai", []string{"zai"}},
+		{"zai-org", []string{"zai"}},
+	}
+	if !reflect.DeepEqual(commandcode.providerPrefixes, wantCommandcodePrefixes) {
+		t.Fatalf("unexpected Commandcode provider mappings: %#v", commandcode.providerPrefixes)
+	}
+	wantXLPrefixes := providerPrefixes{
+		{"axis", []string{"openai"}},
+		{"xz", []string{"openai"}},
+	}
+	if got := cfg.Channels["xl"].providerPrefixes; !reflect.DeepEqual(got, wantXLPrefixes) {
+		t.Fatalf("unexpected XL provider mappings: %#v", got)
+	}
+	wantXZQueries := []sourceQuery{
+		{"modelparams.dev/openai/subscription", "gpt-5.6-sol", false},
+		{"models.dev/openai", "gpt-5.6-sol", false},
+	}
+	if got := sourceQueries(xl, "xz/gpt-5.6-sol"); !reflect.DeepEqual(got, wantXZQueries) {
+		t.Fatalf("XL/XZ must query only canonical OpenAI metadata: %#v", got)
+	}
+	wantNIMPrefixes := providerPrefixes{
+		{"axis", []string{"openai"}},
+		{"deepseek-ai", []string{"nvidia"}},
+		{"minimaxai", []string{"nvidia"}},
+	}
+	if got := cfg.Channels["nim"].providerPrefixes; !reflect.DeepEqual(got, wantNIMPrefixes) {
+		t.Fatalf("unexpected NIM provider mappings: %#v", got)
 	}
 	for from, to := range map[string]string{"MiniMaxAI": "minimax", "Qwen": "alibaba", "z-ai": "zai", "zai-org": "zai"} {
 		if got := sourceQueries(commandcode, from+"/Model"); !reflect.DeepEqual(got, []sourceQuery{{"models.dev/" + to, "model", false}}) {
@@ -108,12 +162,19 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	base.Models = append(base.Models,
 		map[string]any{"slug": "gpt-5.6-terra", "display_name": "cpa-bare"},
 		map[string]any{"slug": "gpt-5.6-luna", "display_name": "cpa-bare"},
+		map[string]any{"slug": "gpt-5.6-sol", "display_name": "cpa-bare"},
 		map[string]any{"slug": "gpt-6-astra", "display_name": "cpa-bare"},
 		map[string]any{"slug": "glm-5.2", "display_name": "cpa-bare"},
-		map[string]any{"slug": "kimi-k3-256k", "display_name": "cpa-bare"},
+		map[string]any{"slug": "glm-5.3", "display_name": "cpa-bare", "context_window": 1000000},
+		map[string]any{"slug": "kimi-k3-500k", "display_name": "cpa-bare"},
 		map[string]any{"slug": "kimi-k3", "display_name": "cpa-bare", "context_window": 1048576, "max_output_tokens": 131072},
+		map[string]any{"slug": "codex/gpt-5.6-sol", "display_name": "direct", "context_window": 921000, "max_context_window": 921000},
+		map[string]any{"slug": "zcode/glm-5.3", "display_name": "direct", "context_window": 1000000, "max_context_window": 1000000},
 	)
-	identities := &catalogIdentities{qualified: map[string]bool{}}
+	identities := &catalogIdentities{qualified: map[string]bool{
+		"codex/gpt-5.6-sol": true,
+		"zcode/glm-5.3":     true,
+	}}
 	base, _ = identities.filter(base, cfg)
 	out := mergeManifest(base, nil, cfg, emptySourceTables(), nil)
 	bySlug := map[string]map[string]any{}
@@ -122,18 +183,36 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	}
 	for slug, model := range bySlug {
 		switch slug {
-		case "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra":
-			if toInt(model["context_window"]) != 372000 {
+		case "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra":
+			if toInt(model["context_window"]) != 372000 || toInt(model["max_context_window"]) != 372000 {
 				t.Fatalf("gpt static %s must override context to 372000: %v", slug, model)
 			}
 		case "glm-5.2":
 			if model["default_reasoning_level"] != "max" {
 				t.Fatalf("glm-5.2 must retain default_reasoning_level max: %v", model)
 			}
-		case "kimi-k3-256k":
-			if toInt(model["context_window"]) != 256000 || toInt(model["max_output_tokens"]) != 131072 {
-				t.Fatalf("kimi-k3-256k must inherit kimi-k3 and clamp context: %v", model)
+		case "glm-5.3":
+			if toInt(model["context_window"]) != 500000 || toInt(model["max_context_window"]) != 500000 {
+				t.Fatalf("glm-5.3 must override context to 500000: %v", model)
 			}
+		case "kimi-k3-500k":
+			if toInt(model["context_window"]) != 500000 || toInt(model["max_output_tokens"]) != 131072 {
+				t.Fatalf("kimi-k3-500k must inherit kimi-k3 and clamp context: %v", model)
+			}
+		}
+	}
+	for _, slug := range []string{"gpt-5.6-sol", "glm-5.3"} {
+		if bySlug[slug] == nil {
+			t.Fatalf("requested static model is missing after merge: %s", slug)
+		}
+	}
+	for slug, want := range map[string]int{
+		"codex/gpt-5.6-sol": 921000,
+		"zcode/glm-5.3":     1000000,
+	} {
+		model := bySlug[slug]
+		if model == nil || toInt(model["context_window"]) != want || toInt(model["max_context_window"]) != want {
+			t.Fatalf("direct model %s must retain its own context limit: %v", slug, model)
 		}
 	}
 	if _, leaked := bySlug["nonexistent-static"]; leaked {

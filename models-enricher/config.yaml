@@ -11,12 +11,18 @@ aisix_models_url: http://aisix:3000/v1/models
 aisix_timeout: 5s
 
 bare_models_takeover: true
-source_priority: [models.dev/zai, models.dev/xai, models.dev/moonshotai, models.dev/openai, models.dev/anthropic]
+source_priority: [models.dev/zai, models.dev/xai, models.dev/moonshotai, models.dev/openai, models.dev/anthropic, models.dev/deepseek]
 # AISIX-only 的 axis 前缀仅映射元数据来源，不改变推理路由。
 provider_prefix_map:
   axis: openai
 http_concurrency: 8
 channels:
+  cline:
+    fetch_models: false
+  aihub:
+    fetch_models: false
+  senseaudio:
+    fetch_models: false
   axis:
     fetch_models: false
     source_priority: [models.dev/openai]
@@ -24,7 +30,12 @@ channels:
     fetch_models: false
     source_priority: [models.dev/openai]
   xl:
+    # 不请求 XL 远程目录；保留 CPA 成员并沿用下列数据链补全元数据。
+    fetch_models: false
     source_priority: [modelparams.dev/xai/subscription, models.dev/openai, models.dev/xai, models.dev/zai-coding-plan, models.dev/moonshotai, models.dev/deepseek, models.dev/tencent]
+    # XL 的 xz 子命名空间承载 OpenAI 系列；只改变元数据查询身份，不改变公开 ID 或推理路由。
+    provider_prefix_map:
+      xz: openai
     models:
       muse-spark-1.3-contributor:
         source_priority: [models.dev/meta]
@@ -61,18 +72,23 @@ channels:
 
 # 裸模型经 bare_models_takeover 动态补全（fail-open）；
 # statics 只保留与动态源数据不同的真实差异：
-#   gpt 三项：供应商真实限额 372k 覆盖 models.dev 的标称值；
+#   gpt 四项：供应商真实限额 372k 覆盖 models.dev 的标称值；
+#   glm-5.3：聚合入口单独限制为 500k；
 #   glm-5.2：默认推理档 max（动态源无默认档声明）；
-#   kimi-k3-256k：models.dev 无此 ID，继承 kimi-k3 动态数据后压上下文。
+#   kimi-k3-500k：models.dev 无此 ID，继承 kimi-k3 动态数据后压上下文。
 static_models:
   - slug: gpt-5.6-terra
     overrides: {context_window: 372000, max_context_window: 372000}
   - slug: gpt-5.6-luna
     overrides: {context_window: 372000, max_context_window: 372000}
+  - slug: gpt-5.6-sol
+    overrides: {context_window: 372000, max_context_window: 372000}
   - slug: gpt-6-astra
     overrides: {context_window: 372000, max_context_window: 372000}
   - slug: glm-5.2
     overrides: {default_reasoning_level: max}
-  - slug: kimi-k3-256k
+  - slug: glm-5.3
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: kimi-k3-500k
     inherit: [kimi-k3]
-    overrides: {context_window: 256000, max_context_window: 256000}
+    overrides: {context_window: 500000, max_context_window: 500000}

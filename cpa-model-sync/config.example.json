@@ -12,6 +12,15 @@
     },
     "shuaiapi": {
       "include": ["^claude-"]
+    },
+    "cline": {
+      "include": [
+        "^z-ai/glm-5\\.2$",
+        "^z-ai/glm-5\\.3$",
+        "^z-ai/glm-5\\.3-flash$",
+        "^moonshotai/kimi-k3$",
+        "^deepseek/deepseek-v4\\.1-flash$"
+      ]
     }
   }
 }
