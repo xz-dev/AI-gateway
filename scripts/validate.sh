@@ -654,9 +654,8 @@ for required in (
 for forbidden in ("ai-proxy-multi", "alias-gpt-", "alias-grok-", "alias-team-"):
     if forbidden in text:
         raise SystemExit(f"legacy HTTP alias still conflicts with catalog selection: {forbidden}")
-ws = route("ws-alias")
-if "      - GET" not in ws or 'http_upgrade", "==", "websocket"' not in ws or "enable_websocket: true" not in ws:
-    raise SystemExit("legacy direct-WS route changed or entered HTTP classification")
+if "  - id: ws-alias\n" in text:
+    raise SystemExit("retired ws-alias route must not return (retired in 103ecac)")
 models = route("codex-models")
 if "      - GET" not in models or "arg_client_version" in models or "upstream_id: enricher" not in models:
     raise SystemExit("standard and Codex model lists must both reach models-enricher")
