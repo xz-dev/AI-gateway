@@ -253,7 +253,10 @@
         ai_file_label: aisix/resources.yaml
         ai_file_local: "{{ ai_ops_config_dir }}/aisix/resources.yaml"
         ai_file_remote: "{{ ai_ops_deploy_root }}/aisix/resources.yaml"
-        ai_activate_cmd: "{{ _compose }} up -d --no-deps --no-build aisix"
+        # --force-recreate: resources.yaml is a bind mount, so a file-only change does not
+        # alter the container config hash and plain `up -d` would silently keep the old
+        # routing. AISIX loads resources.yaml only at startup; recreation is required.
+        ai_activate_cmd: "{{ _compose }} up -d --force-recreate --no-deps --no-build aisix"
       tags: [deploy-aisix]
 
     - name: Verify effective routes via Admin API (read-only, internal peer)
