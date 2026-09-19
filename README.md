@@ -173,7 +173,7 @@ CPA listens at `http://127.0.0.1:8317` by default. Its management UI/API require
 
 CPA's global `proxy-url` forces provider transports through Squid. If an OpenAI-compatible entry targets another service on a pairwise internal network, set that entry's `api-key-entries[].proxy-url` to `direct`; otherwise the global proxy would incorrectly receive the internal HTTP request. Do not use `direct` for Internet destinations—the CPA container has no direct Internet route.
 
-Add provider accounts to CPA, define their concrete IDs and logical routes in private `aisix/resources.yaml`, then create an OpenAI-compatible upstream account in Sub2API. Keep every direct AISIX `display_name` byte-identical to its CPA `model_name`, including `/`; only client-facing logical combos use separate bare names:
+Add provider accounts to CPA, define their concrete IDs and logical routes in private `aisix/resources.yaml`, then create an OpenAI-compatible upstream account in Sub2API. Keep every direct AISIX `display_name` byte-identical to its CPA `model_name`, including `/`; only client-facing logical combos use separate bare names. Every logical route uses the same bounded fallback status set `[400, 401, 402, 403, 404]`: `400` covers observed disabled/unavailable targets, `401` invalid or revoked target credentials, `402` unavailable payment/credit/balance/quota so later targets remain reachable, `403` denied accounts/models, and `404` absent or unexposed targets. `retries` and `max_fallbacks` remain the attempt bounds; including `400` or `402` can retry malformed or billing-failed requests and therefore increases load.
 
 | Field | Value |
 | --- | --- |
