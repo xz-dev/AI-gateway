@@ -397,7 +397,7 @@ services:
     <<: *socat-relay
     command: ["TCP4-LISTEN:5432,bind=172.30.13.3,reuseaddr,fork", "TCP4:172.30.14.2:5432,connect-timeout=10"]
     depends_on:
-      postgres: {condition: service_started}
+      postgres: {condition: service_healthy}
     networks:
       sub2api-postgres-source:
         aliases: [postgres]
@@ -409,7 +409,7 @@ services:
     <<: *socat-relay
     command: ["TCP4-LISTEN:6379,bind=172.30.15.3,reuseaddr,fork", "TCP4:172.30.16.2:6379,connect-timeout=10"]
     depends_on:
-      redis: {condition: service_started}
+      redis: {condition: service_healthy}
     networks:
       sub2api-redis-source:
         aliases: [redis]
@@ -707,7 +707,7 @@ services:
       model-sync-cpa:
         ipv4_address: 172.30.44.3
     depends_on:
-      cli-proxy-api: {condition: service_started}
+      cli-proxy-api: {condition: service_healthy}
 
   models-enricher:
     build:
@@ -885,7 +885,7 @@ services:
     restart: unless-stopped
     depends_on:
       aisix-netns: {condition: service_started, restart: true}
-      cli-proxy-api: {condition: service_started}
+      cli-proxy-api: {condition: service_healthy}
     pids_limit: 128
     mem_limit: 160m
     memswap_limit: 160m

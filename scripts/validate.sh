@@ -328,10 +328,9 @@ for service, config in services.items():
     if config.get("ports") and not (service.endswith("-host-netns") or service == "aisix-netns"):
         raise SystemExit(f"only host namespace owners may publish ports: {service}")
     depends = config.get("depends_on") or {}
-    if isinstance(depends, dict):
-        for dependency, settings in depends.items():
-            if isinstance(settings, dict) and settings.get("condition") == "service_healthy":
-                raise SystemExit(f"{service}->{dependency} uses nonportable service_healthy")
+    # service_healthy is portable: podman-compose maps it (podman_compose.py
+    # ServiceDependencyCondition.HEALTHY) and production runs docker compose.
+    # The 0ca7e00-era ban was lifted on 2026-09-19 after verification.
     image = str(config.get("image", ""))
     if not image:
         continue
