@@ -117,7 +117,7 @@ fi
 python3 scripts/check-aisix-resource-policy.py --self-test
 python3 scripts/check-aisix-session-affinity.py --yaml "$aisix_resources"
 python3 scripts/check-aisix-session-affinity.py --self-test
-python3 scripts/check-cpa-session-affinity.py --config "${CPA_CONFIG:-data/cpa/conf/config.yaml}"
+python3 scripts/check-cpa-session-affinity.py --config "${CPA_CONFIG:-$cpa_config}"
 python3 scripts/check-cpa-session-affinity.py --self-test
 python3 scripts/check-zcode-egress-policy.py --self-test
 
