@@ -1,0 +1,52 @@
+---
+# Operator configuration template for AI-gateway operations.
+# Copy the keys you need into inventory/group_vars/gateway.yml (group-wide) or
+# inventory/host_vars/<host>.yml (per-host, sensitive). Every variable below is
+# declared with a default and a comment in roles/ai_ops/defaults/main.yml —
+# this file is the operator-facing summary.
+
+# --- Locations -------------------------------------------------------------
+# Private config directory: compose.yaml, compose.override.yaml, .env,
+# aisix/resources.yaml, data/egress-proxy/policy.json (adopted from production).
+# Default: <repo>/ansible/private-config/ (gitignored). Override only if the
+# directory must live outside the repo.
+# ai_ops_config_dir: /some/external/path
+
+# Remote deployment root and compose project on the gateway host.
+ai_ops_deploy_root: /root/AI-gateway
+ai_ops_compose_project: ai-gateway
+
+# --- Runtime ---------------------------------------------------------------
+# Compose provider command. Empty (default) auto-detects on the remote:
+# docker compose -> podman compose -> podman-compose.
+# ai_ops_compose_cmd: "podman compose"
+
+# Container runtime override ('docker' or 'podman'). Empty = auto-detect.
+# ai_ops_runtime: ""
+
+# --- Execution -------------------------------------------------------------
+# 'apply' performs; 'plan' is read-only (diff only, no upload/activation).
+# Prefer the -e ai_ops_mode=plan CLI flag over setting it here.
+# ai_ops_mode: apply
+
+# Capacity gate thresholds for component deploys.
+# ai_ops_min_mem_mb: 256
+# ai_ops_min_disk_mb: 1024
+
+# --- Component deploy -------------------------------------------------------
+# Supported component profiles for --tags deploy / rollback.
+# ai_ops_profiles:
+#   cli-proxy-api: {}
+#   sub2api: {}
+#   aisix: {}
+
+# --- Squid ------------------------------------------------------------------
+# Pinned image used for offline `-k parse` validation of rendered policy.
+# ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u2
+
+# --- AISIX ------------------------------------------------------------------
+# Direct-connect models explicitly adopted into resources.yaml (deletion
+# approval list for reported orphan candidates).
+# ai_ops_adopted_direct_models: []
+# Direct-connect models intentionally kept standalone (never orphan candidates).
+# ai_ops_standalone_retained: []

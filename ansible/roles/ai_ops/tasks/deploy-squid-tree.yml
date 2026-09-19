@@ -1,0 +1,103 @@
+---
+# Squid policy deploy via tarball + manifest drift gate.
+# Why: per-file drift checks cost ~5 SSH round trips each; with 177 generated
+# policy files that is ~900 connections (~1h) and trips sshd rate limits.
+# The manifest checksum over ALL generated files preserves the same guarantee
+# (any remote hand-edit mismatches the manifest) with ~2 round trips.
+#
+# Params (vars): ai_squid_staging (local rendered dir), ai_squid_remote_dir
+# (remote generated dir), ai_activate_cmd (optional restart command).
+
+- name: "Build tarball + manifest locally"
+  ansible.builtin.shell: |
+    set -e
+    cd "{{ ai_squid_staging }}"
+    tar czf /tmp/ai-ops-squid-policy.tar.gz --exclude='ca.*' .
+    find . -type f ! -name 'ca.*' -print0 | sort -z | xargs -0 sha256sum > /tmp/ai-ops-squid-manifest.txt
+  args:
+    creates: /tmp/ai-ops-squid-manifest.txt
+  delegate_to: localhost
+  register: _squid_pack
+  changed_when: true  # always repack to reflect current staging
+
+- name: "Read local manifest checksum"
+  ansible.builtin.stat:
+    path: /tmp/ai-ops-squid-manifest.txt
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  register: _squid_manifest_local
+
+- name: "Drift gate: verify remote tree matches last deployed manifest"
+  ansible.builtin.shell: |
+    set -e
+    if [ ! -f "{{ ai_squid_remote_dir }}/.manifest.txt" ]; then
+      echo "no remote manifest (first deploy)"; exit 0
+    fi
+    cd "{{ ai_squid_remote_dir }}"
+    if sha256sum -c .manifest.txt --quiet 2>/dev/null; then
+      echo "remote tree matches manifest"
+    else
+      echo "REMOTE DRIFT DETECTED in {{ ai_squid_remote_dir }}" >&2
+      sha256sum -c .manifest.txt 2>/dev/null | grep -v ': OK$' >&2 || true
+      exit 1
+    fi
+  register: _squid_drift
+  changed_when: false
+  failed_when: _squid_drift.rc != 0
+
+- name: "Show drift check result"
+  ansible.builtin.debug:
+    var: _squid_drift.stdout_lines
+
+- name: "Compare local manifest against remote manifest"
+  ansible.builtin.shell: |
+    if [ -f "{{ ai_squid_remote_dir }}/.manifest.txt" ]; then
+      sha256sum "{{ ai_squid_remote_dir }}/.manifest.txt" | awk '{print $1}'
+    else
+      echo "none"
+    fi
+  register: _squid_remote_manifest_sum
+  changed_when: false
+
+- name: "No effective change for squid policy"
+  ansible.builtin.debug:
+    msg: "squid policy: no effective change"
+  when: _squid_remote_manifest_sum.stdout == _squid_manifest_local.stat.checksum
+
+- name: "Upload tarball + manifest"
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/tmp/{{ item | basename }}"
+    mode: "0600"
+  loop:
+    - /tmp/ai-ops-squid-policy.tar.gz
+    - /tmp/ai-ops-squid-manifest.txt
+  when:
+    - ai_ops_mode != "plan"
+    - _squid_remote_manifest_sum.stdout != _squid_manifest_local.stat.checksum
+
+- name: "Extract policy tree on remote"
+  ansible.builtin.shell: |
+    set -e
+    mkdir -p "{{ ai_squid_remote_dir }}"
+    tar xzf /tmp/ai-ops-squid-policy.tar.gz -C "{{ ai_squid_remote_dir }}"
+    cp /tmp/ai-ops-squid-manifest.txt "{{ ai_squid_remote_dir }}/.manifest.txt"
+    rm -f /tmp/ai-ops-squid-policy.tar.gz /tmp/ai-ops-squid-manifest.txt
+  when:
+    - ai_ops_mode != "plan"
+    - _squid_remote_manifest_sum.stdout != _squid_manifest_local.stat.checksum
+
+- name: "Activate squid policy"
+  block:
+    - ansible.builtin.command: "{{ ai_activate_cmd }}"
+  rescue:
+    - name: "Report activation failure (no per-file rollback for tree deploys)"
+      ansible.builtin.fail:
+        msg: >-
+          Squid activation failed after tarball extract. The remote tree and
+          .manifest.txt are consistent with the new policy; investigate and
+          either retry or redeploy the previous local policy.
+  when:
+    - ai_ops_mode != "plan"
+    - ai_activate_cmd is defined
+    - _squid_remote_manifest_sum.stdout != _squid_manifest_local.stat.checksum

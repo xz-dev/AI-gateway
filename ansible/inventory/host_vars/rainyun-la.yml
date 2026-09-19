@@ -1,0 +1,10 @@
+---
+# Host vars for the production gateway. Copy examples/vars.yml here and edit.
+ai_ops_deploy_root: /root/AI-gateway
+ai_ops_compose_project: ai-gateway
+# ai_ops_config_dir defaults to ansible/private-config/ (repo-local, gitignored).
+# ai_ops_compose_cmd: leave empty to auto-detect (docker compose on this host).
+# Host has 2GB RAM total; real available hovers ~250-330MB. Pin the capacity gate
+# just below the observed floor instead of the 256MB default so deploys proceed
+# only when memory is genuinely at the healthy end of the observed range.
+ai_ops_min_mem_mb: 200

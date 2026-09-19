@@ -1,0 +1,336 @@
+---
+# Single entry point for all push-model operations.
+# Select the operation with tags:
+#   ansible-playbook ops.yml --tags deploy        -e service=cli-proxy-api [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags deploy-squid  [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags deploy-aisix  [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags rollback      -e service=cli-proxy-api
+#
+# Push model: local private config (ai_ops_config_dir) is the source of truth;
+# Ansible uploads + activates, never constructs configuration on the remote.
+# Role defaults in roles/ai_ops/defaults/main.yml; override in inventory/.
+
+- name: AI-gateway operations
+  hosts: gateway
+  gather_facts: false
+  roles:
+    - role: ai_ops  # declared play-level so its defaults/main.yml apply to pre_tasks too
+  vars:
+    _compose: >-
+      {{ ai_ops_compose_cmd }} -p {{ ai_ops_compose_project }}
+      -f {{ ai_ops_deploy_root }}/compose.yaml
+      -f {{ ai_ops_deploy_root }}/compose.override.yaml
+      --env-file {{ ai_ops_deploy_root }}/.env
+
+  pre_tasks:
+    - name: Require service parameter for component operations
+      ansible.builtin.assert:
+        that:
+          - service is defined
+          - service in ai_ops_profiles.keys()
+        fail_msg: "pass -e service=<name> (supported: {{ ai_ops_profiles.keys() | join(', ') }})"
+      when: "'deploy' in ansible_run_tags or 'rollback' in ansible_run_tags"
+      tags: [deploy, rollback]
+
+    - name: Preflight
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: preflight
+        apply:
+          tags: [always]
+      tags: [always]
+
+    # ---- deploy (component) preflight additions ----
+    - name: Capacity gate (memory/disk, no tuning)
+      ansible.builtin.shell: |
+        set -e
+        avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+        disk_mb=$(df -m "{{ ai_ops_deploy_root }}" | awk 'NR==2 {print $4}')
+        echo "mem_available_mb=${avail_mb} disk_free_mb=${disk_mb}"
+      register: _capacity
+      changed_when: false
+      tags: [deploy]
+
+    - name: Show capacity
+      ansible.builtin.debug:
+        var: _capacity.stdout
+      tags: [deploy]
+
+    - name: Capacity gate blocks apply below thresholds
+      ansible.builtin.shell: |
+        avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+        disk_mb=$(df -m "{{ ai_ops_deploy_root }}" | awk 'NR==2 {print $4}')
+        [ "$avail_mb" -ge "{{ ai_ops_min_mem_mb }}" ] || { echo "insufficient memory: ${avail_mb}MB"; exit 1; }
+        [ "$disk_mb" -ge "{{ ai_ops_min_disk_mb }}" ] || { echo "insufficient disk: ${disk_mb}MB"; exit 1; }
+        echo "capacity ok"
+      when: ai_ops_mode != "plan"
+      changed_when: false
+      tags: [deploy]
+
+    # ---- deploy-squid preflight additions: local render + pinned parse check ----
+    - name: Render policy locally into staging
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../scripts/render-egress-policy.py
+        {{ ai_ops_config_dir }}/data/egress-proxy/policy.json
+        {{ _squid_staging }}
+      delegate_to: localhost
+      vars:
+        _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
+      tags: [deploy-squid]
+
+    - name: Generate throwaway CA for offline parse validation
+      ansible.builtin.shell: >
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=ops-validation
+        -addext basicConstraints=critical,CA:TRUE
+        -addext keyUsage=critical,keyCertSign,cRLSign
+        -keyout {{ _squid_staging }}/ca.key -out {{ _squid_staging }}/ca.crt 2>/dev/null
+        && chmod 644 {{ _squid_staging }}/ca.key {{ _squid_staging }}/ca.crt
+      delegate_to: localhost
+      changed_when: false
+      vars:
+        _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
+      tags: [deploy-squid]
+
+    - name: Validate rendered config with pinned Squid (k parse)
+      ansible.builtin.command: >
+        podman run --rm --entrypoint /usr/sbin/squid
+        -v {{ _squid_staging }}:/etc/squid/generated:ro
+        -v {{ _squid_staging }}/ca.crt:/etc/squid/ca.crt:ro
+        -v {{ _squid_staging }}/ca.key:/etc/squid/ca.key:ro
+        {{ ai_ops_squid_image }} -k parse -f /etc/squid/generated/squid.conf
+      delegate_to: localhost
+      register: _squid_parse
+      changed_when: false
+      vars:
+        _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
+      tags: [deploy-squid]
+
+    - name: Show parse result
+      ansible.builtin.debug:
+        var: _squid_parse.stderr_lines | default([]) + _squid_parse.stdout_lines
+      tags: [deploy-squid]
+
+    # ---- deploy-aisix preflight additions: local validation + orphan report ----
+    - name: Validate fallback-status contract
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../scripts/check-aisix-resource-policy.py
+        --yaml {{ ai_ops_config_dir }}/aisix/resources.yaml
+      delegate_to: localhost
+      tags: [deploy-aisix]
+
+    - name: Reject unverified literal retries=-1
+      ansible.builtin.shell: |
+        grep -nE 'retries:\s*-1' "{{ ai_ops_config_dir }}/aisix/resources.yaml" && exit 1 || true
+      delegate_to: localhost
+      register: _retry_guard
+      changed_when: false
+      failed_when: _retry_guard.rc != 0
+      tags: [deploy-aisix]
+
+    - name: Orphan report
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../scripts/ops/check-aisix-orphans.py
+        {{ ai_ops_config_dir }}/aisix/resources.yaml
+        --adopted '{{ ai_ops_adopted_direct_models | to_json }}'
+        --standalone '{{ ai_ops_standalone_retained | to_json }}'
+      delegate_to: localhost
+      register: _orphans
+      changed_when: false
+      tags: [deploy-aisix]
+
+    - name: Show orphan candidates (deletion requires explicit approval)
+      ansible.builtin.debug:
+        var: _orphans.stdout_lines
+      tags: [deploy-aisix]
+
+  tasks:
+    # ======================= deploy (component) =======================
+    - name: Deploy compose.yaml
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy]
+      vars:
+        ai_file_label: compose.yaml
+        ai_file_local: "{{ ai_ops_config_dir }}/compose.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.yaml"
+      tags: [deploy]
+
+    - name: Deploy compose.override.yaml
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy]
+      vars:
+        ai_file_label: compose.override.yaml
+        ai_file_local: "{{ ai_ops_config_dir }}/compose.override.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.override.yaml"
+      tags: [deploy]
+
+    - name: Deploy .env
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy]
+      vars:
+        ai_file_label: .env
+        ai_file_local: "{{ ai_ops_config_dir }}/.env"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/.env"
+      no_log: true  # .env may contain credentials; never log its content/diff
+      tags: [deploy]
+
+    - name: "Pull exact image for {{ service }}"
+      ansible.builtin.command: "{{ _compose }} pull {{ service }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy]
+
+    - name: "Recreate only {{ service }}"
+      ansible.builtin.command: "{{ _compose }} up -d --no-deps --no-build {{ service }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy]
+
+    - name: "Verify {{ service }} is running"
+      ansible.builtin.command: "{{ _compose }} ps --format json"
+      register: _svc_ps
+      changed_when: false
+      failed_when: _svc_ps.rc != 0
+      when: ai_ops_mode != "plan"
+      tags: [deploy]
+
+    - name: Show service status
+      ansible.builtin.debug:
+        var: _svc_ps.stdout_lines
+      when: ai_ops_mode != "plan"
+      tags: [deploy]
+
+    - name: "Assert {{ service }} appears in ps output"
+      ansible.builtin.assert:
+        that: service in (_svc_ps.stdout | string)
+        fail_msg: "{{ service }} not present in compose ps output"
+      when: ai_ops_mode != "plan"
+      tags: [deploy]
+
+    - name: Write sanitized receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-{{ service }}-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=component-deploy service={{ service }}
+          mode={{ ai_ops_mode }}
+          capacity={{ _capacity.stdout }}
+          compose_ps={{ _svc_ps.stdout | default('') }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy]
+
+    # ======================= deploy-squid =======================
+    # Tarball + manifest mechanism: one upload, one remote extract, drift gate
+    # checks the manifest over ALL generated files (~2 SSH round trips instead
+    # of ~900 for per-file checks at 177 files).
+    - name: Deploy rendered squid policy tree (squid.conf + policy-* files)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-squid-tree
+        apply:
+          tags: [deploy-squid]
+      vars:
+        ai_squid_staging: "{{ _squid_staging }}"
+        ai_squid_remote_dir: "{{ ai_ops_deploy_root }}/data/egress-proxy/generated"
+        ai_activate_cmd: "{{ _compose }} restart egress-proxy"
+        _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
+      tags: [deploy-squid]
+
+    # ======================= deploy-aisix =======================
+    - name: Deploy resources.yaml
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-aisix]
+      vars:
+        ai_file_label: aisix/resources.yaml
+        ai_file_local: "{{ ai_ops_config_dir }}/aisix/resources.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/aisix/resources.yaml"
+        ai_activate_cmd: "{{ _compose }} up -d --no-deps --no-build aisix"
+      tags: [deploy-aisix]
+
+    - name: Verify effective routes via Admin API (read-only, internal peer)
+      ansible.builtin.command: >
+        {{ _compose }} exec -T aisix-status-relay sh -c
+        'wget -qO- --header="Authorization: Bearer $AISIX_ADMIN_KEY" http://172.30.68.2:3002/admin/v1/models'
+      register: _aisix_models
+      changed_when: false
+      failed_when: false
+      when: ai_ops_mode != "plan"
+      no_log: true  # response may embed provider model names; keep receipt sanitized
+      tags: [deploy-aisix]
+
+    - name: Admin API check is optional until the pinned fixture proves it
+      ansible.builtin.debug:
+        msg: "admin API read skipped/failed (rc={{ _aisix_models.rc | default('n/a') }}); profile pending fixture proof"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-aisix]
+
+    - name: Receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-aisix-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=aisix-deploy mode={{ ai_ops_mode }}
+          orphan_candidates={{ (_orphans.stdout | from_json).orphan_candidates }}
+          admin_api_checked={{ _aisix_models.rc | default(1) == 0 }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-aisix]
+
+    # ======================= rollback =======================
+    - name: Rollback compose.yaml
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: rollback-file
+        apply:
+          tags: [rollback]
+      vars:
+        ai_file_label: compose.yaml
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.yaml"
+      tags: [rollback]
+
+    - name: Rollback compose.override.yaml
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: rollback-file
+        apply:
+          tags: [rollback]
+      vars:
+        ai_file_label: compose.override.yaml
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.override.yaml"
+      tags: [rollback]
+
+    - name: Rollback .env
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: rollback-file
+        apply:
+          tags: [rollback]
+      vars:
+        ai_file_label: .env
+        ai_file_remote: "{{ ai_ops_deploy_root }}/.env"
+      no_log: true
+      tags: [rollback]
+
+    - name: "Recreate {{ service }} with restored config"
+      ansible.builtin.command: "{{ _compose }} up -d --no-deps --no-build {{ service }}"
+      tags: [rollback]
+
+    - name: "Verify {{ service }} running after rollback"
+      ansible.builtin.command: "{{ _compose }} ps --format json"
+      register: _rb_ps
+      changed_when: false
+      tags: [rollback]
+
+    - name: Assert service present after rollback
+      ansible.builtin.assert:
+        that: service in (_rb_ps.stdout | string)
+        fail_msg: "{{ service }} not running after rollback"
+      tags: [rollback]

@@ -1,6 +1,8 @@
+---
 # Drift gate + upload + activate for one deploy-managed file.
-# Params (vars): ai_file_local, ai_file_remote, ai_file_label, ai_ops_mode (plan|apply),
+# Params (vars): ai_file_local, ai_file_remote, ai_file_label,
 #                ai_activate_cmd (optional shell command run after upload when changed).
+# Mode comes from role default ai_ops_mode (plan|apply).
 
 - name: "Baseline copy path"
   ansible.builtin.set_fact:
@@ -86,19 +88,20 @@
     dest: "{{ _ai_baseline }}"
     mode: "0600"
   when:
-    - not ai_ops_mode_plan
+    - ai_ops_mode != "plan"
+    - _ai_remote_stat.stat.exists
     - _ai_local_stat.stat.checksum == _ai_remote_stat.stat.checksum
     - not _ai_baseline_stat.stat.exists or _ai_baseline_stat.stat.checksum != _ai_local_stat.stat.checksum
 
-- name: "Stop here in plan mode"
-  ansible.builtin.meta: end_play
-  when: ai_ops_mode_plan
+# Apply-only section below. Plan mode skips the rest of this file for THIS file
+# (end_role would end the whole role; when-gating keeps later files' diffs visible).
 
 - name: "Ensure remote parent dir for {{ ai_file_label }}"
   ansible.builtin.file:
     path: "{{ ai_file_remote | dirname }}"
     state: directory
     mode: "0755"
+  when: ai_ops_mode != "plan"
 
 - name: "Save pre-deploy copy of {{ ai_file_label }}"
   ansible.builtin.copy:
@@ -106,7 +109,9 @@
     dest: "{{ _ai_predeploy }}"
     remote_src: true
     mode: preserve
-  when: _ai_remote_stat.stat.exists
+  when:
+    - ai_ops_mode != "plan"
+    - _ai_remote_stat.stat.exists
 
 - name: "Upload {{ ai_file_label }}"
   ansible.builtin.copy:
@@ -114,7 +119,9 @@
     dest: "{{ ai_file_remote }}"
     mode: preserve
   register: _ai_upload
-  when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+  when:
+    - ai_ops_mode != "plan"
+    - _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
 
 - name: "Activate {{ ai_file_label }}"
   block:
@@ -137,6 +144,7 @@
           Activation of {{ ai_file_label }} failed; pre-deploy copy restored and
           reactivation rc={{ _ai_recovery.rc | default('n/a') }}. Investigate before retrying.
   when:
+    - ai_ops_mode != "plan"
     - ai_activate_cmd is defined
     - _ai_upload is changed
 
@@ -145,4 +153,6 @@
     src: "{{ ai_file_local }}"
     dest: "{{ _ai_baseline }}"
     mode: "0600"
-  when: _ai_upload is changed
+  when:
+    - ai_ops_mode != "plan"
+    - _ai_upload is changed

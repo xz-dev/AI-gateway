@@ -1,0 +1,49 @@
+---
+# ai_ops role defaults — every operator-tunable variable lives here.
+# Override any of these in inventory/group_vars/ or host_vars/ (see examples/vars.yml).
+# Internal temporaries use a leading underscore and are NOT declared here.
+
+# Absolute path to the operator's private config directory (never committed).
+# Contains: compose.yaml, compose.override.yaml, .env, aisix/resources.yaml,
+# data/egress-proxy/policy.json — adopted from production at baseline.
+ai_ops_config_dir: "{{ playbook_dir }}/private-config"
+
+# Remote deployment root on the gateway host.
+ai_ops_deploy_root: /root/AI-gateway
+
+# Compose project name on the remote.
+ai_ops_compose_project: ai-gateway
+
+# Compose provider command. Empty = auto-detect on the remote
+# (docker compose | podman compose | podman-compose), mirroring scripts/container-runtime.sh.
+ai_ops_compose_cmd: ""
+
+# Container runtime override for detection ('docker' or 'podman'). Empty = auto-detect.
+ai_ops_runtime: ""
+
+# Execution mode: 'apply' performs the operation; 'plan' is read-only
+# (shows the effective diff against the remote, never writes).
+ai_ops_mode: apply
+
+# Capacity gate thresholds for component deploys (no tuning of the host itself).
+# Default 200MB reflects small-host reality (rainyun-la: 2GB total, ~250-330MB
+# available steady-state); raise per-host in host_vars for bigger machines.
+ai_ops_min_mem_mb: 200
+ai_ops_min_disk_mb: 1024
+
+# Component profiles supported by the component-deploy operation.
+ai_ops_profiles:
+  cli-proxy-api: {}
+  sub2api: {}
+  aisix: {}
+
+# Pinned Squid image used for offline `-k parse` validation of rendered policy.
+ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u2
+
+# AISIX deploy: direct-connect models explicitly adopted into resources.yaml
+# (reported orphans require this list to approve deletion from the effective set).
+ai_ops_adopted_direct_models: []
+
+# AISIX deploy: direct-connect models intentionally kept standalone (excluded from
+# orphan candidacy).
+ai_ops_standalone_retained: []

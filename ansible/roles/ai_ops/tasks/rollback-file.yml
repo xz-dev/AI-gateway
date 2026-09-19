@@ -1,3 +1,4 @@
+---
 # Rollback: upload the protected pre-deploy copy and reactivate.
 # Params: ai_file_label, ai_file_remote, ai_activate_cmd (optional).
 

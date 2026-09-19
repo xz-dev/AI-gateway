@@ -1,0 +1,5 @@
+---
+# ai_ops role entry point. The play-level `roles:` declaration exists so this
+# role's defaults/main.yml apply play-wide (pre_tasks included). Operation logic
+# lives in the sibling task files (preflight/deploy-file/rollback-file) and is
+# invoked via include_role + tasks_from under tags in ops.yml.

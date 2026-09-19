@@ -1,13 +1,10 @@
-# Shared preflight: auth, deploy root, state dir, drift gate helpers.
-# Expects: ai_ops_config_dir, ai_ops_deploy_root, ai_ops_compose_project.
-
-- name: Default plan flag (each playbook may pass -e ai_ops_mode=plan)
-  ansible.builtin.set_fact:
-    ai_ops_mode_plan: "{{ ai_ops_mode | default('apply') == 'plan' }}"
+---
+# Shared preflight: compose provider detection, connectivity, deploy root, state dir.
+# Variables come from this role's defaults/main.yml; override in inventory.
 
 - name: Detect Compose provider (mirrors scripts/container-runtime.sh)
   ansible.builtin.shell: |
-    runtime="{{ ai_ops_runtime | default('') }}"
+    runtime="{{ ai_ops_runtime }}"
     if [ -z "$runtime" ]; then
       if command -v docker >/dev/null && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then runtime=docker;
       elif command -v podman >/dev/null && podman info >/dev/null 2>&1; then runtime=podman;
@@ -19,10 +16,11 @@
     else echo 'no compose provider' >&2; exit 1; fi
   register: _ai_ops_compose
   changed_when: false
+  when: ai_ops_compose_cmd == ""
 
 - name: Set compose command (inventory override wins)
   ansible.builtin.set_fact:
-    ai_ops_compose_cmd: "{{ ai_ops_compose_cmd | default(_ai_ops_compose.stdout, true) }}"
+    ai_ops_compose_cmd: "{{ ai_ops_compose_cmd if ai_ops_compose_cmd != '' else _ai_ops_compose.stdout }}"
 
 - name: Show detected compose provider
   ansible.builtin.debug:
@@ -49,9 +47,10 @@
     path: "{{ ai_ops_deploy_root }}/.ai-ops-state"
     state: directory
     mode: "0700"
-  when: not ai_ops_mode_plan
+  when: ai_ops_mode != "plan"
 
 - name: Gather runtime versions
-  ansible.builtin.command: "{{ ai_ops_runtime | default('docker') }} version --format '{{ '{{' }} .Server.Version {{ '}}' }}'"
+  ansible.builtin.shell: "{{ ai_ops_runtime if ai_ops_runtime != '' else 'docker' }} version --format '{{ '{{' }} .Server.Version {{ '}}' }}'"
   register: ai_ops_runtime_version
   changed_when: false
+  failed_when: false
