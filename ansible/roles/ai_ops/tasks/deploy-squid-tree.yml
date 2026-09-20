@@ -14,8 +14,6 @@
     cd "{{ ai_squid_staging }}"
     tar czf /tmp/ai-ops-squid-policy.tar.gz --exclude='ca.*' .
     find . -type f ! -name 'ca.*' -print0 | sort -z | xargs -0 sha256sum > /tmp/ai-ops-squid-manifest.txt
-  args:
-    creates: /tmp/ai-ops-squid-manifest.txt
   delegate_to: localhost
   register: _squid_pack
   changed_when: true  # always repack to reflect current staging
