@@ -29,6 +29,9 @@ func main() {
 		_ = response.Body.Close()
 		return
 	}
+	if len(os.Args) == 3 && os.Args[1] == "validate-config" {
+		os.Exit(runValidateConfig(os.Args[2], os.Stdin, os.Stdout, os.Stderr))
+	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	catalogCacheTTL.Store(int64(5 * time.Minute))
 	catalogCacheMaxBytes.Store(64 << 20)

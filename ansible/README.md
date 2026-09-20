@@ -44,6 +44,14 @@ ansible-playbook ops.yml --tags deploy-model-sync \
 # Guarded model-sync rollback re-runs the old policy and proves CPA read-back.
 ansible-playbook ops.yml --tags rollback-model-sync
 
+# Models-enricher config: validate candidate with the deployed binary, then
+# force-recreate only models-enricher and verify digest + readiness.
+ansible-playbook ops.yml --tags deploy-models-enricher-config -e ai_ops_mode=plan
+ansible-playbook ops.yml --tags deploy-models-enricher-config
+
+# Guarded models-enricher rollback restores the protected YAML and proves readiness.
+ansible-playbook ops.yml --tags rollback-models-enricher-config
+
 # rollback last deploy of a component's file set
 ansible-playbook ops.yml --tags rollback -e service=cli-proxy-api
 
@@ -71,6 +79,7 @@ defaults. Key ones:
 | `ai_ops_model_sync_approved_digest` | `""` | exact digest printed by the reviewed model-sync plan; required when the policy changes |
 | `ai_ops_model_sync_verify_retries` / `ai_ops_model_sync_verify_delay_seconds` | `30` / `2` | bounded wait for the recreated sidecar's immediate round |
 | `ai_ops_model_sync_log_tail` | `200` | maximum current-container log lines parsed for the round summary |
+| `ai_ops_models_enricher_verify_retries` / `ai_ops_models_enricher_verify_delay_seconds` | `30` / `2` | bounded wait for the recreated models-enricher readiness |
 | `ai_ops_adopted_direct_models` / `ai_ops_standalone_retained` | `[]` | AISIX orphan-report approval/exclusion lists |
 
 ## Drift gate
@@ -103,6 +112,27 @@ digest equals the approved desired-set digest. Failure restores the old policy,
 recreates the sidecar, and proves recovery against the pre-apply current-set
 digest; an unproven recovery is reported as failure, never success.
 
+## Models-enricher config safety
+
+`deploy-models-enricher-config` requires a running validation-capable
+models-enricher image (one that provides `validate-config`) before the first
+managed config change. First adopt the reviewed live
+`models-enricher/config.yaml` into the ignored private path
+`ansible/private-config/models-enricher/config.yaml`; when local and remote
+bytes match, apply establishes the baseline without recreating the service.
+
+For a changed config, plan mode streams local YAML to
+`models-enricher validate-config -` inside the running container — the same
+`loadConfig` path used at startup (YAML, required fields, provider prefixes,
+source tokens, regexes) — and shows the effective file diff. Apply revalidates,
+uploads, and force-recreates only `models-enricher` (`--no-deps --no-build`),
+then requires a fresh container on the same image whose mounted `/app/config.yaml`
+digest matches the candidate, whose `healthcheck` becomes ready within bounded
+retries, and whose namespace owner and adjacent relay container IDs stayed
+unchanged. Failure restores the protected pre-deploy YAML, recreates the
+sidecar, and proves the restored digest plus readiness; an unproven recovery is
+reported as recovery-required, never success.
+
 ## Operational notes
 
 - **AISIX loads `resources.yaml` only at startup.** Because it is a bind mount, a
@@ -110,6 +140,10 @@ digest; an unproven recovery is reported as failure, never success.
   `up -d` no-ops. `deploy-aisix` therefore activates with `--force-recreate`.
   Fixture tests miss this (fixture containers are freshly created); caught live
   on rainyun-la 2026-09-19.
+- **models-enricher loads `config.yaml` only at startup**, so config deploys
+  use the same `--force-recreate` activation; the tracked
+  `models-enricher/config.yaml` is an image/build default — production desired
+  state lives only in the gitignored private config dir.
 - **The post-deploy Admin API route check is optional** (`failed_when: false`):
   the internal relay path currently returns 401, so effective-route verification
   is pending a working credential path. Until then, verify via

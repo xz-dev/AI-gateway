@@ -8,6 +8,7 @@
 # --- Locations -------------------------------------------------------------
 # Private config directory: compose.yaml, compose.override.yaml, .env,
 # aisix/resources.yaml, cpa-model-sync/config.json,
+# models-enricher/config.yaml,
 # data/egress-proxy/policy.json (adopted from production).
 # Default: <repo>/ansible/private-config/ (gitignored). Override only if the
 # directory must live outside the repo.
@@ -54,6 +55,12 @@ ai_ops_compose_project: ai-gateway
 # ai_ops_model_sync_verify_delay_seconds: 2
 # Maximum current-container log lines searched for its aggregate summary.
 # ai_ops_model_sync_log_tail: 200
+
+# --- Models-enricher config ------------------------------------------------
+# Bounded wait for the recreated container's /readyz readiness after a
+# config-only force-recreate. Raise on slow hosts.
+# ai_ops_models_enricher_verify_retries: 30
+# ai_ops_models_enricher_verify_delay_seconds: 2
 
 # --- Squid ------------------------------------------------------------------
 # Pinned image used for offline `-k parse` validation of rendered policy.
