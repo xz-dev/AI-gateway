@@ -1,86 +1,15 @@
 ---
 # Drift gate + upload + activate for one deploy-managed file.
 # Params (vars): ai_file_local, ai_file_remote, ai_file_label,
-#                ai_activate_cmd (optional shell command run after upload when changed).
+#                ai_activate_cmd (optional shell command run after upload when changed),
+#                ai_verify_tasks (optional role task file run before baseline update),
+#                ai_verify_expected_* / ai_recovery_expected_* (task inputs),
+#                ai_failure_receipt_path/content (optional rescue receipt),
+#                ai_file_mode (optional explicit upload mode; "preserve" by default).
 # Mode comes from role default ai_ops_mode (plan|apply).
 
-- name: "Baseline copy path"
-  ansible.builtin.set_fact:
-    _ai_baseline: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_file_label | replace('/', '__') }}.baseline"
-    _ai_predeploy: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_file_label | replace('/', '__') }}.predeploy"
-
-- name: "Read remote current checksum of {{ ai_file_label }}"
-  ansible.builtin.stat:
-    path: "{{ ai_file_remote }}"
-    checksum_algorithm: sha256
-  register: _ai_remote_stat
-
-- name: "Read baseline checksum of {{ ai_file_label }}"
-  ansible.builtin.stat:
-    path: "{{ _ai_baseline }}"
-    checksum_algorithm: sha256
-  register: _ai_baseline_stat
-
-- name: "Read local file checksum"
-  ansible.builtin.stat:
-    path: "{{ ai_file_local }}"
-    checksum_algorithm: sha256
-  delegate_to: localhost
-  register: _ai_local_stat
-
-- name: "Drift gate for {{ ai_file_label }}"
-  ansible.builtin.fail:
-    msg: >-
-      Remote {{ ai_file_label }} changed since last deploy
-      (remote={{ _ai_remote_stat.stat.checksum }} baseline={{ _ai_baseline_stat.stat.checksum }}).
-      Show the diff, adopt changes into the local file, or reconcile manually. Nothing was uploaded.
-  when:
-    - _ai_remote_stat.stat.exists
-    - _ai_baseline_stat.stat.exists
-    - _ai_remote_stat.stat.checksum != _ai_baseline_stat.stat.checksum
-    # remote matches local file = operator already adopted it; refresh baseline below
-    - _ai_remote_stat.stat.checksum != _ai_local_stat.stat.checksum
-
-- name: "Fetch remote copy for diff when content differs"
-  ansible.builtin.slurp:
-    src: "{{ ai_file_remote }}"
-  register: _ai_remote_slurp
-  no_log: true
-  when:
-    - _ai_remote_stat.stat.exists
-    - _ai_remote_stat.stat.checksum != _ai_local_stat.stat.checksum
-
-- name: "Show effective diff (local vs remote)"
-  ansible.builtin.shell: >
-    printf '%s' '{{ (_ai_remote_slurp.content | default('') | b64decode) if _ai_remote_stat.stat.exists else '' }}'
-    > /tmp/ai-ops-diff-remote.$$ &&
-    diff -u /tmp/ai-ops-diff-remote.$$ {{ ai_file_local }};
-    rc=$?; rm -f /tmp/ai-ops-diff-remote.$$; exit $rc
-  delegate_to: localhost
-  register: ai_file_diff
-  changed_when: false
-  failed_when: ai_file_diff.rc > 1
-  check_mode: false
-  no_log: "{{ ai_file_label == '.env' }}"
-  when:
-    - _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-
-- name: "Diff output"
-  ansible.builtin.debug:
-    var: ai_file_diff.stdout_lines
-  when:
-    - ai_file_diff is defined
-    - ai_file_diff.rc is defined
-    - ai_file_diff.rc == 1
-
-- name: "No effective change for {{ ai_file_label }}"
-  ansible.builtin.debug:
-    msg: "{{ ai_file_label }}: no effective change"
-  when:
-    - _ai_remote_stat.stat.exists
-    - _ai_remote_stat.stat.checksum == _ai_local_stat.stat.checksum
-    - _ai_baseline_stat.stat.exists
-    - _ai_local_stat.stat.checksum == _ai_baseline_stat.stat.checksum
+- name: "Prepare {{ ai_file_label }}"
+  ansible.builtin.include_tasks: prepare-file.yml
 
 - name: "Adopt matching remote into baseline (remote == local, baseline stale or missing)"
   ansible.builtin.copy:
@@ -117,7 +46,7 @@
   ansible.builtin.copy:
     src: "{{ ai_file_local }}"
     dest: "{{ ai_file_remote }}"
-    mode: preserve
+    mode: "{{ ai_file_mode | default('preserve') }}"
   register: _ai_upload
   when:
     - ai_ops_mode != "plan"
@@ -125,24 +54,51 @@
 
 - name: "Activate {{ ai_file_label }}"
   block:
-    - ansible.builtin.command: "{{ ai_activate_cmd }}"
+    - name: "Run activation command for {{ ai_file_label }}"
+      ansible.builtin.command: "{{ ai_activate_cmd }}"
+    - name: "Verify activated {{ ai_file_label }}"
+      ansible.builtin.include_tasks: "{{ ai_verify_tasks }}"
+      vars:
+        _ai_verify_expected_policy_digest: "{{ ai_verify_expected_policy_digest }}"
+        _ai_verify_expected_state_digest: "{{ ai_verify_expected_state_digest }}"
+        _ai_verify_expected_image_identity: "{{ ai_verify_expected_image_identity }}"
+      when: ai_verify_tasks is defined
   rescue:
     - name: "Activation failed: restore pre-deploy copy of {{ ai_file_label }}"
       ansible.builtin.copy:
         src: "{{ _ai_predeploy }}"
         dest: "{{ ai_file_remote }}"
         remote_src: true
-        mode: preserve
+        mode: "{{ ai_file_mode | default('preserve') }}"
       when: _ai_remote_stat.stat.exists
     - name: "Reactivate restored {{ ai_file_label }}"
       ansible.builtin.command: "{{ ai_activate_cmd }}"
       failed_when: false
       register: _ai_recovery
+    - name: "Verify restored {{ ai_file_label }}"
+      block:
+        - ansible.builtin.include_tasks: "{{ ai_verify_tasks }}"
+          vars:
+            _ai_verify_expected_policy_digest: "{{ ai_recovery_expected_policy_digest }}"
+            _ai_verify_expected_state_digest: "{{ ai_recovery_expected_state_digest }}"
+            _ai_verify_expected_image_identity: "{{ ai_recovery_expected_image_identity }}"
+      rescue:
+        - ansible.builtin.set_fact:
+            _ai_recovery_verify_failed: true
+      when: ai_verify_tasks is defined
+    - name: "Record failed activation/recovery receipt"
+      ansible.builtin.copy:
+        dest: "{{ ai_failure_receipt_path }}"
+        mode: "0600"
+        content: "{{ ai_failure_receipt_content }}"
+      when: ai_failure_receipt_path is defined and ai_failure_receipt_content is defined
     - name: "Report recovery outcome and fail"
       ansible.builtin.fail:
         msg: >-
-          Activation of {{ ai_file_label }} failed; pre-deploy copy restored and
-          reactivation rc={{ _ai_recovery.rc | default('n/a') }}. Investigate before retrying.
+          Activation/verification of {{ ai_file_label }} failed; pre-deploy copy restored,
+          reactivation rc={{ _ai_recovery.rc | default('n/a') }},
+          recovery verification={{ 'failed' if _ai_recovery_verify_failed | default(false) else 'passed' }}.
+          Investigate before retrying.
   when:
     - ai_ops_mode != "plan"
     - ai_activate_cmd is defined

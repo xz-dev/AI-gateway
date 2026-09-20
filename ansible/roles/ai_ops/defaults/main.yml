@@ -5,7 +5,7 @@
 
 # Absolute path to the operator's private config directory (never committed).
 # Contains: compose.yaml, compose.override.yaml, .env, aisix/resources.yaml,
-# data/egress-proxy/policy.json — adopted from production at baseline.
+# cpa-model-sync/config.json, data/egress-proxy/policy.json — adopted from production at baseline.
 ai_ops_config_dir: "{{ playbook_dir }}/private-config"
 
 # Remote deployment root on the gateway host.
@@ -37,6 +37,20 @@ ai_ops_profiles:
   sub2api: {}
   aisix: {}
   cloudflared: {}
+  # Production uses an archive-preloaded localhost image; component deploy must
+  # not contact a registry for this service.
+  cpa-model-sync:
+    pull: false
+
+# Model-sync deploy: exact preview digest approved from ai_ops_mode=plan.
+ai_ops_model_sync_approved_digest: ""
+
+# Model-sync verification waits this many attempts for the immediate first round.
+ai_ops_model_sync_verify_retries: 30
+ai_ops_model_sync_verify_delay_seconds: 2
+
+# Maximum current-container log lines examined for the first round summary.
+ai_ops_model_sync_log_tail: 200
 
 # Pinned Squid image used for offline `-k parse` validation of rendered policy.
 ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u2

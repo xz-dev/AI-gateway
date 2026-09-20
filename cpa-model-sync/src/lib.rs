@@ -367,6 +367,107 @@ pub fn discover_prefixes(
     discover_prefixes_with_options(cpa_url, management_key, kind, &RequestOptions::default())
 }
 
+fn compile_filters(filter: &Filter) -> Result<(Vec<Regex>, Vec<Regex>)> {
+    let include = filter
+        .include
+        .iter()
+        .map(|s| Regex::new(s).map_err(|_| "invalid include regex"))
+        .collect::<Result<Vec<_>>>()?;
+    let exclude = filter
+        .exclude
+        .iter()
+        .map(|s| Regex::new(s).map_err(|_| "invalid exclude regex"))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((include, exclude))
+}
+
+pub fn validate_filter(filter: &Filter) -> Result<()> {
+    compile_filters(filter).map(|_| ())
+}
+
+fn filtered_models(source: &[String], filter: &Filter) -> Result<Vec<Value>> {
+    let (include, exclude) = compile_filters(filter)?;
+    let desired: Vec<Value> = source
+        .iter()
+        .filter(|id| {
+            (include.is_empty() || include.iter().any(|r| r.is_match(id)))
+                && !exclude.iter().any(|r| r.is_match(id))
+        })
+        .map(|id| json!({"name":id,"alias":id}))
+        .collect();
+    canonical_models(&json!(desired))
+}
+
+fn model_ids(models: &[Value]) -> Result<Vec<String>> {
+    let mut ids = models
+        .iter()
+        .map(|model| nonempty(&model["name"]).map(str::to_owned))
+        .collect::<Result<Vec<_>>>()?;
+    ids.sort();
+    Ok(ids)
+}
+
+fn prepare_channel(
+    cpa: &Cpa<'_>,
+    kind: &str,
+    prefix: &str,
+    client_version: &str,
+    filter: &Filter,
+) -> Result<(Value, Value, Vec<String>, Vec<Value>)> {
+    compile_filters(filter)?;
+    let (entry, selector) = cpa.target(kind, prefix)?;
+    let mut source = retry(cpa.options, || {
+        inventory(cpa, kind, &entry, client_version, filter.path.as_deref())
+    })?;
+    source.sort();
+    let desired = filtered_models(&source, filter)?;
+    Ok((entry, selector, source, desired))
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ChannelPreview {
+    pub current: Vec<String>,
+    pub source: Vec<String>,
+    pub desired: Vec<String>,
+}
+
+pub fn current_models_with_options(
+    cpa_url: &str,
+    management_key: &str,
+    kind: &str,
+    prefix: &str,
+    options: &RequestOptions,
+) -> Result<Vec<String>> {
+    if !MANAGED_KINDS.contains(&kind) {
+        return Err("unmanaged channel kind");
+    }
+    options.validate()?;
+    let cpa = Cpa::new(cpa_url, management_key, options);
+    let (entry, _) = cpa.target(kind, prefix)?;
+    model_ids(&canonical_models(&entry["models"])?)
+}
+
+pub fn preview_channel_with_options(
+    cpa_url: &str,
+    management_key: &str,
+    kind: &str,
+    prefix: &str,
+    client_version: &str,
+    filter: &Filter,
+    options: &RequestOptions,
+) -> Result<ChannelPreview> {
+    if !MANAGED_KINDS.contains(&kind) {
+        return Err("unmanaged channel kind");
+    }
+    let cpa = Cpa::new(cpa_url, management_key, options);
+    let (entry, _, source, desired) = prepare_channel(&cpa, kind, prefix, client_version, filter)?;
+    Ok(ChannelPreview {
+        current: model_ids(&canonical_models(&entry["models"])?)?,
+        source,
+        desired: model_ids(&desired)?,
+    })
+}
+
 pub fn sync_channel_with_options(
     cpa_url: &str,
     management_key: &str,
@@ -379,30 +480,9 @@ pub fn sync_channel_with_options(
     if !MANAGED_KINDS.contains(&kind) {
         return Err("unmanaged channel kind");
     }
-    let include = filter
-        .include
-        .iter()
-        .map(|s| Regex::new(s).map_err(|_| "invalid include regex"))
-        .collect::<Result<Vec<_>>>()?;
-    let exclude = filter
-        .exclude
-        .iter()
-        .map(|s| Regex::new(s).map_err(|_| "invalid exclude regex"))
-        .collect::<Result<Vec<_>>>()?;
     options.validate()?;
     let cpa = Cpa::new(cpa_url, management_key, options);
-    let (entry, selector) = cpa.target(kind, prefix)?;
-    let desired: Vec<Value> = retry(options, || {
-        inventory(&cpa, kind, &entry, client_version, filter.path.as_deref())
-    })?
-    .into_iter()
-    .filter(|id| {
-        (include.is_empty() || include.iter().any(|r| r.is_match(id)))
-            && !exclude.iter().any(|r| r.is_match(id))
-    })
-    .map(|id| json!({"name":id,"alias":id}))
-    .collect();
-    let desired = canonical_models(&json!(desired))?;
+    let (_, selector, _, desired) = prepare_channel(&cpa, kind, prefix, client_version, filter)?;
     let _writer = CPA_WRITER.lock().map_err(|_| "CPA writer unavailable")?;
     let (current, current_selector) = cpa.target(kind, prefix)?;
     if current_selector != selector {

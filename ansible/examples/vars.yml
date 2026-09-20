@@ -7,7 +7,8 @@
 
 # --- Locations -------------------------------------------------------------
 # Private config directory: compose.yaml, compose.override.yaml, .env,
-# aisix/resources.yaml, data/egress-proxy/policy.json (adopted from production).
+# aisix/resources.yaml, cpa-model-sync/config.json,
+# data/egress-proxy/policy.json (adopted from production).
 # Default: <repo>/ansible/private-config/ (gitignored). Override only if the
 # directory must live outside the repo.
 # ai_ops_config_dir: /some/external/path
@@ -39,6 +40,20 @@ ai_ops_compose_project: ai-gateway
 #   cli-proxy-api: {}
 #   sub2api: {}
 #   aisix: {}
+#   cloudflared: {}
+#   # Archive-preloaded localhost image; skip registry pull after loading it.
+#   cpa-model-sync:
+#     pull: false
+
+# --- Model sync -------------------------------------------------------------
+# Exact approval digest printed by --tags deploy-model-sync in plan mode.
+# Leave empty until every per-channel addition/removal has been reviewed.
+# ai_ops_model_sync_approved_digest: ""
+# Bounded wait for the recreated sidecar's immediate first round.
+# ai_ops_model_sync_verify_retries: 30
+# ai_ops_model_sync_verify_delay_seconds: 2
+# Maximum current-container log lines searched for its aggregate summary.
+# ai_ops_model_sync_log_tail: 200
 
 # --- Squid ------------------------------------------------------------------
 # Pinned image used for offline `-k parse` validation of rendered policy.

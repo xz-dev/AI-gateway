@@ -3,8 +3,10 @@
 # Select the operation with tags:
 #   ansible-playbook ops.yml --tags deploy        -e service=cli-proxy-api [-e ai_ops_mode=plan]
 #   ansible-playbook ops.yml --tags deploy-squid  [-e ai_ops_mode=plan]
-#   ansible-playbook ops.yml --tags deploy-aisix  [-e ai_ops_mode=plan]
-#   ansible-playbook ops.yml --tags rollback      -e service=cli-proxy-api
+#   ansible-playbook ops.yml --tags deploy-aisix      [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags deploy-model-sync  [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags rollback-model-sync
+#   ansible-playbook ops.yml --tags rollback           -e service=cli-proxy-api
 #
 # Push model: local private config (ai_ops_config_dir) is the source of truth;
 # Ansible uploads + activates, never constructs configuration on the remote.
@@ -16,6 +18,7 @@
   roles:
     - role: ai_ops  # declared play-level so its defaults/main.yml apply to pre_tasks too
   vars:
+    _runtime: "{{ ai_ops_runtime if ai_ops_runtime != '' else (ai_ops_compose_cmd.split() | first) }}"
     _compose: >-
       {{ ai_ops_compose_cmd }} -p {{ ai_ops_compose_project }}
       -f {{ ai_ops_deploy_root }}/compose.yaml
@@ -143,6 +146,114 @@
         var: _orphans.stdout_lines
       tags: [deploy-aisix]
 
+    # ---- deploy-model-sync preflight: drift gate + read-only live preview ----
+    - name: Prepare model-sync policy
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: prepare-file
+        apply:
+          tags: [deploy-model-sync]
+      vars:
+        ai_file_label: cpa-model-sync/config.json
+        ai_file_local: "{{ ai_ops_config_dir }}/cpa-model-sync/config.json"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/cpa-model-sync/config.json"
+      tags: [deploy-model-sync]
+
+    - name: Read current cpa-model-sync container ID
+      ansible.builtin.command: "{{ _compose }} ps -q cpa-model-sync"
+      register: _model_sync_plan_container
+      changed_when: false
+      failed_when: _model_sync_plan_container.rc != 0 or _model_sync_plan_container.stdout | trim == ""
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Read current cpa-model-sync image identity
+      ansible.builtin.command: >-
+        {{ _runtime }} inspect --format={{ '{{' }}.Image{{ '}}' }}
+        {{ _model_sync_plan_container.stdout | trim }}
+      register: _model_sync_plan_image
+      changed_when: false
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Require current cpa-model-sync image identity
+      ansible.builtin.assert:
+        that:
+          - _model_sync_plan_image.stdout | trim != ""
+        fail_msg: cpa-model-sync image identity is unavailable; preview approval cannot be bound.
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Read candidate policy locally
+      ansible.builtin.slurp:
+        src: "{{ ai_ops_config_dir }}/cpa-model-sync/config.json"
+      delegate_to: localhost
+      register: _model_sync_candidate
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Preview candidate against live CPA without PATCH
+      ansible.builtin.shell: >-
+        {{ _compose }} exec -T cpa-model-sync env
+        CPA_MODEL_SYNC_IMAGE_IDENTITY={{ _model_sync_plan_image.stdout | trim | quote }}
+        /usr/local/bin/cpa-model-sync --preview -
+      args:
+        stdin: "{{ _model_sync_candidate.content | b64decode }}"
+        stdin_add_newline: false
+        executable: /bin/sh
+      register: _model_sync_preview_raw
+      changed_when: false
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Parse model-sync preview
+      ansible.builtin.set_fact:
+        _model_sync_preview: "{{ _model_sync_preview_raw.stdout | from_json }}"
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Show model-sync approval identity
+      ansible.builtin.debug:
+        msg:
+          approval_digest: "{{ _model_sync_preview.approval_digest }}"
+          policy_digest: "{{ _model_sync_preview.policy_digest }}"
+          image_identity: "{{ _model_sync_preview.image_identity }}"
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Show model-sync channel additions and removals
+      ansible.builtin.debug:
+        msg:
+          kind: "{{ item.kind }}"
+          prefix: "{{ item.prefix }}"
+          skipped: "{{ item.skipped }}"
+          current_count: "{{ item.current_count }}"
+          desired_count: "{{ item.desired_count }}"
+          additions: "{{ item.additions }}"
+          removals: "{{ item.removals }}"
+      loop: "{{ _model_sync_preview.channels }}"
+      loop_control:
+        label: "{{ item.kind }}/{{ item.prefix }}"
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Require fresh approved model-sync preview for apply
+      ansible.builtin.assert:
+        that:
+          - ai_ops_model_sync_approved_digest | length > 0
+          - ai_ops_model_sync_approved_digest == _model_sync_preview.approval_digest
+        fail_msg: >-
+          Model-sync preview is not approved or became stale. Run plan mode, review every
+          addition/removal, then apply with
+          -e ai_ops_model_sync_approved_digest={{ _model_sync_preview.approval_digest }}
+      when:
+        - ai_ops_mode != "plan"
+        - _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
   tasks:
     # ======================= deploy (component) =======================
     - name: Deploy compose.yaml
@@ -184,7 +295,22 @@
 
     - name: "Pull exact image for {{ service }}"
       ansible.builtin.command: "{{ _compose }} pull {{ service }}"
-      when: ai_ops_mode != "plan"
+      when:
+        - ai_ops_mode != "plan"
+        - ai_ops_profiles[service].get('pull', true) | bool
+      tags: [deploy]
+
+    - name: "Require preloaded image for {{ service }}"
+      ansible.builtin.shell: |
+        set -e
+        image=$({{ _compose }} config --format json |
+          python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["{{ service }}"]["image"])')
+        {{ _runtime }} image inspect "$image" >/dev/null
+      register: _preloaded_image
+      changed_when: false
+      when:
+        - ai_ops_mode != "plan"
+        - not (ai_ops_profiles[service].get('pull', true) | bool)
       tags: [deploy]
 
     - name: "Recreate only {{ service }}"
@@ -286,6 +412,134 @@
           admin_api_checked={{ _aisix_models.rc | default(1) == 0 }}
       when: ai_ops_mode != "plan"
       tags: [deploy-aisix]
+
+    # ======================= deploy-model-sync =======================
+    - name: Deploy approved model-sync policy
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-model-sync]
+      vars:
+        ai_file_label: cpa-model-sync/config.json
+        ai_file_local: "{{ ai_ops_config_dir }}/cpa-model-sync/config.json"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/cpa-model-sync/config.json"
+        # The sidecar runs as 65534:65534 and reads the bind-mounted policy at
+        # startup; a restrictive local mode must never propagate to production.
+        ai_file_mode: "0644"
+        ai_activate_cmd: >-
+          {{ _compose }} up -d --force-recreate --no-deps --no-build cpa-model-sync
+        ai_verify_tasks: verify-model-sync.yml
+        ai_verify_expected_policy_digest: "{{ _model_sync_preview.policy_digest | default('') }}"
+        ai_verify_expected_state_digest: "{{ _model_sync_preview.desired_state_digest | default('') }}"
+        ai_verify_expected_image_identity: "{{ _model_sync_preview.image_identity | default('') }}"
+        ai_recovery_expected_policy_digest: "{{ _ai_remote_stat.stat.checksum | default('') }}"
+        ai_recovery_expected_state_digest: "{{ _model_sync_preview.current_state_digest | default('') }}"
+        ai_recovery_expected_image_identity: "{{ _model_sync_preview.image_identity | default('') }}"
+        ai_failure_receipt_path: >-
+          {{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-failed-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt
+        ai_failure_receipt_content: |
+          operation=model-sync-deploy mode={{ ai_ops_mode }}
+          approval_digest={{ _model_sync_preview.approval_digest | default('unknown') }}
+          candidate_policy_digest={{ _model_sync_preview.policy_digest | default('unknown') }}
+          recovery_policy_digest={{ ai_model_sync_verified_policy_digest | default('unknown') }}
+          recovery_state_digest={{ ai_model_sync_verified_state_digest | default('unknown') }}
+          recovery_verification={{ 'failed' if _ai_recovery_verify_failed | default(false) else 'passed' }}
+          outcome={{ 'recovery-required' if _ai_recovery_verify_failed | default(false) else 'candidate-failed-recovered' }}
+      tags: [deploy-model-sync]
+
+    - name: Preserve protected model-sync transition evidence
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-sync-transition.json"
+        mode: "0600"
+        content: >-
+          {{ {
+            'approval_digest': _model_sync_preview.approval_digest,
+            'policy_digest': _model_sync_preview.policy_digest,
+            'image_identity': _model_sync_preview.image_identity,
+            'current_state_digest': _model_sync_preview.current_state_digest,
+            'desired_state_digest': _model_sync_preview.desired_state_digest,
+            'channels': _model_sync_preview.channels
+          } | to_nice_json }}
+      no_log: true
+      when:
+        - ai_ops_mode != "plan"
+        - _ai_upload is changed
+      tags: [deploy-model-sync]
+
+    - name: Write sanitized model-sync receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=model-sync-deploy mode={{ ai_ops_mode }}
+          approval_digest={{ _model_sync_preview.approval_digest }}
+          policy_digest={{ ai_model_sync_verified_policy_digest }}
+          image_identity={{ ai_model_sync_verified_image }}
+          container_id={{ ai_model_sync_verified_container }}
+          state_digest={{ ai_model_sync_verified_state_digest }}
+          updated={{ ai_model_sync_summary.updated }}
+          unchanged={{ ai_model_sync_summary.unchanged }}
+          failed={{ ai_model_sync_summary.failed }}
+          unconfirmed={{ ai_model_sync_summary.unconfirmed }}
+          skipped={{ ai_model_sync_summary.skipped }}
+          {% for channel in _model_sync_preview.channels %}
+          channel={{ channel.kind }}/{{ channel.prefix }} current_count={{ channel.current_count }} desired_count={{ channel.desired_count }} current_digest={{ channel.current_digest }} desired_digest={{ channel.desired_digest }}
+          {% endfor %}
+          outcome=success
+      when:
+        - ai_ops_mode != "plan"
+        - _ai_upload is changed
+      tags: [deploy-model-sync]
+
+    # ======================= rollback-model-sync =======================
+    - name: Read protected model-sync transition evidence
+      ansible.builtin.slurp:
+        src: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-sync-transition.json"
+      register: _model_sync_transition_raw
+      no_log: true
+      tags: [rollback-model-sync]
+
+    - name: Parse protected model-sync transition evidence
+      ansible.builtin.set_fact:
+        _model_sync_transition: "{{ _model_sync_transition_raw.content | b64decode | from_json }}"
+      no_log: true
+      tags: [rollback-model-sync]
+
+    - name: Roll back model-sync policy and prove CPA recovery
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: rollback-file
+        apply:
+          tags: [rollback-model-sync]
+      vars:
+        ai_file_label: cpa-model-sync/config.json
+        ai_file_remote: "{{ ai_ops_deploy_root }}/cpa-model-sync/config.json"
+        ai_file_mode: "0644"
+        ai_activate_cmd: >-
+          {{ _compose }} up -d --force-recreate --no-deps --no-build cpa-model-sync
+        ai_verify_tasks: verify-model-sync.yml
+        ai_verify_expected_state_digest: "{{ _model_sync_transition.current_state_digest }}"
+        ai_verify_expected_image_identity: "{{ _model_sync_transition.image_identity }}"
+      tags: [rollback-model-sync]
+
+    - name: Write sanitized model-sync rollback receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-rollback-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=model-sync-rollback
+          policy_digest={{ ai_model_sync_verified_policy_digest }}
+          image_identity={{ ai_model_sync_verified_image }}
+          container_id={{ ai_model_sync_verified_container }}
+          state_digest={{ ai_model_sync_verified_state_digest }}
+          updated={{ ai_model_sync_summary.updated }}
+          unchanged={{ ai_model_sync_summary.unchanged }}
+          failed={{ ai_model_sync_summary.failed }}
+          unconfirmed={{ ai_model_sync_summary.unconfirmed }}
+          skipped={{ ai_model_sync_summary.skipped }}
+          outcome=success
+      tags: [rollback-model-sync]
 
     # ======================= rollback =======================
     - name: Rollback compose.yaml

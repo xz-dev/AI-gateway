@@ -1,6 +1,7 @@
 ---
 # Rollback: upload the protected pre-deploy copy and reactivate.
-# Params: ai_file_label, ai_file_remote, ai_activate_cmd (optional).
+# Params: ai_file_label, ai_file_remote, ai_activate_cmd (optional),
+#         ai_verify_tasks (optional), ai_verify_expected_* (optional).
 
 - name: "Rollback guard: remote still matches this deploy's output"
   ansible.builtin.set_fact:
@@ -33,6 +34,7 @@
 - name: "Verify pre-deploy copy exists"
   ansible.builtin.stat:
     path: "{{ _ai_predeploy }}"
+    checksum_algorithm: sha256
   register: _rb_pre
   failed_when: not _rb_pre.stat.exists
 
@@ -41,11 +43,19 @@
     src: "{{ _ai_predeploy }}"
     dest: "{{ ai_file_remote }}"
     remote_src: true
-    mode: preserve
+    mode: "{{ ai_file_mode | default('preserve') }}"
 
 - name: "Reactivate {{ ai_file_label }}"
   ansible.builtin.command: "{{ ai_activate_cmd }}"
   when: ai_activate_cmd is defined
+
+- name: "Verify rolled back {{ ai_file_label }}"
+  ansible.builtin.include_tasks: "{{ ai_verify_tasks }}"
+  vars:
+    _ai_verify_expected_policy_digest: "{{ _rb_pre.stat.checksum }}"
+    _ai_verify_expected_state_digest: "{{ ai_verify_expected_state_digest }}"
+    _ai_verify_expected_image_identity: "{{ ai_verify_expected_image_identity }}"
+  when: ai_verify_tasks is defined
 
 - name: "Restore baseline to pre-deploy content"
   ansible.builtin.copy:

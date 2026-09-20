@@ -15,7 +15,8 @@ Ansible never constructs configuration on the remote.
   `deploy-file` (drift gate + upload + activate), `rollback-file` (guarded restore).
 - `private-config/` — **gitignored** operator's private config directory
   (`compose.yaml`, `compose.override.yaml`, `.env`, `aisix/resources.yaml`,
-  `data/egress-proxy/policy.json`), adopted from production at baseline.
+  `cpa-model-sync/config.json`, `data/egress-proxy/policy.json`), adopted from
+  production at baseline.
 
 ## Usage
 
@@ -23,7 +24,8 @@ Ansible never constructs configuration on the remote.
 # plan (read-only: shows diff, no upload, no restart)
 ansible-playbook ops.yml --tags deploy -e service=cli-proxy-api -e ai_ops_mode=plan
 
-# component deploy
+# component deploy (registry-backed profiles pull first; archive-preloaded profiles
+# such as cpa-model-sync require the selected image to exist on the remote host)
 ansible-playbook ops.yml --tags deploy -e service=cli-proxy-api
 
 # Squid policy (local render + pinned `-k parse` validation, then upload + restart)
@@ -32,6 +34,15 @@ ansible-playbook ops.yml --tags deploy-squid
 
 # AISIX routes (orphan candidates are REPORTED only; delete locally then deploy)
 ansible-playbook ops.yml --tags deploy-aisix -e ai_ops_adopted_direct_models='["direct/a"]'
+
+# Model-sync policy: preview reads live CPA but never PATCHes/recreates/uploads.
+# Review every addition/removal and copy the printed digest into apply.
+ansible-playbook ops.yml --tags deploy-model-sync -e ai_ops_mode=plan
+ansible-playbook ops.yml --tags deploy-model-sync \
+  -e ai_ops_model_sync_approved_digest='<approved-digest>'
+
+# Guarded model-sync rollback re-runs the old policy and proves CPA read-back.
+ansible-playbook ops.yml --tags rollback-model-sync
 
 # rollback last deploy of a component's file set
 ansible-playbook ops.yml --tags rollback -e service=cli-proxy-api
@@ -57,11 +68,14 @@ defaults. Key ones:
 | `ai_ops_mode` | `apply` | `plan` = read-only diff |
 | `ai_ops_min_mem_mb` / `ai_ops_min_disk_mb` | `256` / `1024` | capacity gate thresholds |
 | `ai_ops_squid_image` | `ai-gateway-squid:6.13-2-deb13u2` | pinned image for offline parse validation |
+| `ai_ops_model_sync_approved_digest` | `""` | exact digest printed by the reviewed model-sync plan; required when the policy changes |
+| `ai_ops_model_sync_verify_retries` / `ai_ops_model_sync_verify_delay_seconds` | `30` / `2` | bounded wait for the recreated sidecar's immediate round |
+| `ai_ops_model_sync_log_tail` | `200` | maximum current-container log lines parsed for the round summary |
 | `ai_ops_adopted_direct_models` / `ai_ops_standalone_retained` | `[]` | AISIX orphan-report approval/exclusion lists |
 
 ## Drift gate
 
-Component deploys (`--tags deploy`, `deploy-aisix`) checksum each managed remote
+Component deploys (`--tags deploy`, `deploy-aisix`, `deploy-model-sync`) checksum each managed remote
 file against the recorded baseline (`.ai-ops-state/<file>.baseline`); a mismatch
 stops the deploy before any upload. Squid policy deploys (`--tags deploy-squid`)
 upload one tarball + a `sha256sum` manifest over all generated files; the drift
@@ -71,6 +85,23 @@ per-file checks (177 policy files would cost ~900 connections). If the remote wa
 edited by hand: review the shown diff/failing files, adopt the change into the
 local config, and re-run. Rollback likewise refuses to overwrite a remote file
 that changed independently after the deploy.
+
+## Model-sync policy safety
+
+`deploy-model-sync` requires a running preview-capable sidecar image before the
+first managed policy change. First adopt the reviewed live
+`cpa-model-sync/config.json` into the ignored private path; when local and remote
+bytes match, apply establishes the baseline without recreating the service.
+
+For a changed policy, plan mode streams local JSON to `cpa-model-sync --preview -`
+inside the existing container. Preview performs only CPA/source reads and prints
+complete per-channel additions/removals plus an approval digest. Apply recomputes
+that digest and stops before upload if the image, policy, channel identities,
+current model sets, or source inventories changed. After sidecar-only recreation,
+Ansible requires a successful immediate round and CPA read-back whose current-set
+digest equals the approved desired-set digest. Failure restores the old policy,
+recreates the sidecar, and proves recovery against the pre-apply current-set
+digest; an unproven recovery is reported as failure, never success.
 
 ## Operational notes
 

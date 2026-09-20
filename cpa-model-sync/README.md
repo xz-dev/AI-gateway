@@ -34,7 +34,20 @@ migration is implied by adding the service.
 Override `CPA_MODEL_SYNC_CONFIG` with a private policy file and optionally
 `CPA_MODEL_SYNC_IMAGE` with the built versioned image. The default mounts the
 example policy. Mounting a policy must not copy the provider inventory: CPA remains
-the source of providers and credentials.
+the source of providers and credentials. The binary also supports a read-only
+preview used by Ansible operations:
+
+```sh
+cat config.example.json | CPA_MANAGEMENT_KEY=... \
+  CPA_MODEL_SYNC_IMAGE_IDENTITY=<immutable-image-id> \
+  cpa-model-sync --preview -
+```
+
+Preview performs discovery and inventory reads but never PATCHes CPA. Its JSON
+contains complete per-channel additions/removals, counts, set digests, and one
+approval digest binding the policy bytes, image identity, current CPA sets,
+source inventories, and desired sets. The management key and upstream credentials
+are never emitted.
 
 ```json
 {
