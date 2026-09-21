@@ -35,7 +35,7 @@ run plan sync-squid-source
 [[ $(<"$tmp/remote/policy.json") == 'old source' ]]
 [[ ! -e "$tmp/activated" ]]
 run apply sync-squid-source
-! rg -q 'Build tarball|Extract policy tree|Activate squid policy' "$tmp/run.log"
+! rg -q 'Build tarball|Extract policy tree|Activate squid policy' "$tmp/run.log" || exit 1
 cmp "$tmp/private/data/egress-proxy/policy.json" "$tmp/remote/policy.json"
 [[ ! -e "$tmp/activated" ]]
 [[ $(stat -c '%a' "$tmp/remote/policy.json") == 600 ]]
