@@ -39,9 +39,10 @@ local ACTIVE_KEY = "active"
 local ACTIVE_LEASE_SECONDS = 660
 -- One shared key serializes every external models request across callers and workers.
 local MAX_INFLIGHT = 1
--- 槽位占满时短暂排队等待：构建已被边车缓存加速，占用窗口通常<2s，
--- 瞬时并发的请求等一拍比直接503重试更省一次往返。
-local ACQUIRE_WAIT_SECONDS = 4
+-- 槽位占满时阻塞等待：后续请求通常能命中 enricher 的 catalog flight 缓存
+-- （leader 一次构建，follower 直接取结果），等待即复用而非排队重做。
+-- 等待预算需覆盖 enricher 的 OverallDeadline(25s) 冷启动构建上限。
+local ACQUIRE_WAIT_SECONDS = 30
 local ACQUIRE_RETRY_DELAY = 0.1
 
 local ERROR_BODY =
