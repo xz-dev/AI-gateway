@@ -464,7 +464,7 @@
         ai_squid_remote_dir: "{{ ai_ops_deploy_root }}/data/egress-proxy/generated"
         ai_activate_cmd: "{{ _compose }} restart egress-proxy"
         _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
-      tags: [deploy-squid]
+      tags: [deploy-squid, sync-squid-source]
 
     # ======================= deploy-aisix =======================
     - name: Deploy resources.yaml

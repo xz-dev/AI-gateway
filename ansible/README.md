@@ -32,6 +32,11 @@ ansible-playbook ops.yml --tags deploy -e service=cli-proxy-api
 ansible-playbook ops.yml --tags deploy-squid -e ai_ops_mode=plan
 ansible-playbook ops.yml --tags deploy-squid
 
+# Repair only the stored source policy, without rendering/uploading the tree or restarting.
+# Requires an intact deployed manifest and matching source hash in deployed squid.conf.
+ansible-playbook ops.yml --tags sync-squid-source -e ai_ops_mode=plan
+ansible-playbook ops.yml --tags sync-squid-source
+
 # AISIX routes (orphan candidates are REPORTED only; delete locally then deploy)
 ansible-playbook ops.yml --tags deploy-aisix -e ai_ops_adopted_direct_models='["direct/a"]'
 

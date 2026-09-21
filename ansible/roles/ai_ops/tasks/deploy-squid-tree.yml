@@ -99,3 +99,33 @@
     - ai_ops_mode != "plan"
     - ai_activate_cmd is defined
     - _squid_remote_manifest_sum.stdout != _squid_manifest_local.stat.checksum
+
+# Keep the regeneration input aligned even when the rendered tree is unchanged.
+# Run only after the tree drift gate and any required activation have succeeded.
+- name: "Synchronize source squid policy"
+  tags: [sync-squid-source]
+  block:
+    - name: "Read authoritative squid policy checksum"
+      ansible.builtin.stat:
+        path: "{{ ai_ops_config_dir }}/data/egress-proxy/policy.json"
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      register: _squid_source
+      failed_when: not _squid_source.stat.exists
+
+    - name: "Verify deployed tree and source provenance before source sync"
+      ansible.builtin.shell: |
+        set -e
+        cd "{{ ai_squid_remote_dir }}"
+        grep -Fx -- '# policy-sha256: {{ _squid_source.stat.checksum }}' squid.conf
+        sha256sum -c .manifest.txt --quiet
+      changed_when: false
+      when: ai_ops_mode != "plan" or 'sync-squid-source' in ansible_run_tags
+
+    - name: "Copy source squid policy without activation"
+      ansible.builtin.copy:
+        src: "{{ ai_ops_config_dir }}/data/egress-proxy/policy.json"
+        dest: "{{ ai_squid_remote_dir | dirname }}/policy.json"
+        mode: "0600"
+        backup: true
+      when: ai_ops_mode != "plan"
