@@ -583,9 +583,10 @@ func firstCandidate(routing *routingConfig, statuses map[string]runtimeStatus) s
 	sort.SliceStable(targets, func(i, j int) bool {
 		return intOr(targets[i].Priority, 0) > intOr(targets[j].Priority, 0)
 	})
+	// Same clamp as fallbackBudget: max_fallbacks caps at len-1 later targets.
 	attempts := len(targets)
 	if routing.MaxFallbacks != nil {
-		attempts = min(attempts, max(0, *routing.MaxFallbacks)+1)
+		attempts = min(attempts, min(max(0, *routing.MaxFallbacks), max(0, len(targets)-1))+1)
 	}
 	targets = targets[:attempts]
 	for _, target := range targets {
@@ -601,11 +602,15 @@ func firstCandidate(routing *routingConfig, statuses map[string]runtimeStatus) s
 }
 
 func fallbackBudget(routing *routingConfig) string {
+	targets := len(routing.Targets)
 	if routing.MaxFallbacks == nil {
-		return fmt.Sprintf("all %d configured targets", len(routing.Targets))
+		return fmt.Sprintf("all %d configured targets", targets)
 	}
-	fallbacks := max(0, *routing.MaxFallbacks)
-	return fmt.Sprintf("%d fallbacks / %d attempts", fallbacks, min(len(routing.Targets), fallbacks+1))
+	// Mirror upstream max_fallbacks_or_default(): clamp to later targets first,
+	// then the attempt budget is clamped+1. Showing the raw configured value
+	// before clamping inflates the budget whenever targets-1 < max_fallbacks.
+	fallbacks := min(max(0, *routing.MaxFallbacks), max(0, targets-1))
+	return fmt.Sprintf("%d fallbacks / %d attempts", fallbacks, min(targets, fallbacks+1))
 }
 
 func statusDisplay(status runtimeStatus, exists bool, now time.Time) (string, string) {

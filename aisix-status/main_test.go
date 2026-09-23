@@ -358,3 +358,29 @@ func TestStatusFailureIsGenericAndSecretSafe(t *testing.T) {
 		t.Error("generic unavailable message missing")
 	}
 }
+
+func TestFallbackBudgetClampsToLaterTargets(t *testing.T) {
+	one, three, ninety := 1, 3, 99
+	cases := []struct {
+		name     string
+		targets  int
+		maxFb    *int
+		expected string
+	}{
+		{"nil means all targets", 5, nil, "all 5 configured targets"},
+		{"clamped to later targets", 1, &three, "0 fallbacks / 1 attempts"},
+		{"exact fit", 5, &one, "1 fallbacks / 2 attempts"},
+		{"overshoot clamps both", 4, &ninety, "3 fallbacks / 4 attempts"},
+		{"zero disables", 4, &[]int{0}[0], "0 fallbacks / 1 attempts"},
+	}
+	for _, tc := range cases {
+		routing := &routingConfig{MaxFallbacks: tc.maxFb}
+		for i := 0; i < tc.targets; i++ {
+			routing.Targets = append(routing.Targets, routingTarget{Model: "m"})
+		}
+		if got := fallbackBudget(routing); got != tc.expected {
+			t.Errorf("%s: fallbackBudget = %q, want %q", tc.name, got, tc.expected)
+		}
+	}
+	_ = one
+}
