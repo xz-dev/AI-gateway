@@ -113,7 +113,14 @@
         var: _squid_parse.stderr_lines | default([]) + _squid_parse.stdout_lines
       tags: [deploy-squid]
 
-    # ---- deploy-aisix preflight additions: local validation + orphan report ----
+    # ---- deploy-aisix preflight additions: normalize + local validation + orphan report ----
+    - name: Normalize max_fallbacks from targets count
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../scripts/ops/normalize-aisix-resources.py
+        {{ ai_ops_config_dir }}/aisix/resources.yaml
+      delegate_to: localhost
+      tags: [deploy-aisix]
+
     - name: Validate fallback-status contract
       ansible.builtin.command: >
         python3 {{ playbook_dir }}/../scripts/check-aisix-resource-policy.py

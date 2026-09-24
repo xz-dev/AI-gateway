@@ -70,7 +70,7 @@ curl -X POST .../v1/responses -d '{"model":"aihub/<model>","input":"hi"}'       
 
 **直连目标**：每个 `prefix/model` 一个 direct model，`display_name`/`model_name` 与 CPA 名逐字节一致，`provider_key: cpa-pool`。
 
-**逻辑模型 failover 链**（如 `gpt-5.6-terra`）：`strategy: failover`，`targets` 有序候选，`max_fallbacks = len(targets)-1`。加新来源到链尾则 append target 并把 max_fallbacks +1。注意 `retries: N` 会放大上游调用：最多 `(N+1) × (max_fallbacks+1)` 次，需有界。
+**逻辑模型 failover 链**（如 `gpt-5.6-terra`）：`strategy: failover`，`targets` 有序候选。`max_fallbacks` 不写 — `deploy-aisix` preflight 会自动跑 `scripts/ops/normalize-aisix-resources.py` 把它改成 `len(targets)-1`，你只改 targets 列表即可。注意 `retries: N` 会放大上游调用：最多 `(N+1) × (max_fallbacks+1)` 次，需有界。
 
 应用：`docker compose up -d --no-deps --no-build --pull never --force-recreate aisix`（只重建 aisix，不动其它）。验证 `docker logs` 见 `resources loaded ... resources=N`。
 
