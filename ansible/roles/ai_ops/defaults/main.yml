@@ -37,6 +37,9 @@ ai_ops_profiles:
   sub2api: {}
   aisix: {}
   cloudflared: {}
+  ai-sse-keepalive-proxy: {}
+  provider-sidecar: {}
+  aisix-status: {}
   # Production uses an archive-preloaded localhost image; component deploy must
   # not contact a registry for this service.
   cpa-model-sync:
@@ -56,6 +59,15 @@ ai_ops_model_sync_log_tail: 200
 # readiness (/readyz via its healthcheck subcommand).
 ai_ops_models_enricher_verify_retries: 30
 ai_ops_models_enricher_verify_delay_seconds: 2
+
+# ai-sse-keepalive-proxy deploy: bounded wait for the recreated container's
+# healthcheck subcommand after a digest-pinned recreate.
+ai_ops_ws_keepalive_verify_retries: 30
+ai_ops_ws_keepalive_verify_delay_seconds: 2
+# Exact image digest approved from ai_ops_mode=plan; apply refuses without it.
+ai_ops_ws_keepalive_approved_digest: ""
+# Optional OCI source revision the running image must carry (source SHA).
+ai_ops_ws_keepalive_expected_revision: ""
 
 # Pinned Squid image used for offline `-k parse` validation of rendered policy.
 ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u2

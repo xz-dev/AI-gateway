@@ -62,6 +62,7 @@
         _ai_verify_expected_policy_digest: "{{ ai_verify_expected_policy_digest }}"
         _ai_verify_expected_state_digest: "{{ ai_verify_expected_state_digest }}"
         _ai_verify_expected_image_identity: "{{ ai_verify_expected_image_identity }}"
+        _ai_verify_expected_revision: "{{ ai_verify_expected_revision | default('') }}"
       when: ai_verify_tasks is defined
   rescue:
     - name: "Activation failed: restore pre-deploy copy of {{ ai_file_label }}"
@@ -82,6 +83,7 @@
             _ai_verify_expected_policy_digest: "{{ ai_recovery_expected_policy_digest }}"
             _ai_verify_expected_state_digest: "{{ ai_recovery_expected_state_digest }}"
             _ai_verify_expected_image_identity: "{{ ai_recovery_expected_image_identity }}"
+            _ai_verify_expected_revision: "{{ ai_recovery_expected_revision | default('') }}"
       rescue:
         - ansible.builtin.set_fact:
             _ai_recovery_verify_failed: true

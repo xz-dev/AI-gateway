@@ -1,0 +1,98 @@
+---
+# Verify a freshly started ai-sse-keepalive-proxy container after deploy/rollback.
+# Inputs: _ai_verify_expected_image_identity (running image ID expected),
+#         _ai_verify_expected_revision (OCI revision label = source SHA),
+#         ai_verify_old_container (pre-activation container ID; new must differ),
+#         ai_protected_containers (map service -> captured container ID, unchanged).
+
+- name: Read ai-sse-keepalive-proxy container ID
+  ansible.builtin.command: "{{ _compose }} ps -q ai-sse-keepalive-proxy"
+  register: _wsk_container
+  changed_when: false
+  failed_when: _wsk_container.rc != 0 or _wsk_container.stdout | trim == ""
+
+- name: Require a fresh ai-sse-keepalive-proxy container
+  ansible.builtin.assert:
+    that:
+      - _wsk_container.stdout | trim != ai_verify_old_container
+    fail_msg: >-
+      ai-sse-keepalive-proxy was not recreated
+      (container={{ _wsk_container.stdout | trim }} still matches pre-activation ID {{ ai_verify_old_container }}).
+  when: ai_verify_old_container | default('') | length > 0
+
+- name: Read ai-sse-keepalive-proxy image identity
+  ansible.builtin.command:
+    argv:
+      - "{{ _runtime }}"
+      - inspect
+      - '--format={{ "{{.Image}}" }}'
+      - "{{ _wsk_container.stdout | trim }}"
+  register: _wsk_image
+  changed_when: false
+
+- name: Require running image to be the approved image ID
+  ansible.builtin.assert:
+    that:
+      - _wsk_image.stdout | trim == _ai_verify_expected_image_identity
+    fail_msg: >-
+      ai-sse-keepalive-proxy running image does not match the approved image
+      (expected={{ _ai_verify_expected_image_identity }},
+      observed={{ _wsk_image.stdout | trim }}).
+  when: _ai_verify_expected_image_identity | default('') | length > 0
+
+- name: Read OCI source revision label
+  ansible.builtin.command:
+    argv:
+      - "{{ _runtime }}"
+      - inspect
+      - "--format={{ '{{' }}index .Config.Labels \"org.opencontainers.image.revision\"{{ '}}' }}"
+      - "{{ _wsk_container.stdout | trim }}"
+  register: _wsk_revision
+  changed_when: false
+  failed_when: false
+
+- name: Require running image built from the approved source revision
+  ansible.builtin.assert:
+    that:
+      - _wsk_revision.stdout | trim == _ai_verify_expected_revision
+    fail_msg: >-
+      ai-sse-keepalive-proxy running image does not match the approved source revision
+      (expected={{ _ai_verify_expected_revision }},
+      observed={{ _wsk_revision.stdout | trim }}).
+  when: _ai_verify_expected_revision | default('') | length > 0
+
+- name: Wait for ai-sse-keepalive-proxy healthcheck
+  ansible.builtin.command: >-
+    {{ _compose }} exec -T ai-sse-keepalive-proxy
+    /ai-sse-keepalive-proxy healthcheck
+  register: _wsk_ready
+  changed_when: false
+  retries: "{{ ai_ops_ws_keepalive_verify_retries }}"
+  delay: "{{ ai_ops_ws_keepalive_verify_delay_seconds }}"
+  until: _wsk_ready.rc == 0
+
+- name: Verify protected adjacent containers unchanged
+  ansible.builtin.command: "{{ _compose }} ps -q {{ item.key }}"
+  register: _wsk_protected
+  changed_when: false
+  loop: "{{ ai_protected_containers | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Require protected container identities unchanged
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == item.item.value
+    fail_msg: >-
+      protected container {{ item.item.key }} was recreated
+      (expected={{ item.item.value }}, observed={{ item.stdout | trim }}).
+  loop: "{{ _wsk_protected.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Preserve sanitized verification facts
+  ansible.builtin.set_fact:
+    ai_ws_keepalive_verified_container: "{{ _wsk_container.stdout | trim }}"
+    ai_ws_keepalive_verified_image: "{{ _wsk_image.stdout | trim }}"
+    ai_ws_keepalive_verified_revision: "{{ _wsk_revision.stdout | trim }}"
+    ai_ws_keepalive_ready_attempts: "{{ _wsk_ready.attempts | default(1) }}"

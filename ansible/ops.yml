@@ -511,6 +511,207 @@
       when: ai_ops_mode != "plan"
       tags: [deploy-aisix]
 
+    # ======================= deploy-ws-keepalive =======================
+    # Scoped, digest-pinned rollout for the WS-keepalive proxy. Plan shows the
+    # effective diff + digest + protected map; apply pulls the exact digest
+    # BEFORE mutating files, then reuses deploy-file's drift/snapshot/rescue
+    # flow and verify-ws-keepalive for image identity + OCI revision +
+    # healthcheck + protected-container checks.
+    - name: Read current ai-sse-keepalive-proxy container ID
+      ansible.builtin.command: "{{ _compose }} ps -q ai-sse-keepalive-proxy"
+      register: _wsk_plan_container
+      changed_when: false
+      failed_when: false
+      tags: [deploy-ws-keepalive]
+
+    - name: Read current ai-sse-keepalive-proxy image identity
+      ansible.builtin.command:
+        argv:
+          - "{{ _runtime }}"
+          - inspect
+          - '--format={{ "{{.Image}}" }}'
+          - "{{ _wsk_plan_container.stdout | trim }}"
+      register: _wsk_plan_image
+      changed_when: false
+      failed_when: false
+      when: _wsk_plan_container.stdout | trim != ""
+      tags: [deploy-ws-keepalive]
+
+    - name: Resolve desired image selector from private .env
+      # Parse the env file directly: podman-compose --env-file interpolation
+      # of ${VAR} differs from docker compose's, and the digest gate must bind
+      # the exact selector regardless of compose-provider version.
+      ansible.builtin.set_fact:
+        _wsk_desired_image: "{{ lookup('ansible.builtin.file', ai_ops_config_dir + '/.env') | regex_search('(?m)^AI_SSE_KEEPALIVE_PROXY_IMAGE=(.+)$', '\\1') | first }}"
+        _wsk_desired_pull: "{{ lookup('ansible.builtin.file', ai_ops_config_dir + '/.env') | regex_search('(?m)^AI_SSE_KEEPALIVE_PROXY_PULL_POLICY=(.+)$', '\\1') | first | default('never', true) }}"
+      no_log: true  # reading .env; expose only the parsed fields, never the file
+      tags: [deploy-ws-keepalive]
+
+    - name: Capture protected adjacent container identities
+      ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
+      register: _wsk_protected
+      changed_when: false
+      failed_when: false
+      loop:
+        - ai-sse-keepalive-proxy-netns
+        - apisix-ai-sse-relay
+        - ai-sse-sub2api-relay
+        - sub2api
+      loop_control:
+        label: "{{ item }}"
+      tags: [deploy-ws-keepalive]
+
+    - name: Build protected container map
+      ansible.builtin.set_fact:
+        _wsk_protected_map: "{{ dict(_wsk_protected.results | map(attribute='item') | zip(_wsk_protected.results | map(attribute='stdout') | map('trim'))) }}"
+      tags: [deploy-ws-keepalive]
+
+    - name: Show ws-keepalive plan
+      ansible.builtin.debug:
+        msg:
+          desired_image: "{{ _wsk_desired_image }}"
+          pull_policy: "{{ _wsk_desired_pull }}"
+          current_image: "{{ _wsk_plan_image.stdout | default('') | trim }}"
+          recreation: ai-sse-keepalive-proxy
+          protected: "{{ _wsk_protected_map }}"
+      tags: [deploy-ws-keepalive]
+
+    - name: Require approved digest for apply
+      ansible.builtin.assert:
+        that:
+          - ai_ops_ws_keepalive_approved_digest | length > 0
+          - ai_ops_ws_keepalive_approved_digest == _wsk_desired_image.split('@')[-1]
+        fail_msg: >-
+          ws-keepalive digest is not approved or became stale. Run plan mode, review the
+          desired image selector, then apply with
+          -e ai_ops_ws_keepalive_approved_digest={{ _wsk_desired_image.split('@')[-1] }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Pull the approved image digest before any mutation
+      ansible.builtin.command: >-
+        {{ _runtime }} pull
+        {{ _wsk_desired_image }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Resolve pulled image ID for identity binding
+      ansible.builtin.command:
+        argv:
+          - "{{ _runtime }}"
+          - image
+          - inspect
+          - '--format={{ "{{.Id}}" }}'
+          - "{{ _wsk_desired_image }}"
+      register: _wsk_pulled_id
+      changed_when: false
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Bind expected image identity to the pulled image ID
+      ansible.builtin.set_fact:
+        _wsk_expected_image_id: "{{ _wsk_pulled_id.stdout | trim }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Deploy compose.yaml (ws-keepalive scoped)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-ws-keepalive]
+      vars:
+        ai_file_label: compose.yaml
+        ai_file_local: "{{ ai_ops_config_dir }}/compose.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.yaml"
+      tags: [deploy-ws-keepalive]
+
+    - name: Deploy .env (ws-keepalive scoped)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-ws-keepalive]
+      vars:
+        ai_file_label: .env
+        ai_file_local: "{{ ai_ops_config_dir }}/.env"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/.env"
+        ai_activate_cmd: >-
+          {{ _compose }} up -d --no-deps --no-build --pull never ai-sse-keepalive-proxy
+        ai_verify_tasks: verify-ws-keepalive.yml
+        ai_verify_expected_image_identity: "{{ _wsk_expected_image_id }}"
+        ai_verify_expected_revision: "{{ ai_ops_ws_keepalive_expected_revision }}"
+        ai_recovery_expected_image_identity: "{{ _wsk_plan_image.stdout | trim }}"
+        ai_recovery_expected_revision: ""
+        ai_failure_receipt_path: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-ws-keepalive-failed-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        ai_failure_receipt_content: |
+          operation=ws-keepalive-deploy mode={{ ai_ops_mode }}
+          desired_image={{ _wsk_desired_image }}
+          recovery_verification={{ 'failed' if _ai_recovery_verify_failed | default(false) else 'passed' }}
+          outcome={{ 'recovery-required' if _ai_recovery_verify_failed | default(false) else 'candidate-failed-recovered' }}
+        ai_verify_old_container: "{{ _wsk_plan_container.stdout | trim }}"
+        ai_protected_containers: "{{ _wsk_protected_map }}"
+      no_log: true  # .env may contain credentials; never log its content/diff
+      tags: [deploy-ws-keepalive]
+
+    # Runtime convergence gate: deploy-file only activates on upload-changed,
+    # so a stale running container with matching files would be a silent
+    # no-op. Detect runtime image-identity drift and force the same scoped
+    # recreate + verification as an upload-triggered activation.
+    - name: Detect ws-keepalive runtime drift under matching files
+      ansible.builtin.set_fact:
+        _wsk_runtime_drifted: >-
+          {{ _wsk_plan_container.stdout | trim == ""
+             or (_wsk_plan_image.stdout | default('') | trim) != (_wsk_expected_image_id | default('')) }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Report ws-keepalive runtime drift
+      ansible.builtin.debug:
+        msg: >-
+          ai-sse-keepalive-proxy pre-deploy runtime drifted or absent from approved image
+          (running={{ _wsk_plan_image.stdout | default('') | trim }},
+          approved={{ _wsk_expected_image_id }});
+          forcing scoped recreate.
+      when:
+        - ai_ops_mode != "plan"
+        - _wsk_runtime_drifted | bool
+      tags: [deploy-ws-keepalive]
+
+    - name: Force scoped recreate on runtime drift
+      block:
+        - name: Recreate ai-sse-keepalive-proxy for runtime drift
+          ansible.builtin.command: >-
+            {{ _compose }} up -d --no-deps --no-build --pull never ai-sse-keepalive-proxy
+        - name: Verify runtime-drifted ai-sse-keepalive-proxy
+          ansible.builtin.include_role:
+            name: ai_ops
+            tasks_from: verify-ws-keepalive
+          vars:
+            _ai_verify_expected_image_identity: "{{ _wsk_expected_image_id }}"
+            _ai_verify_expected_revision: "{{ ai_ops_ws_keepalive_expected_revision }}"
+            ai_verify_old_container: "{{ _wsk_plan_container.stdout | trim }}"
+            ai_protected_containers: "{{ _wsk_protected_map }}"
+      when:
+        - ai_ops_mode != "plan"
+        - _wsk_runtime_drifted | bool
+        - not (_ai_upload is defined and _ai_upload is changed)
+      tags: [deploy-ws-keepalive]
+
+    - name: Write sanitized ws-keepalive receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-ws-keepalive-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=ws-keepalive-deploy mode={{ ai_ops_mode }}
+          desired_image={{ _wsk_desired_image }}
+          verified_container={{ ai_ws_keepalive_verified_container | default('') }}
+          verified_image={{ ai_ws_keepalive_verified_image | default('') }}
+          verified_revision={{ ai_ws_keepalive_verified_revision | default('') }}
+          ready_attempts={{ ai_ws_keepalive_ready_attempts | default('') }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
     # ======================= deploy-model-sync =======================
     - name: Deploy approved model-sync policy
       ansible.builtin.include_role:
