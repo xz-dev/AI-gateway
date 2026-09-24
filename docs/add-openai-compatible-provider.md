@@ -21,7 +21,7 @@ Squid 是白名单默认拒绝。CPA 容器走 `cpa-squid-relay` → egress-prox
 { "domain": "aihub.top", "tls": "bump",
   "methods": ["GET"],  "paths": ["^/v1/models($|[?])"] },
 { "domain": "aihub.top", "tls": "bump",
-  "methods": ["POST"], "paths": ["^/v1/(chat/completions|responses|embeddings)($|[?])"] }
+  "methods": ["POST"], "paths": ["^/v1/(chat/completions|responses|embeddings|images/(generations|edits)(/async)?)($|[?])"] }
 }
 ```
 
