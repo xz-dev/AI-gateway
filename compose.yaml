@@ -49,8 +49,8 @@ services:
     image: ${EGRESS_PROXY_IMAGE:-ai-gateway-squid:6.13-2-deb13u2}
     restart: unless-stopped
     pids_limit: 64
-    mem_limit: 128m
-    memswap_limit: 128m
+    mem_limit: 192m
+    memswap_limit: 256m
     cpus: 0.5
     read_only: true
     cap_drop: [ALL]
@@ -313,8 +313,8 @@ services:
         exec /app/docker-entrypoint.sh /app/sub2api
     restart: unless-stopped
     pids_limit: 128
-    mem_limit: 256m
-    memswap_limit: 256m
+    mem_limit: 320m
+    memswap_limit: 320m
     cpus: 1.5
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, SETGID, SETUID]
@@ -336,6 +336,7 @@ services:
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 8080
       SERVER_MODE: release
+      GOMEMLIMIT: 288MiB
       RUN_MODE: ${SUB2API_RUN_MODE:-standard}
       SERVER_TRUSTED_PROXIES: ${SUB2API_TRUSTED_PROXIES:-172.30.26.3/32}
       SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL: "false"
@@ -473,8 +474,8 @@ services:
         exec /docker-entrypoint.sh docker-start
     restart: unless-stopped
     pids_limit: 128
-    mem_limit: 128m
-    memswap_limit: 128m
+    mem_limit: 320m
+    memswap_limit: 320m
     cpus: 1.0
     cap_drop: [ALL]
     logging: *default-logging
@@ -532,6 +533,10 @@ services:
       IDLE_INTERVAL: ${AI_SSE_KEEPALIVE_PROXY_IDLE_INTERVAL:-15s}
       MAX_INSPECT_BODY_BYTES: ${AI_SSE_KEEPALIVE_PROXY_MAX_INSPECT_BODY_BYTES:-16777216}
       REQUIRE_NO_DEFAULT_ROUTE: "true"
+      WS_PING_INTERVAL: ${AI_SSE_KEEPALIVE_PROXY_WS_PING_INTERVAL:-0s}
+      WS_PING_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_PING_TIMEOUT:-5s}
+      WS_WRITE_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_WRITE_TIMEOUT:-120s}
+      WS_HANDSHAKE_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_HANDSHAKE_TIMEOUT:-10s}
     healthcheck:
       test: [CMD, /ai-sse-keepalive-proxy, healthcheck]
       interval: 30s
@@ -887,8 +892,8 @@ services:
       aisix-netns: {condition: service_started, restart: true}
       cli-proxy-api: {condition: service_healthy}
     pids_limit: 128
-    mem_limit: 160m
-    memswap_limit: 160m
+    mem_limit: 192m
+    memswap_limit: 256m
     cpus: 1.0
     read_only: true
     cap_drop: [ALL]
