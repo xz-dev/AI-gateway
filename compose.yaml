@@ -7,7 +7,7 @@ x-default-logging: &default-logging
     max-file: "5"
 
 x-netns-owner: &netns-owner
-  image: ${NETNS_GUARD_IMAGE:-docker.io/library/alpine:3.22.5}
+  image: ${NETNS_GUARD_IMAGE:-docker.io/library/alpine:3.24.2}
   restart: unless-stopped
   pids_limit: 16
   mem_limit: 16m
