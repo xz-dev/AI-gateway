@@ -61,7 +61,9 @@
      "paths": [
       "^/repos/Wei-Shaw/sub2api/releases/latest$",
       "^/repos/openai/codex/releases/latest$",
-      "^/repos/openai/codex/releases\\?per_page=30$"
+      "^/repos/openai/codex/releases\\?per_page=30$",
+      "^/repos/anthropics/claude-code/releases/latest$",
+      "^/repos/anthropics/claude-code/releases\\?per_page=30$"
      ]
     },
     {

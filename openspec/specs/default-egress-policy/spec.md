@@ -69,6 +69,8 @@ The default Sub2API policy SHALL allow these exact JSON path expressions on `api
 
 - `^/repos/openai/codex/releases/latest$`
 - `^/repos/openai/codex/releases\\?per_page=30$`
+- `^/repos/anthropics/claude-code/releases/latest$`
+- `^/repos/anthropics/claude-code/releases\\?per_page=30$`
 
 #### Scenario: Latest release is not a usable stable Codex release
 

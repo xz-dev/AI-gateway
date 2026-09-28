@@ -159,6 +159,8 @@ expected = {
             r"^/repos/Wei-Shaw/sub2api/releases/latest$",
             r"^/repos/openai/codex/releases/latest$",
             r"^/repos/openai/codex/releases\?per_page=30$",
+            r"^/repos/anthropics/claude-code/releases/latest$",
+            r"^/repos/anthropics/claude-code/releases\?per_page=30$",
         ),
         entry(
             "raw.githubusercontent.com",

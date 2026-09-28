@@ -123,6 +123,8 @@ Fresh installations start with a control-plane-only policy. Every entry below is
 | Sub2API | Core version check | `api.github.com` | `^/repos/Wei-Shaw/sub2api/releases/latest$` |
 | Sub2API | Codex latest release | `api.github.com` | `^/repos/openai/codex/releases/latest$` |
 | Sub2API | Codex stable-release fallback | `api.github.com` | `^/repos/openai/codex/releases\\?per_page=30$` |
+| Sub2API | Claude Code latest release | `api.github.com` | `^/repos/anthropics/claude-code/releases/latest$` |
+| Sub2API | Claude Code stable-release fallback | `api.github.com` | `^/repos/anthropics/claude-code/releases\\?per_page=30$` |
 | Sub2API | Pricing data | `raw.githubusercontent.com` | `^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\\.json$` |
 | Sub2API | Pricing hash | `raw.githubusercontent.com` | `^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\\.sha256$` |
 
