@@ -259,7 +259,7 @@ def main() -> None:
         "shutdown_lifetime 3 seconds",
         "half_closed_clients off",
         "positive_dns_ttl 5 minutes",
-        "negative_dns_ttl 30 seconds",
+        "negative_dns_ttl 5 seconds",
         "logfile_rotate 0",
         "logformat security %ts.%03tu listener=%la:%lp src=%>a method=%rm host=%>rd path=%>rp status=%>Hs sni=%ssl::>sni bump=%ssl::bump_mode upstream=%<a",
         "access_log stdio:/dev/stdout security",
