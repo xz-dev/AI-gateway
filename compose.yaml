@@ -46,7 +46,7 @@ services:
   egress-proxy:
     build:
       context: ./egress-proxy
-    image: ${EGRESS_PROXY_IMAGE:-ai-gateway-squid:6.13-2-deb13u2}
+    image: ${EGRESS_PROXY_IMAGE:-ai-gateway-squid:6.13-2-deb13u2-r1}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 192m
@@ -135,7 +135,7 @@ services:
         ipv4_address: 172.30.62.3
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:v7.2.152}
+    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:v7.3.19}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -226,7 +226,7 @@ services:
       start_period: 10s
 
   redis:
-    image: ${REDIS_IMAGE:-docker.io/library/redis:8.10.1-alpine3.23}
+    image: ${REDIS_IMAGE:-docker.io/library/redis:8.10.2-alpine3.23}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 80m
@@ -691,7 +691,7 @@ services:
   cpa-model-sync:
     build:
       context: ./cpa-model-sync
-    image: ${CPA_MODEL_SYNC_IMAGE:-cpa-model-sync:v0.1.0}
+    image: ${CPA_MODEL_SYNC_IMAGE:-cpa-model-sync:v0.1.2}
     user: "65534:65534"
     restart: unless-stopped
     read_only: true
@@ -717,7 +717,7 @@ services:
   models-enricher:
     build:
       context: ./models-enricher
-    image: ${MODELS_ENRICHER_IMAGE:-ghcr.io/xz-dev/ai-gateway-models-enricher:cpa-first-routing-20260913}
+    image: ${MODELS_ENRICHER_IMAGE:-ghcr.io/xz-dev/ai-gateway-models-enricher:catalog-limit-64m-20260914}
     pull_policy: build
     network_mode: service:models-enricher-netns
     restart: unless-stopped
@@ -784,7 +784,7 @@ services:
         ipv4_address: 172.30.32.3
 
   model-catalog-sidecar:
-    image: ${MODEL_CATALOG_SIDECAR_IMAGE:-docker.io/nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6}
+    image: ${MODEL_CATALOG_SIDECAR_IMAGE:-docker.io/nginxinc/nginx-unprivileged:1.31-alpine@sha256:6a23acdfca2b9cfbcec61419e3f1426bcbedb91362f2f19306a8567423bb4612}
     restart: unless-stopped
     user: "101:101"
     pids_limit: 64
@@ -852,7 +852,7 @@ services:
         ipv4_address: 172.30.70.3
 
   aisix-status:
-    image: ${AISIX_STATUS_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix-status:0.2.2}
+    image: ${AISIX_STATUS_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix-status:0.2.3}
     user: "65532:65532"
     restart: unless-stopped
     depends_on:
@@ -908,7 +908,7 @@ services:
       - ./aisix/resources.yaml:/etc/aisix/resources.yaml:ro,Z
 
   cloudflared:
-    image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared:2026.8.3}
+    image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared:2026.9.3}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 48m
