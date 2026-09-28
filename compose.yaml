@@ -46,7 +46,7 @@ services:
   egress-proxy:
     build:
       context: ./egress-proxy
-    image: ${EGRESS_PROXY_IMAGE:-ai-gateway-squid:6.13-2-deb13u2-r1}
+    image: ${EGRESS_PROXY_IMAGE:-ai-gateway-squid:6.13-2-deb13u2-r2}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 192m
@@ -135,7 +135,7 @@ services:
         ipv4_address: 172.30.62.3
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:v7.3.19}
+    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:v7.3.20}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
