@@ -83,7 +83,8 @@ channels:
 #   glm-5.3：聚合入口单独限制为 500k；
 #   glm-5.2：默认推理档 max（动态源无默认档声明）；
 #   kimi-k3-500k：models.dev 无此 ID，继承 kimi-k3 动态数据后压上下文。
-#   claude-*：动态源无默认 effort；按 Anthropic 官方默认档补齐（Opus 5.5 为 medium，Haiku 4.5 不支持 effort）。
+#   claude-*：动态源无默认 effort；按 Anthropic 官方默认档补齐（Opus 5.5 为 medium，Haiku 4.5 不支持 effort）；
+#     1M 型号默认上下文 500k，保留 1M 可调上限（显式 max_context_window 不受 sync 开关覆盖）。
 static_models:
   - slug: gpt-5.6-terra
     overrides: {context_window: 372000, max_context_window: 372000}
@@ -105,8 +106,8 @@ static_models:
     inherit: [kimi-k3]
     overrides: {context_window: 500000, max_context_window: 500000}
   - slug: claude-sonnet-5
-    overrides: {default_reasoning_level: high}
+    overrides: {context_window: 500000, max_context_window: 1000000, default_reasoning_level: high}
   - slug: claude-fable-5-1
-    overrides: {default_reasoning_level: high}
+    overrides: {context_window: 500000, max_context_window: 1000000, default_reasoning_level: high}
   - slug: claude-opus-5-5
-    overrides: {default_reasoning_level: medium}
+    overrides: {context_window: 500000, max_context_window: 1000000, default_reasoning_level: medium}

@@ -127,13 +127,14 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 				t.Fatalf("kimi-k3-500k static must carry the 500000 context overrides: %v", static)
 			}
 		case "claude-sonnet-5", "claude-fable-5-1", "claude-opus-5-5":
-			// Anthropic 官方默认 effort：Opus 5.5 为 medium，其余为 high。
+			// Anthropic 官方默认 effort：Opus 5.5 为 medium，其余为 high；默认上下文 500k，可调上限 1M。
 			want := "high"
 			if slug == "claude-opus-5-5" {
 				want = "medium"
 			}
-			if len(overrides) != 1 || overrides["default_reasoning_level"] != want {
-				t.Fatalf("%s static must only set default_reasoning_level %s: %v", slug, want, static)
+			if len(overrides) != 3 || overrides["default_reasoning_level"] != want ||
+				toInt(overrides["context_window"]) != 500000 || toInt(overrides["max_context_window"]) != 1000000 {
+				t.Fatalf("%s static must set 500k/1M and default_reasoning_level %s: %v", slug, want, static)
 			}
 		}
 	}

@@ -53,7 +53,8 @@ type Config struct {
 	// GlobalSourcePriority 是全局兜底链：模型链整体替换；渠道链之后追加全局链。
 	GlobalSourcePriority []string `yaml:"source_priority"`
 	// SyncMaxContextWindow 开启后 max_context_window 一律等于 context_window；
-	// 关闭（默认）时仅缺失或更小才抬到同值。渠道同名字段可覆盖。
+	// 关闭（默认）时仅缺失或更小才抬到同值。渠道同名字段可覆盖；
+	// 模型 override（渠道模型或 static）显式声明的 max_context_window 不受影响。
 	SyncMaxContextWindow bool `yaml:"sync_max_context_window"`
 
 	// 可选 AISIX 目录补充；未配置端点时完全禁用且不发请求。

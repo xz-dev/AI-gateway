@@ -164,6 +164,13 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 	}
 	references := map[string]reference{}
 	publicOverrides := map[string]map[string]any{}
+	// explicitMax：任一层 override 显式声明 max_context_window 的 slug，不受 sync 开关覆盖。
+	explicitMax := map[string]bool{}
+	markExplicitMax := func(slug string, overrides map[string]any) {
+		if overrides["max_context_window"] != nil {
+			explicitMax[slug] = true
+		}
+	}
 	for _, pack := range fetched {
 		if baselinePrefixes[pack.Channel.Prefix] {
 			continue
@@ -189,6 +196,7 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 			overrides := chCfg.modelOverrides(name)
 			overlayMetadata(entry, overrides)
 			publicOverrides[slug] = overrides
+			markExplicitMax(slug, overrides)
 			if ref := chCfg.modelMetadataFrom(name); ref != "" {
 				references[slug] = reference{slug: ref, overrides: overrides}
 			}
@@ -279,6 +287,7 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 		overrides, _ := model["overrides"].(map[string]any)
 		overlayMetadata(entry, overrides)
 		omitConflictingReasoningDefault(entry, overrides)
+		markExplicitMax(slug, overrides)
 		put(slug, entry)
 	}
 	models := make([]map[string]any, 0, len(order))
@@ -289,7 +298,7 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 			if _, exists := entry["id"]; exists {
 				entry["id"] = slug
 			}
-			raiseMaxContextWindow(entry, syncMaxContextWindow(cfg, slug))
+			raiseMaxContextWindow(entry, !explicitMax[slug] && syncMaxContextWindow(cfg, slug))
 		}
 		markImageOutput(slug, entry)
 		models = append(models, entry)

@@ -760,6 +760,24 @@ func TestSyncMaxContextWindowResolution(t *testing.T) {
 	}
 }
 
+// 显式 override 的 max_context_window 不受全局 sync 覆盖；未声明的仍同步。
+func TestSyncMaxContextWindowRespectsExplicitOverride(t *testing.T) {
+	base := &Manifest{Models: []map[string]any{
+		{"slug": "c", "context_window": 1000000, "max_context_window": 1000000},
+		{"slug": "d", "context_window": 200000, "max_context_window": 272000},
+	}}
+	cfg := &Config{SyncMaxContextWindow: true, StaticModels: []map[string]any{
+		{"slug": "c", "overrides": map[string]any{"context_window": 500000, "max_context_window": 1000000}},
+	}}
+	got := map[string]any{}
+	for _, m := range mergeManifest(base, nil, cfg, emptySourceTables(), nil).Models {
+		got[asString(m["slug"])] = m["max_context_window"]
+	}
+	if toInt(got["c"]) != 1000000 || toInt(got["d"]) != 200000 {
+		t.Fatalf("got %v", got)
+	}
+}
+
 // sync=false：缺失或更小才抬到同值，已更大（可调上限）保持原值；sync=true：一律同步。
 func TestRaiseMaxContextWindow(t *testing.T) {
 	for _, tc := range []struct {
