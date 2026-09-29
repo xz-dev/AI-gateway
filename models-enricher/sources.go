@@ -447,7 +447,8 @@ func indexModelparams(raw []byte, log *slog.Logger) (apiKeyOut, subOut map[strin
 			switch path {
 			case "max_completion_tokens", "max_tokens", "max_output_tokens":
 				mapDeclaredField(h, path, declaredNested(pm, "range", "max"))
-			case "reasoning_effort":
+			// 同一 effort 语义在不同 API 形态下的路径：Chat / Responses / Anthropic Messages。
+			case "reasoning_effort", "reasoning.effort", "output_config.effort":
 				if values, ok := pm["values"].([]any); ok {
 					mapDeclaredField(h, "supported_reasoning_levels", effortsToLevels(values))
 				}

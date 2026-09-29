@@ -13,6 +13,8 @@ aisix_timeout: 5s
 
 bare_models_takeover: true
 source_priority: [models.dev/zai, models.dev/xai, models.dev/moonshotai, models.dev/openai, models.dev/anthropic, models.dev/deepseek]
+# max_context_window 一律等于 context_window；渠道 sync_max_context_window: false 可保留更大的可调上限。
+sync_max_context_window: true
 # AISIX-only 的 axis 前缀仅映射元数据来源，不改变推理路由。
 provider_prefix_map:
   axis: openai
@@ -60,6 +62,10 @@ channels:
           models.dev/nvidia: minimaxai/minimax-m3
   shuaiapi:
     source_priority: [models.dev/anthropic]
+    models:
+      # Haiku 4.5 官方不支持 effort；清掉 CPA 占位档位，冲突的默认档随之省略。
+      claude-haiku-4-5:
+        overrides: {supported_reasoning_levels: []}
   commandcode:
     source_priority: [models.dev/openai, models.dev/anthropic]
     # 只转换查询前缀；厂家目录参考不代表渠道实测能力。
@@ -77,6 +83,7 @@ channels:
 #   glm-5.3：聚合入口单独限制为 500k；
 #   glm-5.2：默认推理档 max（动态源无默认档声明）；
 #   kimi-k3-500k：models.dev 无此 ID，继承 kimi-k3 动态数据后压上下文。
+#   claude-*：动态源无默认 effort；按 Anthropic 官方默认档补齐（Opus 5.5 为 medium，Haiku 4.5 不支持 effort）。
 static_models:
   - slug: gpt-5.6-terra
     overrides: {context_window: 372000, max_context_window: 372000}
@@ -97,3 +104,9 @@ static_models:
   - slug: kimi-k3-500k
     inherit: [kimi-k3]
     overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: claude-sonnet-5
+    overrides: {default_reasoning_level: high}
+  - slug: claude-fable-5-1
+    overrides: {default_reasoning_level: high}
+  - slug: claude-opus-5-5
+    overrides: {default_reasoning_level: medium}

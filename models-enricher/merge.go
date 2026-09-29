@@ -289,7 +289,7 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 			if _, exists := entry["id"]; exists {
 				entry["id"] = slug
 			}
-			raiseMaxContextWindow(entry)
+			raiseMaxContextWindow(entry, syncMaxContextWindow(cfg, slug))
 		}
 		markImageOutput(slug, entry)
 		models = append(models, entry)
@@ -297,11 +297,24 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 	return &Manifest{Models: models}
 }
 
-// raiseMaxContextWindow：max_context_window 缺失或小于 context_window 时抬到同值；
-// 已大于（如 272k/872k 的可调上限）保持原值。context_window 非正数时不动。
-func raiseMaxContextWindow(entry map[string]any) {
+// syncMaxContextWindow：渠道开关优先，未设置或裸模型沿用全局开关。
+func syncMaxContextWindow(cfg *Config, slug string) bool {
+	if prefix, _, found := strings.Cut(slug, "/"); found {
+		for _, pool := range []map[string]ChannelConfig{cfg.Channels, cfg.CustomChannels} {
+			if ch, ok := pool[prefix]; ok && ch.SyncMaxContextWindow != nil {
+				return *ch.SyncMaxContextWindow
+			}
+		}
+	}
+	return cfg.SyncMaxContextWindow
+}
+
+// raiseMaxContextWindow：sync=true 时 max_context_window 一律等于 context_window；
+// 否则仅缺失或更小才抬到同值，已大于（如 272k/872k 的可调上限）保持原值。
+// context_window 非正数时不动。
+func raiseMaxContextWindow(entry map[string]any, sync bool) {
 	ctx := toInt(entry["context_window"])
-	if ctx > 0 && toInt(entry["max_context_window"]) < ctx {
+	if ctx > 0 && (sync || toInt(entry["max_context_window"]) < ctx) {
 		entry["max_context_window"] = entry["context_window"]
 	}
 }

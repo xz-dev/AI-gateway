@@ -58,7 +58,7 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	if !reflect.DeepEqual(cfg.providerPrefixes, wantProviderPrefixes) {
 		t.Fatalf("unexpected global provider mappings: %#v", cfg.providerPrefixes)
 	}
-	wantModels := map[string]int{"xl": 1, "nim": 2}
+	wantModels := map[string]int{"xl": 1, "nim": 2, "shuaiapi": 1}
 	for name, ch := range cfg.Channels {
 		if len(ch.Models) != wantModels[name] || len(ch.Overrides) != 0 {
 			t.Fatalf("%s has unapproved model configuration or manual overrides", name)
@@ -71,6 +71,9 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	if !cfg.BareModelsTakeover {
 		t.Fatal("bare_models_takeover must be enabled")
 	}
+	if !cfg.SyncMaxContextWindow {
+		t.Fatal("sync_max_context_window must be enabled globally")
+	}
 	wantGlobal := []string{"models.dev/zai", "models.dev/xai", "models.dev/moonshotai", "models.dev/openai", "models.dev/anthropic", "models.dev/deepseek"}
 	if !reflect.DeepEqual(cfg.GlobalSourcePriority, wantGlobal) {
 		t.Fatalf("global chain changed: %v", cfg.GlobalSourcePriority)
@@ -81,15 +84,18 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	}
 	// statics 只保留与动态源有真实差异的声明。
 	wantInherit := map[string][]string{
-		"gpt-5.6-terra": nil,
-		"gpt-5.6-luna":  nil,
-		"gpt-5.6-sol":   nil,
-		"gpt-6-astra":   nil,
-		"gpt-6-sol":     nil,
-		"gpt-6-luna":    nil,
-		"glm-5.2":       nil,
-		"glm-5.3":       nil,
-		"kimi-k3-500k":  {"kimi-k3"},
+		"gpt-5.6-terra":    nil,
+		"gpt-5.6-luna":     nil,
+		"gpt-5.6-sol":      nil,
+		"gpt-6-astra":      nil,
+		"gpt-6-sol":        nil,
+		"gpt-6-luna":       nil,
+		"glm-5.2":          nil,
+		"glm-5.3":          nil,
+		"kimi-k3-500k":     {"kimi-k3"},
+		"claude-sonnet-5":  nil,
+		"claude-fable-5-1": nil,
+		"claude-opus-5-5":  nil,
 	}
 	if len(cfg.StaticModels) != len(wantInherit) {
 		t.Fatalf("static model count: got %d, want %d", len(cfg.StaticModels), len(wantInherit))
@@ -119,6 +125,15 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 		case "kimi-k3-500k":
 			if toInt(overrides["context_window"]) != 500000 {
 				t.Fatalf("kimi-k3-500k static must carry the 500000 context overrides: %v", static)
+			}
+		case "claude-sonnet-5", "claude-fable-5-1", "claude-opus-5-5":
+			// Anthropic 官方默认 effort：Opus 5.5 为 medium，其余为 high。
+			want := "high"
+			if slug == "claude-opus-5-5" {
+				want = "medium"
+			}
+			if len(overrides) != 1 || overrides["default_reasoning_level"] != want {
+				t.Fatalf("%s static must only set default_reasoning_level %s: %v", slug, want, static)
 			}
 		}
 	}

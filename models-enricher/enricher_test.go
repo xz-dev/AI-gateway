@@ -746,19 +746,35 @@ func TestMergeStaticReplacesNativeBareInPlace(t *testing.T) {
 	}
 }
 
-// max_context_window 缺失或小于 context_window 时抬到同值；已更大（可调上限）保持原值。
+// 渠道开关覆盖全局；裸模型与未设置渠道沿用全局。
+func TestSyncMaxContextWindowResolution(t *testing.T) {
+	off := false
+	cfg := &Config{
+		SyncMaxContextWindow: true,
+		Channels:             map[string]ChannelConfig{"codex": {SyncMaxContextWindow: &off}, "xl": {}},
+	}
+	for slug, want := range map[string]bool{"claude-sonnet-5": true, "xl/m": true, "codex/gpt-6-sol": false, "unknown/m": true} {
+		if got := syncMaxContextWindow(cfg, slug); got != want {
+			t.Fatalf("%s: got %v, want %v", slug, got, want)
+		}
+	}
+}
+
+// sync=false：缺失或更小才抬到同值，已更大（可调上限）保持原值；sync=true：一律同步。
 func TestRaiseMaxContextWindow(t *testing.T) {
 	for _, tc := range []struct {
 		in   map[string]any
+		sync bool
 		want any
 	}{
-		{map[string]any{"context_window": 1000000, "max_context_window": 272000}, 1000000},
-		{map[string]any{"context_window": 1000000}, 1000000},
-		{map[string]any{"context_window": 272000, "max_context_window": 872000}, 872000},
-		{map[string]any{"context_window": json.Number("200000"), "max_context_window": json.Number("200000")}, json.Number("200000")},
-		{map[string]any{"max_context_window": 5}, 5},
+		{map[string]any{"context_window": 1000000, "max_context_window": 272000}, false, 1000000},
+		{map[string]any{"context_window": 1000000}, false, 1000000},
+		{map[string]any{"context_window": 272000, "max_context_window": 872000}, false, 872000},
+		{map[string]any{"context_window": 272000, "max_context_window": 872000}, true, 272000},
+		{map[string]any{"context_window": json.Number("200000"), "max_context_window": json.Number("200000")}, false, json.Number("200000")},
+		{map[string]any{"max_context_window": 5}, true, 5},
 	} {
-		raiseMaxContextWindow(tc.in)
+		raiseMaxContextWindow(tc.in, tc.sync)
 		if tc.in["max_context_window"] != tc.want {
 			t.Fatalf("got %v, want %v", tc.in["max_context_window"], tc.want)
 		}

@@ -52,6 +52,9 @@ type Config struct {
 	BareModelsTakeover bool `yaml:"bare_models_takeover"`
 	// GlobalSourcePriority 是全局兜底链：模型链整体替换；渠道链之后追加全局链。
 	GlobalSourcePriority []string `yaml:"source_priority"`
+	// SyncMaxContextWindow 开启后 max_context_window 一律等于 context_window；
+	// 关闭（默认）时仅缺失或更小才抬到同值。渠道同名字段可覆盖。
+	SyncMaxContextWindow bool `yaml:"sync_max_context_window"`
 
 	// 可选 AISIX 目录补充；未配置端点时完全禁用且不发请求。
 	// 凭证从环境变量读取，YAML中不填凭证。
@@ -82,6 +85,8 @@ type ChannelConfig struct {
 	ProviderPrefixMap yaml.Node                 `yaml:"provider_prefix_map"`
 	// GlobalFallback=false 时渠道链之后不追加全局链；nil 默认为 true。
 	GlobalFallback *bool `yaml:"global_fallback"`
+	// SyncMaxContextWindow 覆盖全局同名开关；nil 沿用全局。
+	SyncMaxContextWindow *bool `yaml:"sync_max_context_window"`
 
 	// globalChain 是 loadConfig 注入的全局兜底链（yaml:"-"）；追加在渠道链之后，
 	// 模型级链整体替换。显式 source_priority: [] 关闭继承。
