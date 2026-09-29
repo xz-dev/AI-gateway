@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -742,5 +743,24 @@ func TestMergeStaticReplacesNativeBareInPlace(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly one row for slug, got %d: %+v", count, out.Models)
+	}
+}
+
+// max_context_window 缺失或小于 context_window 时抬到同值；已更大（可调上限）保持原值。
+func TestRaiseMaxContextWindow(t *testing.T) {
+	for _, tc := range []struct {
+		in   map[string]any
+		want any
+	}{
+		{map[string]any{"context_window": 1000000, "max_context_window": 272000}, 1000000},
+		{map[string]any{"context_window": 1000000}, 1000000},
+		{map[string]any{"context_window": 272000, "max_context_window": 872000}, 872000},
+		{map[string]any{"context_window": json.Number("200000"), "max_context_window": json.Number("200000")}, json.Number("200000")},
+		{map[string]any{"max_context_window": 5}, 5},
+	} {
+		raiseMaxContextWindow(tc.in)
+		if tc.in["max_context_window"] != tc.want {
+			t.Fatalf("got %v, want %v", tc.in["max_context_window"], tc.want)
+		}
 	}
 }

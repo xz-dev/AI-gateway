@@ -10,7 +10,7 @@
   {
     "name": "null does not overwrite or create",
     "layers": [{"context_window":100,"max_input_tokens":null},{"context_window":null,"max_input_tokens":null}],
-    "want": {"context_window":100}
+    "want": {"context_window":100,"max_context_window":100}
   },
   {
     "name": "explicit empty values",

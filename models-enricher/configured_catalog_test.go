@@ -75,12 +75,18 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 	if !reflect.DeepEqual(cfg.GlobalSourcePriority, wantGlobal) {
 		t.Fatalf("global chain changed: %v", cfg.GlobalSourcePriority)
 	}
+	// 渠道链之后追加全局链：XL 的 Claude 模型可回落 models.dev/anthropic。
+	if !chainHas(sourceChain(cfg.Channels["xl"], "claude-sonnet-5"), "models.dev/anthropic") {
+		t.Fatal("xl must fall back to the global Anthropic source")
+	}
 	// statics 只保留与动态源有真实差异的声明。
 	wantInherit := map[string][]string{
 		"gpt-5.6-terra": nil,
 		"gpt-5.6-luna":  nil,
 		"gpt-5.6-sol":   nil,
 		"gpt-6-astra":   nil,
+		"gpt-6-sol":     nil,
+		"gpt-6-luna":    nil,
 		"glm-5.2":       nil,
 		"glm-5.3":       nil,
 		"kimi-k3-500k":  {"kimi-k3"},

@@ -194,7 +194,7 @@ func TestNativeNumbersAndDeclaredLimitsSurvive(t *testing.T) {
 	tables := emptySourceTables()
 	setHit(tables.dev, "oauth", "unlisted", sourceHit{"context_window": 1})
 	manifest := mergeManifest(base, nil, &Config{}, tables, nil)
-	assertMetadataJSON(t, manifest.Models, `[{"slug":"oauth/unlisted","context_window":272000,"max_tokens":128000,"vendor":{"sequence":9007199254740993}}]`)
+	assertMetadataJSON(t, manifest.Models, `[{"slug":"oauth/unlisted","context_window":272000,"max_context_window":272000,"max_tokens":128000,"vendor":{"sequence":9007199254740993}}]`)
 }
 
 func TestYAMLMetadataLayers(t *testing.T) {
@@ -303,7 +303,7 @@ func TestSourceNullKeepsNativeAndChannelMetadata(t *testing.T) {
 	cfg := &Config{Channels: map[string]ChannelConfig{"c": {SourcePriority: []string{"models.dev/p"}, Overrides: map[string]map[string]any{"m": {"id": nil, "display_name": nil}}}}}
 	fetched := []channelModels{{Channel: Channel{Prefix: "c"}, Models: []ParsedModel{{ID: "m", Metadata: map[string]any{"id": "remote", "max_tokens": 0, "vendor": map[string]any{"channel": true}}}}}}
 	manifest := mergeManifest(base, fetched, cfg, tables, nil)
-	assertMetadataJSON(t, manifest.Models, `[{"slug":"c/m","id":"c/m","context_window":272000,"max_input_tokens":12345,"max_output_tokens":100,"max_tokens":0,"vendor":{"base":true,"channel":true}}]`)
+	assertMetadataJSON(t, manifest.Models, `[{"slug":"c/m","id":"c/m","context_window":272000,"max_context_window":272000,"max_input_tokens":12345,"max_output_tokens":100,"max_tokens":0,"vendor":{"base":true,"channel":true}}]`)
 }
 
 func TestReferencesReadFixedSnapshot(t *testing.T) {
@@ -381,7 +381,7 @@ func TestOverrideFormsShareLayerSemantics(t *testing.T) {
 		}
 		cfg := &Config{Channels: map[string]ChannelConfig{"c": channel}}
 		manifest := mergeManifest(nil, []channelModels{{Channel: Channel{Prefix: "c"}, Models: []ParsedModel{{ID: "m"}}}}, cfg, tables, nil)
-		assertMetadataJSON(t, manifest.Models, `[{"slug":"c/m","context_window":100,"max_tokens":0,"vendor":{"keep":true,"enabled":false,"empty":""},"input_modalities":[]}]`)
+		assertMetadataJSON(t, manifest.Models, `[{"slug":"c/m","context_window":100,"max_context_window":100,"max_tokens":0,"vendor":{"keep":true,"enabled":false,"empty":""},"input_modalities":[]}]`)
 	}
 	combined := ChannelConfig{
 		Overrides: map[string]map[string]any{"m": {"max_tokens": 7, "display_name": "Legacy", "vendor": map[string]any{"a": 1, "b": 2}}},

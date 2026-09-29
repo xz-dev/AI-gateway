@@ -1,6 +1,7 @@
 # models-enricher 配置；channels.<key> 精确匹配 CPA prefix。
 # 未配置的渠道保留CPA基线；已配置渠道默认获取自身目录。
-# 全局 source_priority 是兜底链：模型级 > 渠道级 > 全局；显式 [] 关闭。
+# 全局 source_priority 是兜底链：模型链整体替换；渠道链之后追加全局链（渠道优先）；显式 [] 关闭。
+# 渠道 global_fallback: false 只用自身渠道链，不追加全局链。
 # bare_models_takeover 开启后，CPA manifest 里的裸模型（主人手设，无渠道前缀）
 # 不再被入口过滤，改用全局链动态补全；static/custom 显式声明仍覆盖动态结果。
 # 已启用步骤无可用缓存且失败时，整个渠道退回纯CPA记录。

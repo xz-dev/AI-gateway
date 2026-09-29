@@ -289,11 +289,21 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 			if _, exists := entry["id"]; exists {
 				entry["id"] = slug
 			}
+			raiseMaxContextWindow(entry)
 		}
 		markImageOutput(slug, entry)
 		models = append(models, entry)
 	}
 	return &Manifest{Models: models}
+}
+
+// raiseMaxContextWindow：max_context_window 缺失或小于 context_window 时抬到同值；
+// 已大于（如 272k/872k 的可调上限）保持原值。context_window 非正数时不动。
+func raiseMaxContextWindow(entry map[string]any) {
+	ctx := toInt(entry["context_window"])
+	if ctx > 0 && toInt(entry["max_context_window"]) < ctx {
+		entry["max_context_window"] = entry["context_window"]
+	}
 }
 
 // markImageOutput：CPA 对 OAuth 的 gpt-image-* 不声明输出模态；仅在缺失时补 ["image"]，已声明的值不覆盖。

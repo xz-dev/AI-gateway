@@ -14,10 +14,19 @@ func TestGlobalSourceChainFallback(t *testing.T) {
 	if got := sourceChain(empty, "m"); len(got) != 0 {
 		t.Fatalf("explicit empty chain should stay empty, got %v", got)
 	}
-	// 渠道显式链优先于全局。
-	local := ChannelConfig{globalChain: global, SourcePriority: []string{"models.dev/zai"}}
-	if got := sourceChain(local, "m"); len(got) != 1 || got[0] != "models.dev/zai" {
-		t.Fatalf("channel chain should win, got %v", got)
+	// 渠道链在前，全局链去重追加兜底。
+	local := ChannelConfig{globalChain: []string{"models.dev/zai", "models.dev/openai"}, SourcePriority: []string{"models.dev/zai"}}
+	if got := sourceChain(local, "m"); len(got) != 2 || got[0] != "models.dev/zai" || got[1] != "models.dev/openai" {
+		t.Fatalf("channel chain first, then global fallback, got %v", got)
+	}
+	// global_fallback: false 只用渠道链；未写渠道链时无来源。
+	off := false
+	noGlobal := ChannelConfig{globalChain: global, SourcePriority: []string{"models.dev/zai"}, GlobalFallback: &off}
+	if got := sourceChain(noGlobal, "m"); len(got) != 1 || got[0] != "models.dev/zai" {
+		t.Fatalf("global_fallback false must keep only channel chain, got %v", got)
+	}
+	if got := sourceChain(ChannelConfig{globalChain: global, GlobalFallback: &off}, "m"); len(got) != 0 {
+		t.Fatalf("global_fallback false without channel chain must be empty, got %v", got)
 	}
 	// 模型显式链优先于渠道与全局。
 	mc := ChannelConfig{

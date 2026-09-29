@@ -50,7 +50,7 @@ type Config struct {
 	// BareModelsTakeover 开启后，CPA manifest 中无前缀的裸模型（主人手设）
 	// 不再被入口过滤，改用全局链动态补全；显式声明（static/custom）仍然覆盖动态结果。
 	BareModelsTakeover bool `yaml:"bare_models_takeover"`
-	// GlobalSourcePriority 是全局兜底链：模型级 > 渠道级 > 全局。
+	// GlobalSourcePriority 是全局兜底链：模型链整体替换；渠道链之后追加全局链。
 	GlobalSourcePriority []string `yaml:"source_priority"`
 
 	// 可选 AISIX 目录补充；未配置端点时完全禁用且不发请求。
@@ -80,9 +80,11 @@ type ChannelConfig struct {
 	OllamaNativeBase  string                    `yaml:"ollama_native_base_url"`
 	Models            map[string]ModelConfig    `yaml:"models"`
 	ProviderPrefixMap yaml.Node                 `yaml:"provider_prefix_map"`
+	// GlobalFallback=false 时渠道链之后不追加全局链；nil 默认为 true。
+	GlobalFallback *bool `yaml:"global_fallback"`
 
-	// globalChain 是 loadConfig 注入的全局兜底链（yaml:"-"）；仅当模型级与渠道级均未
-	// 显式配置时生效。显式 source_priority: [] 关闭继承。
+	// globalChain 是 loadConfig 注入的全局兜底链（yaml:"-"）；追加在渠道链之后，
+	// 模型级链整体替换。显式 source_priority: [] 关闭继承。
 	globalChain []string `yaml:"-"`
 
 	providerPrefixes providerPrefixes
@@ -118,16 +120,28 @@ func (ch ChannelConfig) modelMetadataFrom(name string) string {
 	return ""
 }
 
-// sourceChain：三级整体替换 — 模型 > 渠道 > 全局（globalChain，loadConfig 注入）。
-// 空链表示不启用外部来源；显式模型/渠道空链（`[]`）可以关闭全局兜底。
+// sourceChain：模型链整体替换；渠道链在前、全局链（globalChain，loadConfig 注入）去重追加兜底。
+// 显式模型/渠道空链（`[]`）关闭全部外部来源。
 func sourceChain(ch ChannelConfig, model string) []string {
 	if mc, ok := ch.Models[model]; ok && mc.SourcePriority != nil {
 		return mc.SourcePriority
 	}
-	if ch.SourcePriority != nil {
+	if ch.GlobalFallback != nil && !*ch.GlobalFallback {
 		return ch.SourcePriority
 	}
-	return ch.globalChain
+	if ch.SourcePriority == nil {
+		return ch.globalChain
+	}
+	if len(ch.SourcePriority) == 0 {
+		return ch.SourcePriority
+	}
+	out := append([]string(nil), ch.SourcePriority...)
+	for _, token := range ch.globalChain {
+		if !chainHas(out, token) {
+			out = append(out, token)
+		}
+	}
+	return out
 }
 
 func chainHas(chain []string, token string) bool {
