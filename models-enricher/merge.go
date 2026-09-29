@@ -290,9 +290,19 @@ func mergeManifest(base *Manifest, fetched []channelModels, cfg *Config, tables 
 				entry["id"] = slug
 			}
 		}
+		markImageOutput(slug, entry)
 		models = append(models, entry)
 	}
 	return &Manifest{Models: models}
+}
+
+// markImageOutput：CPA 对 OAuth 的 gpt-image-* 不声明输出模态；仅在缺失时补 ["image"]，已声明的值不覆盖。
+func markImageOutput(slug string, entry map[string]any) {
+	name := slug[strings.LastIndex(slug, "/")+1:]
+	if !strings.HasPrefix(name, "gpt-image-") || entry["output_modalities"] != nil {
+		return
+	}
+	entry["output_modalities"] = []any{"image"}
 }
 
 // inheritList 接受单个 slug 或列表，归一为列表。
