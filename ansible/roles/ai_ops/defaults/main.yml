@@ -40,6 +40,7 @@ ai_ops_profiles:
   ai-sse-keepalive-proxy: {}
   provider-sidecar: {}
   aisix-status: {}
+  models-enricher: {}
   # Production uses an archive-preloaded localhost image; component deploy must
   # not contact a registry for this service.
   cpa-model-sync:
