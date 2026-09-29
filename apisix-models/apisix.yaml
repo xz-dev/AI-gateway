@@ -49,19 +49,14 @@ routes:
               end
             end
     upstream_id: cpa
-  # images/edits 为 multipart，选路器无法解析 JSON model；CPA 仅有的生图入口，
-  # 只换 CPA 凭证直达 CPA（否则 catch-all 透传调用方 key，CPA 401）。
-  - id: cpa-images-edits
+  # multipart 无法交给 JSON 选路器；AISIX 解析 model 并映射裸名。
+  # 保留调用方的 AISIX 凭证，不换成 CPA 凭证。
+  - id: aisix-images-edits
     uri: /v1/images/edits
     methods:
       - POST
     priority: 90
-    plugins:
-      proxy-rewrite:
-        headers:
-          set:
-            Authorization: "Bearer __CPA_API_KEY__"
-    upstream_id: cpa
+    upstream_id: aisix
   # HTML只接收目录边车的真实连接来源，不信任转发头中的地址。
   - id: models-table-refresh
     uri: /models-table/refresh

@@ -345,6 +345,28 @@ func (h *modelsHandler) build(r *http.Request, cv string, snapshot *routingSnaps
 	catalogBuildMu.Lock()
 	defer catalogBuildMu.Unlock()
 	status, body := buildCatalog(r, h.cfg, h.cpa, h.pool, h.log, cv, snapshot)
+	if status >= 200 && status < 300 && format != catalogTable && len(h.cfg.ExcludeModels) > 0 {
+		var manifest Manifest
+		if err := decodeJSON(body, &manifest); err != nil {
+			return errorJSON(http.StatusInternalServerError, "catalog_filter_failed", err.Error())
+		}
+		excluded := make(map[string]bool, len(h.cfg.ExcludeModels))
+		for _, id := range h.cfg.ExcludeModels {
+			excluded[id] = true
+		}
+		models := manifest.Models[:0]
+		for _, model := range manifest.Models {
+			if !excluded[exactManifestModelID(model)] {
+				models = append(models, model)
+			}
+		}
+		manifest.Models = models
+		var err error
+		body, err = json.Marshal(manifest)
+		if err != nil {
+			return errorJSON(http.StatusInternalServerError, "catalog_filter_failed", err.Error())
+		}
+	}
 	if status >= 200 && status < 300 && format == catalogStandard {
 		projected, err := standardModelsProjection(body)
 		if err != nil {

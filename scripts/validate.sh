@@ -666,12 +666,12 @@ if "uri: /models-table" not in table or "methods: [GET]" not in table or 'realip
 refresh = route("models-table-refresh")
 if "uri: /models-table/refresh" not in refresh or "methods: [POST]" not in refresh or 'realip_remote_addr", "==", "172.30.42.3"' not in refresh or "upstream_id: enricher" not in refresh:
     raise SystemExit("models table refresh route must remain exact and sidecar-only")
-edits = route("cpa-images-edits")
-for required in ("uri: /v1/images/edits", "      - POST", 'Authorization: "Bearer __CPA_API_KEY__"', "upstream_id: cpa"):
+edits = route("aisix-images-edits")
+for required in ("uri: /v1/images/edits", "      - POST", "upstream_id: aisix"):
     if required not in edits:
-        raise SystemExit(f"incomplete CPA images edits route: {required}")
-if text.count("__CPA_API_KEY__") != 2 or selector.count("__CPA_API_KEY__") != 1 or edits.count("__CPA_API_KEY__") != 1:
-    raise SystemExit("CPA service credential placeholder must occur only at the selector and images edits boundaries")
+        raise SystemExit(f"incomplete AISIX images edits route: {required}")
+if "__CPA_API_KEY__" in edits or text.count("__CPA_API_KEY__") != 1 or selector.count("__CPA_API_KEY__") != 1:
+    raise SystemExit("CPA service credential placeholder must occur only at the selector boundary")
 if '  - id: aisix\n' not in text or '      "aisix:3000": 1' not in text:
     raise SystemExit("catalog selector AISIX upstream is missing")
 PY

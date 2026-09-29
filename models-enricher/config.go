@@ -36,14 +36,16 @@ func validSourceToken(token string) bool {
 }
 
 type Config struct {
-	CPABaseURL        string                   `yaml:"cpa_base_url"`
-	HTTPConcurrency   int                      `yaml:"http_concurrency"`
-	ChannelTimeout    time.Duration            `yaml:"channel_timeout"`
-	OverallDeadline   time.Duration            `yaml:"overall_deadline"`
-	Channels          map[string]ChannelConfig `yaml:"channels"`
-	CustomChannels    map[string]ChannelConfig `yaml:"custom_channels"`
-	StaticModels      []map[string]any         `yaml:"static_models"`
-	ProviderPrefixMap yaml.Node                `yaml:"provider_prefix_map"`
+	CPABaseURL      string                   `yaml:"cpa_base_url"`
+	HTTPConcurrency int                      `yaml:"http_concurrency"`
+	ChannelTimeout  time.Duration            `yaml:"channel_timeout"`
+	OverallDeadline time.Duration            `yaml:"overall_deadline"`
+	Channels        map[string]ChannelConfig `yaml:"channels"`
+	CustomChannels  map[string]ChannelConfig `yaml:"custom_channels"`
+	StaticModels    []map[string]any         `yaml:"static_models"`
+	// ExcludeModels 只隐藏公开模型列表中的精确 ID；不改变诊断表或推理路由。
+	ExcludeModels     []string  `yaml:"exclude_models"`
+	ProviderPrefixMap yaml.Node `yaml:"provider_prefix_map"`
 
 	// BareModelsTakeover 开启后，CPA manifest 中无前缀的裸模型（主人手设）
 	// 不再被入口过滤，改用全局链动态补全；显式声明（static/custom）仍然覆盖动态结果。
@@ -171,6 +173,11 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.CPABaseURL == "" {
 		return nil, fmt.Errorf("cpa_base_url is required")
+	}
+	for i, id := range cfg.ExcludeModels {
+		if id == "" || strings.TrimSpace(id) != id {
+			return nil, fmt.Errorf("exclude_models[%d]: expected an exact, non-empty model ID", i)
+		}
 	}
 	if cfg.HTTPConcurrency <= 0 {
 		cfg.HTTPConcurrency = 8

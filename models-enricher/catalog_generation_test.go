@@ -4,11 +4,44 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestExcludeModelsHidesOnlyExactPublicIDs(t *testing.T) {
+	stubSources(t)
+	fake := &fakeCPA{native: []byte(`{"models":[{"slug":"oauth/m1","id":"oauth/m1"},{"slug":"oauth/m10","id":"oauth/m10"}]}`), oauthModels: []string{"m1", "m10"}}
+	cpa := httptest.NewServer(fake.handler())
+	defer cpa.Close()
+	cfg := testCfg()
+	cfg.ExcludeModels = []string{"oauth/m1"}
+	h := newTestHandler(t, cfg, cpa)
+	for _, tc := range []struct {
+		path       string
+		wantHidden bool
+	}{
+		{"/v1/models", true},
+		{"/v1/models?client_version=client", true},
+		{"/models-table", false},
+	} {
+		recorder := httptest.NewRecorder()
+		h.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s: HTTP %d: %s", tc.path, recorder.Code, recorder.Body.String())
+		}
+		body := recorder.Body.String()
+		hiddenID, visibleID := "oauth/m1\"", "oauth/m10\""
+		if !tc.wantHidden {
+			hiddenID, visibleID = "oauth/m1</td>", "oauth/m10</td>"
+		}
+		if strings.Contains(body, hiddenID) == tc.wantHidden || !strings.Contains(body, visibleID) {
+			t.Fatalf("%s: wrong exact-id exclusion: %s", tc.path, body)
+		}
+	}
+}
 
 func TestStandardAndCodexCatalogsShareAdmittedIDs(t *testing.T) {
 	stubSources(t)
