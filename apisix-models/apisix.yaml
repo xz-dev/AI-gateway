@@ -31,6 +31,7 @@ routes:
     uris:
       - /v1/chat/completions
       - /v1/responses
+      - /v1/images/generations
     methods:
       - POST
     priority: 100
@@ -47,6 +48,19 @@ routes:
                 return status, body, headers
               end
             end
+    upstream_id: cpa
+  # images/edits 为 multipart，选路器无法解析 JSON model；CPA 仅有的生图入口，
+  # 只换 CPA 凭证直达 CPA（否则 catch-all 透传调用方 key，CPA 401）。
+  - id: cpa-images-edits
+    uri: /v1/images/edits
+    methods:
+      - POST
+    priority: 90
+    plugins:
+      proxy-rewrite:
+        headers:
+          set:
+            Authorization: "Bearer __CPA_API_KEY__"
     upstream_id: cpa
   # HTML只接收目录边车的真实连接来源，不信任转发头中的地址。
   - id: models-table-refresh
