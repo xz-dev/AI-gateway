@@ -463,7 +463,7 @@ services:
         ipv4_address: 172.30.41.2
 
   apisix:
-    image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}
+    image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.19.0-debian}
     network_mode: service:apisix-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -616,7 +616,7 @@ services:
         ipv4_address: 172.30.70.2
 
   apisix-models:
-    image: ${APISIX_MODELS_IMAGE:-${APISIX_IMAGE:-docker.io/apache/apisix:3.18.0-debian}}
+    image: ${APISIX_MODELS_IMAGE:-${APISIX_IMAGE:-docker.io/apache/apisix:3.19.0-debian}}
     network_mode: service:apisix-models-netns
     entrypoint: [/usr/local/bin/start-apisix-models]
     command: []
