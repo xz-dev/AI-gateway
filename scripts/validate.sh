@@ -677,7 +677,7 @@ if '  - id: aisix\n' not in text or '      "aisix:3000": 1' not in text:
 PY
 
 apisix_image=$(value_from_env APISIX_IMAGE)
-[ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.18.0-debian
+[ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.19.0-debian
 sed 's|__CPA_API_KEY__|fixture-cpa-key|g' "$root/apisix-models/apisix.yaml" >"$tmpdir/apisix-models.yaml"
 "${RUNTIME[@]}" run --rm --network none \
   -e APISIX_STAND_ALONE=true \
