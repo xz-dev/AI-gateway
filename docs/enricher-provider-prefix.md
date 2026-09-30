@@ -40,8 +40,8 @@ channels:
 
 ## 迁移与回退
 
-默认行为是BREAKING变化。先比较真实查询与来源层，再考虑移除显式绑定；目录已有字段和成员数不变不足以证明等价。代码变更时的原始差异见[固定来源报告](../PLAN/enricher-provider-prefix-replay.md)。
+默认行为是BREAKING变化。先比较真实查询与来源层，再考虑移除显式绑定；目录已有字段和成员数不变不足以证明等价。代码变更时的原始差异见固定来源报告（本地 PLAN，未入库）。
 
-历史上Commandcode的40条模型配置已改为4条前缀映射，新增3项Qwen补全另获批准；旧44项检查见[历史配置整理报告](../PLAN/enricher-source-config-cleanup.md)。后来用户纠正裸名清空provider的错误，已先用原配置部署公共入口修复，再经同输入等价验证删除XL Muse的同名 `lookup_ids`；其模型级Meta链保留。新证据及尚存缺口见[两阶段修复与review](enricher-bare-chain-deployment-2026-09-08.md)。
+历史上Commandcode的40条模型配置已改为4条前缀映射，新增3项Qwen补全另获批准；旧44项检查见历史配置整理报告（本地 PLAN，未入库）。后来用户纠正裸名清空provider的错误，已先用原配置部署公共入口修复，再经同输入等价验证删除XL Muse的同名 `lookup_ids`；其模型级Meta链保留。新证据及尚存缺口见[两阶段修复与review](enricher-bare-chain-deployment-2026-09-08.md)。
 
 恢复旧查询需要回退代码与配套配置；**仅清空字典不够**。后续已按用户授权完成Go-only部署，未提交代码；[上线与人工review记录](enricher-provider-prefix-deployment-2026-09-08.md)包含在线字段变化、检查结果及回退资料。部署不等于完整数据验收，原配置与修改前源码证据均保留。

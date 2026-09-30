@@ -74,7 +74,7 @@ docker compose up -d --no-deps --no-build --pull never --force-recreate models-e
 - 本轮日志显示GMICloud自身渠道取数403，Go按规则退回CPA记录；未换身份重试。
 - 静态 `grok-4.7` 的 `supergrok/grok-4.7` 父项仍缺失。
 - 实时目录缺字段数：`max_output_tokens`/`output_modalities`各129项，`max_input_tokens`186项，`max_tokens`143项，`max_completion_tokens`189项；其他四项核心字段各缺1项。
-- 原[本地固定输入缺项报告](../PLAN/enricher-source-config-cleanup.md)仍是那份输入的结果，不是当前生产完整性证明。新的在线变化需人工review，完整数据验收仍未完成。
+- 原本地固定输入缺项报告（本地 PLAN，未入库）仍是那份输入的结果，不是当前生产完整性证明。新的在线变化需人工review，完整数据验收仍未完成。
 
 ## 制品与回退资料
 

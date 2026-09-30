@@ -15,7 +15,7 @@ change fixes the CPA native catalog request and the table caption to
 inventory requests still use `v0.65.0`. This avoids CPA's legacy reasoning-level
 filter; it does not bypass authentication or membership admission. No final HTML
 cache was introduced. The override was deployed separately in a Go-only cutover;
-see [the version change record](../PLAN/cpa-native-catalog-version.md).
+see the version change record（本地 PLAN，未入库）.
 
 The sidecar proxies the page to `apisix-models`. Its new HTML route matches only
 `realip_remote_addr=172.30.42.3`, the sidecar's existing connection address;
