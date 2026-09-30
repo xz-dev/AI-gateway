@@ -41,6 +41,7 @@ ai_ops_profiles:
   provider-sidecar: {}
   aisix-status: {}
   models-enricher: {}
+  model-catalog-sidecar: {}
   # Production uses an archive-preloaded localhost image; component deploy must
   # not contact a registry for this service.
   cpa-model-sync:
