@@ -1,5 +1,14 @@
 # AI Gateway
 
+> [!IMPORTANT]
+> This project lets you build an AI gateway that is entirely your own, one module at a time. The architecture combines the strengths of each module and covers their weaknesses, so you are not limited by any single gateway or component, and you do not need large-scale custom development.
+
+> [!NOTE]
+> Have an AI deploy this project for you. Its maintainability relies on AI-native development:
+>
+> 1. Components are cleanly separated, so humans can easily review the architecture and check that the configuration is correct.
+> 2. No automated deployment script hides or unifies the complexity of the configuration files. Let an AI make configuration changes for you, so that nothing is changed incorrectly or missed.
+
 Model inventory synchronization: [cpa-model-sync usage and policy migration](cpa-model-sync/README.md).
 The Rust sidecar manages only the five supported API-key kinds through CPA's internal
 Management API. Gemini/Interactions retain Go inventory behavior; Go metadata,
@@ -13,17 +22,30 @@ It separates provider credentials, client API-key authority, logical-model routi
 flowchart LR
   Client --> Cloudflare
   Cloudflare --> cloudflared
-  cloudflared --> APISIX
+  cloudflared --> APISIX[APISIX front door]
   APISIX --> Keepalive[AI SSE keepalive proxy]
   Keepalive --> Sub2API
   Sub2API --> AISIX
   AISIX --> CPA[CLIProxyAPI]
-  Enricher[models-enricher] --> AISIX
+  Sub2API -->|WebSocket| Models[apisix-models internal APISIX]
+  Models --> CPA
+  Models -->|/v1/images/edits| AISIX
+  APISIX -->|versioned /v1/models| Sidecar[model-catalog-sidecar]
+  Operator[Operator via localhost/Tailscale] -->|/models-table| Sidecar
+  Operator -->|/status| Status
+  Sidecar --> Models
+  Models -->|/v1/models, /models-table| Enricher[models-enricher]
+  Enricher --> AISIX
   Enricher --> CPA
+  Sync[cpa-model-sync] -->|Management API| CPA
+  Status[aisix-status] -->|Admin API| AISIX
   Sub2API --> PostgreSQL
   Sub2API --> Redis
-  CPA --> Proxy[Allowlist egress proxy]
+  CPA --> Proxy[Squid allowlist egress proxy]
   Sub2API --> Proxy
+  Enricher --> Proxy
+  CPA -.->|optional| ProviderSidecar[provider-sidecar]
+  ProviderSidecar -.-> Proxy
   Proxy --> Providers[Approved HTTPS destinations]
 ```
 
