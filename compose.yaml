@@ -302,7 +302,7 @@ services:
         ipv4_address: 172.30.60.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-docker.io/weishaw/sub2api:0.2.1}
+    image: ${SUB2API_IMAGE:-docker.io/weishaw/sub2api:0.2.10}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
