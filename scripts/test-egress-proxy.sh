@@ -6,7 +6,7 @@ source "$root/scripts/container-runtime.sh"
 RUNTIME=("$AI_GATEWAY_RUNTIME")
 
 cd "$root"
-image=${1:-ai-gateway-squid:6.13-2-deb13u2}
+image=${1:-ai-gateway-squid:6.13-2-deb13u3-r1}
 tun2proxy_image=${2:-ghcr.io/tun2proxy/tun2proxy:v0.8.3}
 tun_test_mode=${AI_GATEWAY_TUN_TEST_MODE:-exact-capabilities}
 case "$tun_test_mode" in exact-capabilities|ci-privileged) ;; *) echo 'AI_GATEWAY_TUN_TEST_MODE must be exact-capabilities or ci-privileged' >&2; exit 1;; esac

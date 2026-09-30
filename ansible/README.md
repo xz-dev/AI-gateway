@@ -80,7 +80,7 @@ defaults. Key ones:
 | `ai_ops_compose_cmd` | auto-detect | compose provider (`docker compose` / `podman compose` / `podman-compose`) |
 | `ai_ops_mode` | `apply` | `plan` = read-only diff |
 | `ai_ops_min_mem_mb` / `ai_ops_min_disk_mb` | `256` / `1024` | capacity gate thresholds |
-| `ai_ops_squid_image` | `ai-gateway-squid:6.13-2-deb13u2` | pinned image for offline parse validation |
+| `ai_ops_squid_image` | `ai-gateway-squid:6.13-2-deb13u3-r1` | pinned image for offline parse validation |
 | `ai_ops_model_sync_approved_digest` | `""` | exact digest printed by the reviewed model-sync plan; required when the policy changes |
 | `ai_ops_model_sync_verify_retries` / `ai_ops_model_sync_verify_delay_seconds` | `30` / `2` | bounded wait for the recreated sidecar's immediate round |
 | `ai_ops_model_sync_log_tail` | `200` | maximum current-container log lines parsed for the round summary |

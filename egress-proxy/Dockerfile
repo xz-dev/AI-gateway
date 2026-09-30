@@ -1,7 +1,7 @@
-FROM docker.io/library/debian:13.6
+FROM docker.io/library/debian:13.7
 
-ARG SQUID_OPENSSL_VERSION=6.13-2+deb13u2
-ARG UNBOUND_VERSION=1.22.0-2+deb13u3
+ARG SQUID_OPENSSL_VERSION=6.13-2+deb13u3
+ARG UNBOUND_VERSION=1.26.1-0+deb13u1
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \

@@ -567,7 +567,7 @@ PY
 # gates, not snapshots of ports, service counts, or application policy values.
 BUILDAH_FORMAT=docker "${COMPOSE[@]}" "${compose_args[@]}" --env-file "$env_file" build ai-sse-keepalive-proxy >/dev/null
 egress_image=$(value_from_env EGRESS_PROXY_IMAGE)
-[ -n "$egress_image" ] || egress_image=ai-gateway-squid:6.13-2-deb13u2
+[ -n "$egress_image" ] || egress_image=ai-gateway-squid:6.13-2-deb13u3-r1
 "${RUNTIME[@]}" build --quiet --tag "$egress_image" egress-proxy >/dev/null
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=validation \
   -addext 'basicConstraints=critical,CA:TRUE' \

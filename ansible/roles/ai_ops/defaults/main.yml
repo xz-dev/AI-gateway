@@ -45,6 +45,9 @@ ai_ops_profiles:
   # not contact a registry for this service.
   cpa-model-sync:
     pull: false
+  # Squid is built locally on the host from egress-proxy/; never pulled.
+  egress-proxy:
+    pull: false
 
 # Model-sync deploy: exact preview digest approved from ai_ops_mode=plan.
 ai_ops_model_sync_approved_digest: ""
@@ -71,7 +74,7 @@ ai_ops_ws_keepalive_approved_digest: ""
 ai_ops_ws_keepalive_expected_revision: ""
 
 # Pinned Squid image used for offline `-k parse` validation of rendered policy.
-ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u2
+ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u3-r1
 
 # AISIX deploy: direct-connect models explicitly adopted into resources.yaml
 # (reported orphans require this list to approve deletion from the effective set).
