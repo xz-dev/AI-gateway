@@ -135,7 +135,7 @@ services:
         ipv4_address: 172.30.62.3
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:v8.0.4}
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api:v8.0.4-pr6189-8f82146@sha256:eeeac396baaaeec7868201eb0b779f423c7d4d3303c49e3d52cc827b1d4ae19b}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -302,7 +302,7 @@ services:
         ipv4_address: 172.30.60.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-docker.io/weishaw/sub2api:0.2.10}
+    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api:0.2.10-pr7157-pr7217-pr3172-9a21b93@sha256:8c2f6075379d77ff52457e9b7235d3410d81afca0cb2b1aa31109cd3c3fc0262}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
@@ -510,7 +510,7 @@ services:
   ai-sse-keepalive-proxy:
     build:
       context: ./middleware/ai-sse-keepalive-proxy
-    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ai-sse-keepalive-proxy:v0.1.0}
+    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ghcr.io/xz-dev/ai-sse-keepalive-proxy:639eca292db8ba056b2a2e339209b3326cf77683}
     pull_policy: build
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
@@ -717,7 +717,7 @@ services:
   models-enricher:
     build:
       context: ./models-enricher
-    image: ${MODELS_ENRICHER_IMAGE:-ghcr.io/xz-dev/ai-gateway-models-enricher:catalog-limit-64m-20260914}
+    image: ${MODELS_ENRICHER_IMAGE:-ghcr.io/xz-dev/ai-gateway-models-enricher:claude-500k-20260929-e006756}
     pull_policy: build
     network_mode: service:models-enricher-netns
     restart: unless-stopped
@@ -852,7 +852,7 @@ services:
         ipv4_address: 172.30.70.3
 
   aisix-status:
-    image: ${AISIX_STATUS_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix-status:0.2.3}
+    image: ${AISIX_STATUS_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix-status:0.2.3@sha256:4ea017ad0e84de8810f75ae637e4198ac56f692fe0447ae7924223010269de4f}
     user: "65532:65532"
     restart: unless-stopped
     depends_on:
@@ -884,7 +884,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix:1.2.0-deadlockfix-7d6d14b-developerrole-52b0225}
+    image: ${AISIX_IMAGE:-ghcr.io/api7/aisix:1.5.0@sha256:336040687c0702d43b36d2ec27433390503217b573ffcc2e314c8744355f2000}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped
