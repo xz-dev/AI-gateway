@@ -79,7 +79,7 @@ channels:
 
 # 裸模型经 bare_models_takeover 动态补全（fail-open）；
 # statics 只保留与动态源数据不同的真实差异：
-#   gpt 六项：供应商真实限额 372k 覆盖 models.dev 的标称值；
+#   gpt 七项：供应商真实限额 372k 覆盖 models.dev 的标称值；
 #   glm-5.3：聚合入口单独限制为 500k；
 #   glm-5.2：默认推理档 max（动态源无默认档声明）；
 #   kimi-k3-500k：models.dev 无此 ID，继承 kimi-k3 动态数据后压上下文。
@@ -97,6 +97,8 @@ static_models:
   - slug: gpt-6-sol
     overrides: {context_window: 372000, max_context_window: 372000}
   - slug: gpt-6-luna
+    overrides: {context_window: 372000, max_context_window: 372000}
+  - slug: gpt-6.1-sol
     overrides: {context_window: 372000, max_context_window: 372000}
   - slug: glm-5.2
     overrides: {default_reasoning_level: max}

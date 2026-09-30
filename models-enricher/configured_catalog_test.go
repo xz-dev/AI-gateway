@@ -90,6 +90,7 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 		"gpt-6-astra":      nil,
 		"gpt-6-sol":        nil,
 		"gpt-6-luna":       nil,
+		"gpt-6.1-sol":      nil,
 		"glm-5.2":          nil,
 		"glm-5.3":          nil,
 		"kimi-k3-500k":     {"kimi-k3"},
@@ -110,7 +111,7 @@ func TestConfiguredSourcesAndStaticModels(t *testing.T) {
 		}
 		overrides, _ := static["overrides"].(map[string]any)
 		switch slug {
-		case "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra":
+		case "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol":
 			if toInt(overrides["context_window"]) != 372000 || toInt(overrides["max_context_window"]) != 372000 {
 				t.Fatalf("gpt static %s must carry the 372000 context overrides: %v", slug, static)
 			}
