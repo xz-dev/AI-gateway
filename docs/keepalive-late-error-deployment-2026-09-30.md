@@ -13,7 +13,7 @@ This makes quota/credit failures more informative. **It does not replenish GLM q
 - Image: `ghcr.io/xz-dev/ai-sse-keepalive-proxy:bd38e50f9fc09e1c446d3573b31cd54ecec583df@sha256:c4af69df946aebaefe284df54245158fd1db624b8186e03b2919844cbeb2c5c5`.
 - Observed Docker image ID: `sha256:c4af69df946aebaefe284df54245158fd1db624b8186e03b2919844cbeb2c5c5`.
 - Container started: `2026-09-30T10:40:19.883226317Z`; health `healthy`.
-- Retained settings: `HEADER_WAIT=30s`, `IDLE_INTERVAL=15s`, `WS_PING_INTERVAL=15s`.
+- Retained settings: `HEADER_WAIT=30s`, `IDLE_INTERVAL=15s`, `WS_PING_INTERVAL=15s`. **Superseded 2026-10-01:** `HEADER_WAIT=30s` made Cloudflare reset slow `Accept: application/json` streams; production now uses 10s ([details](keepalive-header-wait-10s-deployment-2026-10-01.md)).
 - Production private `.env` changed only the keepalive image selector. Compose bytes were unchanged. Credentials, routing, other images and Cloudflare settings were not changed.
 - Changes were committed directly to `main` and pushed; no feature branch or GPG signature was required by the operator.
 
@@ -37,7 +37,7 @@ Post-activation inspection independently confirmed the exact image/revision, hea
 
 No live Pi/Codex inference or retry-classification test was performed. The image fixture verifies gateway behavior, not recovery of exhausted GLM accounts. HTTP 200 cannot be changed after commitment; a late error is necessarily an in-stream failure.
 
-Rollback, if needed: restore the previous keepalive selector in private desired state and run the same scoped Ansible plan/apply with its digest/revision. Keep `HEADER_WAIT=30s`:
+Rollback, if needed: restore the previous keepalive selector in private desired state and run the same scoped Ansible plan/apply with its digest/revision. Keep the current `HEADER_WAIT` (10s since 2026-10-01, see [the follow-up](keepalive-header-wait-10s-deployment-2026-10-01.md); do not restore 30s):
 
 ```text
 ghcr.io/xz-dev/ai-sse-keepalive-proxy:639eca292db8ba056b2a2e339209b3326cf77683@sha256:76c8d6e534e62d361eb24e519cb5bf4afcacdb14b07069001e413b040c2607b0
