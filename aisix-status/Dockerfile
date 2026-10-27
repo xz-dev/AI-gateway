@@ -6,7 +6,7 @@ COPY . .
 ARG STATUS_VERSION=0.2.2
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${STATUS_VERSION}" -o /out/aisix-status .
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG STATUS_VERSION=0.2.2
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="AI-gateway AISIX status" \
