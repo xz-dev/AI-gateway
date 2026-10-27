@@ -1,150 +1,88 @@
-# CPA model synchronization
+# cpa-model-sync
 
-> **Production acceptance remains blocked; both attempts were rolled back.**
-> The first omitted channel filters and exceeded 16 MiB. Filtering is now corrected
-> and the 32 MiB candidate withdrawn, but the second attempt encountered Sub2API
-> cgroup OOM kills before candidate public-load acceptance was completed.
-> See [PRODUCTION.md](PRODUCTION.md) and [CATALOG-LIMIT.md](CATALOG-LIMIT.md).
-> Production uses the original deployment. Local test passes in
-> [VALIDATION.md](VALIDATION.md) do not constitute production acceptance.
+Rust sidecar that owns the **configured `models` membership** of five CPA channel
+kinds: `openai-compatibility`, `claude-api-key`, `codex-api-key`, `xai-api-key` and
+`vertex-api-key`. Each round it discovers those channels through CPA's management
+API, fetches each channel's upstream inventory through CPA's management `api-call`,
+filters it with the policy's per-channel regexes, and PATCHes the channel's `models`
+array only when the canonical result differs from what CPA currently holds. It never
+contacts upstream providers itself - CPA performs those requests with the credentials
+it already holds. The process has no listener and no database.
 
-Rust owns configured model inventories for **openai-compatibility, claude-api-key,
-codex-api-key, xai-api-key and vertex-api-key**. Go remains the metadata enricher.
-Gemini and Interactions retain their existing Go inventory and filters. OAuth is
-not managed by Rust; this does not exclude OAuth models from the downstream catalog.
+Policy schema: [docs/configuration.md](docs/configuration.md).
+Round flow, write protocol and error reasons: [docs/architecture.md](docs/architecture.md).
+
+## Ownership boundary
+
+- **Rust (this project)** owns the configured model membership of the five managed
+  kinds. It writes only the `models` array of those kinds.
+- **Go (`models-enricher`)** only enriches metadata of members CPA already publishes
+  for those kinds. It never decides the member set. Its runtime validator rejects a
+  configured `include`/`exclude` on a discovered managed channel with
+  `move include/exclude to cpa-model-sync`, returning HTTP 500
+  `catalog_configuration_conflict` instead of a catalog.
+- **Gemini and Interactions** (`gemini-api-key`, `interactions-api-key`) keep their
+  existing Go inventory and Go `include`/`exclude`; Rust never contacts them.
+- **OAuth** (`auth-files`, `oauth-model-alias`) is not managed by Rust. This does not
+  exclude OAuth models from the downstream catalog.
+- `models-enricher`'s `exclude_models` is unrelated: it hides exact public IDs from
+  the public catalog after enrichment and does not change synchronization.
 
 ## Run
 
 ```sh
+# One round, then exit:
 cargo run --locked -- --once config.example.json
-# Periodic mode, immediate first round:
+
+# Periodic mode; first round starts immediately:
 cargo run --locked -- config.example.json
-```
 
-Inject `CPA_MANAGEMENT_KEY` privately through the environment. Do not put upstream
-keys in the policy file. `client_version` is explicit: the example `0.101.0` is a
-sample, not a claim about the latest client. Set a version accepted by your upstream.
-
-Compose adds only a dedicated internal two-member network to CPA's namespace.
-The sidecar resolves `cli-proxy-api` to **172.30.44.2:8317**, directly to CPA, not
-APISIX or a relay. It has no listener, public port, external network, database,
-helper process, or dependency on a healthcheck timer. No production start or
-migration is implied by adding the service.
-
-Override `CPA_MODEL_SYNC_CONFIG` with a private policy file and optionally
-`CPA_MODEL_SYNC_IMAGE` with the built versioned image. The default mounts the
-example policy. Mounting a policy must not copy the provider inventory: CPA remains
-the source of providers and credentials. The binary also supports a read-only
-preview used by Ansible operations:
-
-```sh
+# Read-only preview; policy is read from stdin:
 cat config.example.json | CPA_MANAGEMENT_KEY=... \
   CPA_MODEL_SYNC_IMAGE_IDENTITY=<immutable-image-id> \
   cpa-model-sync --preview -
 ```
 
-Preview performs discovery and inventory reads but never PATCHes CPA. Its JSON
-contains complete per-channel additions/removals, counts, set digests, and one
-approval digest binding the policy bytes, image identity, current CPA sets,
-source inventories, and desired sets. The management key and upstream credentials
-are never emitted.
+- `CPA_MANAGEMENT_KEY` is required and must be non-empty in every mode. Inject it
+  through the environment; never put upstream keys in the policy file.
+- `CPA_MODEL_SYNC_IMAGE_IDENTITY` is used by `--preview` only and defaults to the
+  empty string.
+- `client_version` is explicit in the policy. The example value `0.101.0` is a
+  sample, not a claim about the latest upstream client. Set a version your upstream
+  accepts.
+- Preview performs discovery and inventory reads but never PATCHes CPA.
 
-```json
-{
-  "cpa_url": "http://cli-proxy-api:8317",
-  "client_version": "0.101.0",
-  "interval_seconds": 600,
-  "requests": { "retries": 3, "retry_delay_ms": 1000, "timeout_ms": 30000 },
-  "channels": {
-    "exact-cpa-prefix": { "path": "/v1/models", "include": ["^A$"], "exclude": [] }
-  }
-}
-```
+## Compose notes
 
-Unknown fields and invalid regexes are rejected. Retries must be 0–30, delays must
-fit the finite exponential budget, and request timeout/interval must be positive.
-Omitting a channel policy means no filtering. The checked-in example deliberately
-keeps NIM's three selected IDs and ShuaiAPI's Claude-only policy; do not drop these
-when preparing this deployment. `exclude` wins over `include`.
-Filters match exact upstream ID strings; no model family/chat classification,
-static aliases or `excluded-models` wildcard conversion is added.
+`compose.yaml` service `cpa-model-sync` (around line 791):
 
-## Semantics
+- Mounts `${CPA_MODEL_SYNC_CONFIG:-./cpa-model-sync/config.example.json}` at
+  `/app/config.json` (read-only) and runs the default daemon command with that path.
+  Override `CPA_MODEL_SYNC_CONFIG` with a private policy file; override
+  `CPA_MODEL_SYNC_IMAGE` to pin a built versioned image (compose default tag:
+  `cpa-model-sync:v0.1.3`).
+- Joins only the dedicated internal two-member network `model-sync-cpa`
+  (172.30.44.0/29), with `extra_hosts: cli-proxy-api:172.30.44.2`. It therefore
+  reaches CPA directly at 172.30.44.2:8317, not APISIX or a relay.
+- No published port, no listener, no external network, no database, no helper
+  process and no healthcheck.
+- Runs read-only as `65534:65534` with `cap_drop: ALL`, `no-new-privileges`,
+  `pids_limit: 16`, `mem_limit: 256m`, `cpus: 0.5`, and waits for
+  `cli-proxy-api` to be healthy.
+- Mounting a policy must not copy the provider inventory: CPA remains the source of
+  providers and credentials. Adding this service does not by itself start or migrate
+  anything.
 
-- Fetch the complete inventory; never write a partial, malformed, oversized or
-  originally empty inventory. Claude pagination is capped at 128 pages; bounded
-  response reads use 8 MiB for management and 32 MiB for inventory envelopes.
-- Explicit filtering may produce `models=[]`. This means zero **configured**
-  models, not necessarily zero runtime models: CPA's native fallback remains intact.
-- Write only `models`, as a full replacement. Manual extra models/aliases/attributes
-  will be overwritten next round. Credentials, disabled, prefix, URL, proxy and
-  `excluded-models` are not managed by this process.
-- Disabled channels still refresh, without enabling them or publishing inventory
-  around CPA. If no live auth index exists, CPA-returned credentials may be used
-  only transiently in its own `api-call` headers, never for direct upstream access.
-- Compare against fresh CPA state, not a private history cache. Outer model and
-  object-key order do not matter; other fields, types, duplicates and nested array
-  order do. Same-name alias defaults are normalized. A matching second round writes
-  nothing, including after process/CPA restart.
-- Each operation gets one initial attempt plus at most three retries by default,
-  delayed 1/2/4 seconds. A failed pagination attempt starts over, without nested
-  page retries. A lost write response uses remaining attempts to re-read; an already
-  applied value is not written again. Exhausted ambiguity is `unconfirmed`, not
-  success, and never triggers a whole-config restore.
-- At most two channel workers fetch together. A single process-local mutex spans
-  the fresh CPA read, comparison, PATCH and uncertain-result confirmation, avoiding
-  CPA's known concurrent-write bug. Run **one active synchronizer per CPA**; this
-  mutex does not coordinate other processes or external management writers. No
-  fixed waiting period or cross-channel transaction is added. Rounds do not overlap.
-  After a slow
-  round the next strictly future monotonic tick is used; missed ticks are discarded.
-  Ten minutes is **not** an end-to-end maximum staleness guarantee: operation time,
-  failures, CPA propagation and downstream caches also contribute.
-- stdout contains one updated/unchanged/failed/unconfirmed summary per round;
-  stderr contains logical channel identity, static reason and configured
-  `max_attempts` (not an observed attempt count). `--once` exits 1 for failed or
-  unconfirmed results, 2 for startup/configuration errors. Periodic mode retries
-  failed work in subsequent rounds. Full inventories are local to each round.
+## Exit codes
 
-## Go policy migration
+| Code | Meaning |
+| --- | --- |
+| 0 | `--once` with zero failed and zero unconfirmed channels, or `--preview` succeeded |
+| 1 | `--once` with at least one failed or unconfirmed channel |
+| 2 | Startup or configuration error (usage, unreadable or invalid policy, invalid retry budget or interval, invalid regex in `--preview`, missing or empty `CPA_MANAGEMENT_KEY`), or a read failure during `--preview` |
 
-For each current CPA prefix, inspect its actual kind; never infer kind from a
-name. For the five managed kinds, move only include/exclude to this JSON policy.
-Copy an explicit path if inventory discovery needs it; Go may still need that
-path for metadata lookup. Keep `source_priority`, `lookup_ids`, metadata references,
-overrides and Ollama settings in Go. Its runtime validator explicitly rejects
-remaining include/exclude on discovered managed channels.
-
-Gemini/Interactions keep their Go include/exclude and upstream-derived membership.
-Custom pools and static alias configuration also stay in the existing Go/downstream
-layer. Do not copy them into this synchronizer.
-
-Checked-in migration inventory (`models-enricher/config.yaml`):
-
-| Prefix | Existing include/exclude/path | Change |
-| --- | --- | --- |
-| axis | absent | No policy to move; metadata unchanged |
-| xl | absent | No policy to move; lookup/reference unchanged |
-| zcode | absent | No policy to move; overrides unchanged |
-| ollama-cloud | absent | No policy to move; Ollama/lookup/overrides unchanged |
-| nim | absent | No policy to move; source priority unchanged |
-| shuaiapi | absent | No policy to move; source priority unchanged |
-| commandcode | absent | No policy to move; existing egress limitation unchanged |
-| gmicloud | absent | No policy to move; native metadata unchanged |
-
-Thus the checked-in Rust policy has `channels: {}`; no provider list or metadata
-configuration was duplicated. This table is **not** a production provider-kind
-inventory. Private runtime policies still require the same type-aware migration.
-
-Production policy is carried by the private deployed policy file, not this
-repository. The approved runtime filters (NIM exact three-ID include, ShuaiAPI
-`^claude-`, `skip_channels: [gmicloud]`) live in that private policy and in the
-parallel Go `skip_channels` flag; examples here document the mechanism only.
-Provider-qualified chains and exact `lookup_ids` (94 verified mappings at last
-review) are configured in `models-enricher/config.yaml`; see
-[SOURCE-BINDING-REVIEW.md](SOURCE-BINDING-REVIEW.md) for the binding-evidence
-boundary — lookup-target existence is execution evidence, not reseller-identity
-proof, and unverified variants remain explicitly unset.
+Periodic mode retries failed channels in later rounds and runs until it is stopped;
+it never exits for a channel failure.
 
 ## Validation
 
@@ -152,13 +90,41 @@ proof, and unverified variants remain explicitly unset.
 cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
-cd ../models-enricher
-go test -race ./...
-go vet ./...
+
+# Downstream, unchanged by this project:
+cd ../models-enricher && go test -race ./... && go vet ./...
 ```
 
-See [COMPATIBILITY.md](COMPATIBILITY.md) for the pinned, isolated real-CPA probe.
-The existing layered HTTP fixture and front Lua contract remain separate downstream
-gates. The pre-existing exact egress-policy baseline failure is not repaired here.
-Independent model-based review is waived for this change at the user's request;
-local automated checks must not be described as independent review.
+[COMPATIBILITY.md](COMPATIBILITY.md) holds the pinned, isolated real-CPA probe
+(`tests/real_cpa.go`); `tests/resources/measure.py` reproduces the fixed
+five-round resource measurement. Local checks are not production acceptance.
+
+## Documentation
+
+Current reference:
+
+- [docs/configuration.md](docs/configuration.md) - policy schema, defaults,
+  validation, filter semantics, worked examples, common mistakes.
+- [docs/architecture.md](docs/architecture.md) - round flow, inventory fetch,
+  canonical comparison, serialized write protocol, concurrency, preview output,
+  logging, static error reasons.
+
+Historical records (kept as written; they describe earlier attempts, not the current
+state):
+
+| Record | Content |
+| --- | --- |
+| [PRODUCTION.md](PRODUCTION.md) | Two production attempts and their rollback |
+| [CATALOG-LIMIT.md](CATALOG-LIMIT.md) | Catalog size, channel policy and resource gates |
+| [VALIDATION.md](VALIDATION.md) | Local validation results and known gaps |
+| [COMPATIBILITY.md](COMPATIBILITY.md) | Real-CPA compatibility probe and reproduction |
+| [EVIDENCE.md](EVIDENCE.md) | Delta scenario evidence mapping |
+| [SOURCE-BINDING-REVIEW.md](SOURCE-BINDING-REVIEW.md) | Source-binding/deployment boundary (Chinese) |
+| [SUB2API-OOM.md](SUB2API-OOM.md) | Read-only Sub2API OOM findings |
+| [UPSTREAM-MIGRATION.md](UPSTREAM-MIGRATION.md) | Upstream image migration checks |
+| [DEPLOYED-2026-09-07.md](DEPLOYED-2026-09-07.md) | Manual production deployment |
+| [RECOVERY-2026-09-07.md](RECOVERY-2026-09-07.md) | Rollout recovery and evidence boundary |
+
+These are point-in-time records, not a statement of current production state. For
+production status, see [PRODUCTION.md](PRODUCTION.md) and the later records above;
+local test passes are not production acceptance.
