@@ -54,7 +54,7 @@ jobs:
             echo "Version tag already exists; bump the component VERSION file." >&2
             exit 1
           fi
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: ./services/routing/${{ matrix.component }}
           push: true
