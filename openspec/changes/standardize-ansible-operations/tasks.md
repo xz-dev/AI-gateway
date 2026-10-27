@@ -40,7 +40,7 @@
 - [x] 2.7 `ai_ops_model_sync` (deploy/rollback), with `docker_container_info`/`docker_image_info` for identity, `docker_compose_v2_exec` for the read-only env check, and the log read as a `command` argv filtered in Jinja. Verify: `test-ansible-model-sync.sh` passes with `--check` in place of `ai_ops_mode=plan`, including the stale-approval, failure and recovery-mismatch cases.
 - [x] 2.8 `ai_ops_model_catalog` (deploy/rollback), with `validate-config` and `healthcheck` through `docker_compose_v2_exec` (`check_mode: false`) and identity through `docker_container_info`. Verify: `test-ansible-model-catalog-config.sh` passes on the new entry points.
 
-- [ ] 2.9 Add `ops/scripts/tests/test-compose-module-parity.sh` (D11) on a real Docker Engine with the Compose plugin at the renderer version. Verify: it passes in CI, and locally wherever a Docker Engine socket exists; it fails when `dependencies: false` is removed from the activation (with the dependency stopped first, Compose then starts it; Compose 2.40.3 does not recreate a running, up-to-date dependency).
+- [x] 2.9 Add `ops/scripts/tests/test-compose-module-parity.sh` (D11) on a real Docker Engine with the Compose plugin at the renderer version. Verify: it passes in CI, and locally wherever a Docker Engine socket exists; it fails when `dependencies: false` is removed from the activation (with the dependency stopped first, Compose then starts it; Compose 2.40.3 does not recreate a running, up-to-date dependency).
 
 ## 3. Playbooks and retirements
 
@@ -53,14 +53,14 @@
 
 ## 4. Lint, CI and docs
 
-- [ ] 4.1 Make `ansible-lint` at the `production` profile pass with zero violations, with no `skip_list`; every `noqa` names its rule and gives a reason. Add the CI `ansible` job (D9): pinned requirements and collections, lint, syntax-check, tests, parity test. Add a grep test that allows the `docker compose` or `docker` CLI in a task only at the kept calls listed in D12. Verify: `uvx ansible-lint` and every `ops/scripts/tests/test-*` pass locally, `ops/scripts/validate.sh .env.example` passes (with `compose.override.yaml` moved aside and restored), and CI is green after the push.
+- [x] 4.1 Make `ansible-lint` at the `production` profile pass with zero violations, with no `skip_list`; every `noqa` names its rule and gives a reason. Add the CI `ansible` job (D9): pinned requirements and collections, lint, syntax-check, tests, parity test. Add a grep test that allows the `docker compose` or `docker` CLI in a task only at the kept calls listed in D12. Verify: `uvx ansible-lint` and every `ops/scripts/tests/test-*` pass locally, `ops/scripts/validate.sh .env.example` passes (with `compose.override.yaml` moved aside and restored), and CI is green after the push.
 - [x] 4.2 Update the commands and the rename table in:
   - `ops/ansible/README.md`, `docs/ansible-operations.md` and `docs/gateway-health-and-recovery.md`;
   - the service READMEs: cpa-model-sync, egress-proxy, aisix, model-catalog;
   - `ops/scripts/README.md`.
 
   Verify: the local link check finds 0 broken links, and `openspec validate --all --strict` passes.
-- [ ] 4.3 Commit unsigned and push. Verify: CI is green for the commit.
+- [x] 4.3 Commit unsigned and push. Verify: CI is green for the commit.
 
 ## 5. Production verification
 
