@@ -4,3 +4,6 @@
 [submodule "middleware/openai-api-cache-keeper"]
 	path = middleware/openai-api-cache-keeper
 	url = https://github.com/xz-dev/openai-api-cache-keeper.git
+[submodule "models-enricher-ts/vendor/openai-api-pi-extension"]
+	path = models-enricher-ts/vendor/openai-api-pi-extension
+	url = https://github.com/xz-dev/openai-api-pi-extension.git
