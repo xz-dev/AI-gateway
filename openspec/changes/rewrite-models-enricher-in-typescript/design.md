@@ -96,6 +96,19 @@ The runtime stage copies only `dist/`, the tables JSON, `config.yaml` and the `/
   - the V8 heap was not capped.
 - An empty Node 26 process measures about 28 MiB RSS; one parsed catalog adds about 10 MiB.
 - Fix: D6 (output files) plus the allocator and heap settings above.
+
+**Final shadow measurement** (task 6.2, image with outputs on disk, `MALLOC_ARENA_MAX=2`, `--max-old-space-size=96`, worker `maxOldGenerationSizeMb` 160; anon+swap sampled from both containers on the same host at the same moments):
+
+| Measure | TS | Go |
+|---|---|---|
+| 30 min of normal operation, every 30 s (n=60): min / p50 / p90 / max | 62 / 76 / 97 / 169 MiB | 67 / 90 / 123 / 250 MiB |
+| 6 min after 50 consecutive forced refreshes | 96–101 MiB, flat (no upward trend) | 77–122 MiB |
+| Footprint during the 50 refreshes | 196–242 MiB | n/a |
+
+- Cold-start build peak: `memory.peak` 223 MiB. Peak over all forced builds: 256 MiB. Both are below the 384 MiB limit; `oom_kill` 0.
+- Forced refresh cost: about 1.75 CPU-s and 7.9 s wall, versus Go's 2.27 CPU-s and 9.8 s.
+- `pids.current`: 11.
+- Healthcheck (`/readyz`): it only reads the in-memory index. No footprint change was observed between samples.
 - **Removed settings**: `GOMEMLIMIT`, `HTTP_PROXY`, `HTTPS_PROXY` and `SSL_CERT_FILE` (D7).
 
 **Go baseline** (task 1.2), measured on production on 2026-10-27 against container `ai-gateway-models-enricher-1`, which had been up since 2026-10-23.
@@ -176,6 +189,34 @@ All reads go to CPA (`cpa:8317`, management and api-call) or AISIX. The service 
   - per-field metadata values, which are reviewed and accepted per field or fixed with config rules.
 - Cutover changes the `models-enricher` service to the TS image and config, recreating only that service. Rollback restores the Go image pin and the old private config; the Go bbolt file is still intact.
 - Go deletion, the directory rename and CI cleanup happen only after the observation window in task 6.4.
+- **As run**: the shadow ran as a `docker run` container (`models-enricher-shadow`), not as a compose profile. It had the same settings a profile would give:
+  - `--network container:ai-gateway-models-enricher-netns-1`, listening on `127.0.0.1:8091`;
+  - 384m memory, 0.5 CPU, `pids-limit 64`;
+  - read-only root, `cap-drop ALL`;
+  - its own volume, `models-enricher-shadow-cache`;
+  - the migrated private config.
+
+  The deploy root is not a git checkout, so this avoided adding and then removing a profile within the same change.
+
+**Accepted shadow diff** (2026-10-27, image `ts-shadow-b4439caba423`, Codex client 1.3.0-xz.357.1, captured live from both services):
+- Membership: 367/367 identical, in both the Codex and the standard format.
+- 33 of 367 models differ in Codex fields. Each difference has one of these causes:
+
+| Cause | Models | Accepted because |
+|---|---|---|
+| Enriched where Go emitted only the CPA row | `xl/gpt-5.6-sol`, `xl/gpt-6-{astra,sol}`, `zakk/gpt-*` (7), `claude-sonnet-5` | Go's chain produced nothing for these. The TS chain finds the models.dev records. |
+| models.dev canonical identity (shared `@creator` resolution) | `commandcode/deepseek/deepseek-v4-{flash,pro,flash-vision-exp}`, the `-fast` variants (`deepseek-v4-flash-fast`, `deepseek-v4.1-flash-fast`, `zai-org/GLM-5.2-Fast`) | models.dev declares `canonical_model_id` = the base model for the `-fast` records. The `deepseek` provider's `deepseek-v4-flash` alias now declares `deepseek/deepseek-v4.1-flash-1017`, so the v4 canonical record is used instead. Go read provider records literally. |
+| Source data replaces CPA defaults on `@default`/`@creator` chains | `cline/z-ai/glm-*` (3), `senseaudio/qwen3.*` (2), `xl/gemini-3.5-flash-lite`, `commandcode/{nvidia/nemotron-3.5-super-vl, poolside/laguna-s-2.1-free, tencent/hy3-paid}` | The values come from the model maker's records instead of CPA's placeholder 500000 / text+image defaults. For cline GLM, `default_reasoning_level: medium` is removed because the maker's levels are `high`/`max` (the reasoning-default cleanup). |
+| Reasoning toggle mapping | `ollama-cloud/nemotron-3-ultra` | The models.dev record has only `{type: toggle}`. The shared core maps the toggle to `none` plus the enabled levels. |
+| Record name casing | `commandcode/moonshotai/Kimi-K2.7-Code-Highspeed` | The name comes from a different record of the same model. |
+| `context_window: 0` | bare `gpt-image-{1.5,2,2.5-flare,2.5-sunburst}` (key dropped), `xl/gpt-image-2` (filled from its chain) | The shared core treats a non-positive window as missing. |
+
+- Key-shape differences:
+  - Go leaked raw source fields into Codex entries: `limit`, `cost`, `modalities`, `name`, `canonical_model_id`, Ollama `/api/show` fields, and others. TS emits only mapped fields.
+  - TS keeps CPA's explicit `null` keys (`guardian`, `upgrade`, etc.). Codex reads them as unset.
+  - TS mirrors `max_output_tokens` into `max_tokens`, as the spec requires.
+- `max_context_window`: there are no differences outside the rows above. The private config selects bare models and the data-chain channels with the `sync_max_context_window` glob list. Unconfigured CPA-only channels (`aihub`, `anyrouter`, `anthropic-api`, `sensenova`, ...) keep CPA's 872000. This also verifies the per-model selection on production data.
+- Stale data: the earlier `gpt-6.1-terra` gap was closed by `@opencode-ai/models` 0.0.117. Later gaps are handled by the hourly Dependabot entry (D9).
 
 ### D9 Dependabot
 

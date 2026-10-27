@@ -41,15 +41,15 @@
 
 ## 5b. Shadow follow-ups (decided 2026-10-27)
 
-- [ ] 5b.1 Publish outputs as files under `<CACHE_DIR>/out/`, stream them with fixed 64 KiB chunks, keep only the index in memory, release the parsed generation after each build, set `MALLOC_ARENA_MAX=2` and the heap caps. Verify: tests cover file publication, streaming, and cleanup of old generations; on the shadow, idle anon+swap is below the Go value measured at the same moment.
-- [ ] 5b.2 Make `sync_max_context_window` accept a boolean or an ordered glob list. Reject channel-level `sync_max_context_window` as a legacy field, and remove it from the private config. Verify: tests cover the three spec scenarios; the shadow diff shows unconfigured-channel `max_context_window` unchanged from Go.
+- [x] 5b.1 Publish outputs as files under `<CACHE_DIR>/out/`, stream them with fixed 64 KiB chunks, keep only the index in memory, release the parsed generation after each build, set `MALLOC_ARENA_MAX=2` and the heap caps. Verify: tests cover file publication, streaming, and cleanup of old generations; on the shadow, idle anon+swap is below the Go value measured at the same moment.
+- [x] 5b.2 Make `sync_max_context_window` accept a boolean or an ordered glob list. Reject channel-level `sync_max_context_window` as a legacy field, and remove it from the private config. Verify: tests cover the three spec scenarios; the shadow diff shows unconfigured-channel `max_context_window` unchanged from Go.
 - [x] 5b.3 Run the enricher npm Dependabot entry on an hourly `cron`. Verify: `check-jsonschema --builtin-schema vendor.dependabot` passes.
 
 ## 6. Shadow run and cutover
 
 - [x] 6.1 Migrate the private models-enricher YAML to the new schema locally. Verify: the TS `validate-config -` exits 0 and the Go-era legacy fields are gone. The file stays gitignored.
-- [ ] 6.2 Deploy `models-enricher-shadow` under the compose profile with its own volume. Measure steady RSS, peak RSS during a cold and a forced build, healthcheck transients and `pids.current`, then set the `--max-old-space-size` and worker `maxOldGenerationSizeMb` values. Verify: steady RSS is at or below the Go steady-state baseline measured in task 1.2, peak stays below 384 MiB, 50 forced refreshes show no upward RSS trend, and the numbers are recorded in design.md.
-- [ ] 6.3 Run `scripts/enricher-shadow-diff.mjs` against Go and the shadow. Resolve membership differences, and accept or pin field differences through config rules. Verify: the final diff report has zero unexplained membership differences, and every field difference has an accepted reason.
+- [x] 6.2 Deploy `models-enricher-shadow` under the compose profile with its own volume. Measure steady RSS, peak RSS during a cold and a forced build, healthcheck transients and `pids.current`, then set the `--max-old-space-size` and worker `maxOldGenerationSizeMb` values. Verify: steady RSS is at or below the Go steady-state baseline measured in task 1.2, peak stays below 384 MiB, 50 forced refreshes show no upward RSS trend, and the numbers are recorded in design.md.
+- [x] 6.3 Run `scripts/enricher-shadow-diff.mjs` against Go and the shadow. Resolve membership differences, and accept or pin field differences through config rules. Verify: the final diff report has zero unexplained membership differences, and every field difference has an accepted reason.
 - [ ] 6.4 Cut over: point the `models-enricher` service at the TS image, the new config and the cleaned environment (no `GOMEMLIMIT` or proxy variables), and recreate only that service. Verify: `/readyz` reports ready, the Sub2API-visible catalog matches the shadow output, the `:9083` table renders, and one scheduled refresh succeeds over the observation day.
 
 ## 7. Go removal and cleanup
