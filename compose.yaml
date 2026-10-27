@@ -125,7 +125,7 @@ services:
         ipv4_address: 172.30.17.2
       apisix-models-cpa-target:
         ipv4_address: 172.30.36.2
-      enricher-cpa-target:
+      catalog-cpa-target:
         ipv4_address: 172.30.30.2
       model-sync-cpa:
         ipv4_address: 172.30.44.2
@@ -435,6 +435,9 @@ services:
     <<: *netns-owner
     ports:
       - "${APISIX_BIND_ADDRESS:-127.0.0.1}:${APISIX_PORT:-9080}:9080"
+      # Models table operator listener: localhost and Tailscale only (trusted domain).
+      - "127.0.0.1:9083:9083"
+      - "${TAILSCALE_IP:?Set TAILSCALE_IP in .env}:9083:9083"
     networks:
       apisix-host-source:
         ipv4_address: 172.30.5.2
@@ -448,11 +451,19 @@ services:
     depends_on:
       apisix-host-netns: {condition: service_started, restart: true}
 
+  apisix-host-table-relay:
+    <<: *socat-relay
+    network_mode: service:apisix-host-netns
+    command: ["TCP4-LISTEN:9083,bind=172.30.5.2,reuseaddr,fork", "TCP4:172.30.6.2:9083,connect-timeout=10"]
+    depends_on:
+      apisix-host-netns: {condition: service_started, restart: true}
+
   apisix-netns:
     <<: *netns-owner
     extra_hosts:
       - "ai-sse-keepalive-ingress-relay:172.30.9.3"
-      - "model-catalog-sidecar:172.30.41.3"
+      - "apisix-models:172.30.45.3"
+      - "model-catalog:172.30.46.3"
     networks:
       host-apisix-target:
         ipv4_address: 172.30.6.2
@@ -460,8 +471,10 @@ services:
         ipv4_address: 172.30.8.2
       apisix-ai-sse-source:
         ipv4_address: 172.30.9.2
-      apisix-catalog-source:
-        ipv4_address: 172.30.41.2
+      front-catalog:
+        ipv4_address: 172.30.45.2
+      front-model-table:
+        ipv4_address: 172.30.46.2
 
   apisix:
     image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.19.0-debian}
@@ -485,6 +498,7 @@ services:
     depends_on:
       apisix-netns: {condition: service_started, restart: true}
       apisix-host-relay: {condition: service_started}
+      apisix-host-table-relay: {condition: service_started}
       apisix-ai-sse-relay: {condition: service_started, restart: true}
     volumes:
       - ./services/firewall/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro,Z
@@ -625,18 +639,18 @@ services:
     extra_hosts:
       - "aisix:172.30.70.3"
       - "cpa:172.30.35.3"
-      - "models-enricher:172.30.27.3"
+      - "model-catalog:172.30.27.3"
     networks:
       host-apisix-models-target:
         ipv4_address: 172.30.34.2
       apisix-models-cpa-source:
         ipv4_address: 172.30.35.2
-      apisix-models-enricher-source:
+      apisix-models-catalog-source:
         ipv4_address: 172.30.27.2
       sub2api-cpa-target:
         ipv4_address: 172.30.12.2
-      apisix-catalog-target:
-        ipv4_address: 172.30.42.2
+      front-catalog:
+        ipv4_address: 172.30.45.3
       apisix-models-aisix-source:
         ipv4_address: 172.30.70.2
 
@@ -659,7 +673,7 @@ services:
       apisix-models-netns: {condition: service_started, restart: true}
       apisix-models-host-relay: {condition: service_started}
       apisix-models-cpa-relay: {condition: service_started, restart: true}
-      apisix-models-enricher-relay: {condition: service_started, restart: true}
+      apisix-models-catalog-relay: {condition: service_started, restart: true}
       aisix: {condition: service_started, restart: true}
       apisix-models-aisix-relay: {condition: service_started, restart: true}
     volumes:
@@ -758,30 +772,32 @@ services:
       apisix-models-cpa-target:
         ipv4_address: 172.30.36.3
 
-  apisix-models-enricher-relay:
+  apisix-models-catalog-relay:
     <<: *socat-relay
     command: ["TCP4-LISTEN:8090,bind=172.30.27.3,reuseaddr,fork", "TCP4:172.30.28.2:8090,connect-timeout=10"]
     depends_on:
-      models-enricher: {condition: service_started}
+      model-catalog: {condition: service_started}
     networks:
-      apisix-models-enricher-source:
-        aliases: [models-enricher]
+      apisix-models-catalog-source:
+        aliases: [model-catalog]
         ipv4_address: 172.30.27.3
-      apisix-models-enricher-target:
+      apisix-models-catalog-target:
         ipv4_address: 172.30.28.3
 
-  models-enricher-netns:
+  model-catalog-netns:
     <<: *netns-owner
     extra_hosts:
       - "aisix:172.30.64.3"
       - "cpa:172.30.29.3"
     networks:
-      apisix-models-enricher-target:
+      apisix-models-catalog-target:
         ipv4_address: 172.30.28.2
-      enricher-cpa-source:
+      catalog-cpa-source:
         ipv4_address: 172.30.29.2
-      enricher-aisix-source:
+      catalog-aisix-source:
         ipv4_address: 172.30.64.2
+      front-model-table:
+        ipv4_address: 172.30.46.3
 
   cpa-model-sync:
     build:
@@ -808,18 +824,18 @@ services:
     depends_on:
       cli-proxy-api: {condition: service_healthy}
 
-  models-enricher:
+  model-catalog:
     build:
       context: ./services/routing/model-catalog
-    image: ${MODELS_ENRICHER_IMAGE:-ghcr.io/xz-dev/ai-gateway-models-enricher:ts-shadow-b4439caba423@sha256:c836e2bb3c829142403b9ed6d8a29c9324a0356f208c5b513f26ccdce663ce70}
+    image: ${MODEL_CATALOG_IMAGE:-ghcr.io/xz-dev/ai-gateway-model-catalog:ts-shadow-b4439caba423@sha256:c836e2bb3c829142403b9ed6d8a29c9324a0356f208c5b513f26ccdce663ce70}
     pull_policy: missing
-    network_mode: service:models-enricher-netns
+    network_mode: service:model-catalog-netns
     restart: unless-stopped
     depends_on:
-      models-enricher-netns: {condition: service_started, restart: true}
+      model-catalog-netns: {condition: service_started, restart: true}
       aisix: {condition: service_started, restart: true}
-      enricher-aisix-relay: {condition: service_started, restart: true}
-      enricher-cpa-relay: {condition: service_started, restart: true}
+      catalog-aisix-relay: {condition: service_started, restart: true}
+      catalog-cpa-relay: {condition: service_started, restart: true}
     pids_limit: 64
     # Node 主进程堆上限 96 MiB，构建 worker 160 MiB；峰值实测 256 MiB，留 native 缓冲余量。
     mem_limit: 384m
@@ -831,7 +847,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     healthcheck:
-      test: [CMD, /models-enricher, healthcheck]
+      test: [CMD, /model-catalog, healthcheck]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -839,73 +855,27 @@ services:
     environment:
       LISTEN_ADDR: :8090
       CONFIG_PATH: /app/config.yaml
-      CACHE_DIR: /var/cache/models-enricher
+      CACHE_DIR: /var/cache/model-catalog
       CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY:?Set CPA_MANAGEMENT_KEY in .env}
       CPA_CLIENT_KEY: ${CPA_CLIENT_KEY:-${CPA_API_KEY:?Set CPA_CLIENT_KEY or CPA_API_KEY in .env}}
       AISIX_MODELS_URL: http://aisix:3000/v1/models
       AISIX_TOKEN: ${AISIX_CATALOG_KEY:?Set AISIX_CATALOG_KEY in .env}
     volumes:
       - ./services/routing/model-catalog/config.yaml:/app/config.yaml:ro,Z
-      # 专用持久卷：元数据输入缓存跨重启/重建保留，只挂给 enricher。
-      - models-enricher-cache:/var/cache/models-enricher
+      # 专用持久卷：元数据输入缓存跨重启/重建保留，只挂给 model-catalog。
+      - model-catalog-cache:/var/cache/model-catalog
 
-  enricher-cpa-relay:
+  catalog-cpa-relay:
     <<: *socat-relay
     command: ["TCP4-LISTEN:8317,bind=172.30.29.3,reuseaddr,fork", "TCP4:172.30.30.2:8317,connect-timeout=10"]
     depends_on:
       cli-proxy-api: {condition: service_started}
     networks:
-      enricher-cpa-source:
+      catalog-cpa-source:
         aliases: [cpa]
         ipv4_address: 172.30.29.3
-      enricher-cpa-target:
+      catalog-cpa-target:
         ipv4_address: 172.30.30.3
-
-  model-catalog-sidecar:
-    image: ${MODEL_CATALOG_SIDECAR_IMAGE:-docker.io/nginxinc/nginx-unprivileged:1.31.6-alpine@sha256:26b0bf6fbf07297983cb341998d79c831508787de26627dd2a112321b9c3a4af}
-    restart: unless-stopped
-    user: "101:101"
-    pids_limit: 64
-    mem_limit: 32m
-    cpus: 0.2
-    read_only: true
-    cap_drop: [ALL]
-    logging: *default-logging
-    security_opt: [no-new-privileges:true]
-    tmpfs:
-      - "/etc/nginx/conf.d:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101"
-      - "/var/cache/nginx:rw,noexec,nosuid,nodev,size=8m,uid=101,gid=101"
-      - "/var/run:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101"
-      - "/tmp:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101"
-    # /models-table 诊断页的对外发布由 models-table-host-netns/relay 承担
-    # （internal-only 网络上的容器端口发布会被 Docker 静默跳过）
-    volumes:
-      - ./model-catalog-sidecar/templates:/etc/nginx/templates:ro,Z
-    networks:
-      apisix-catalog-source:
-        ipv4_address: 172.30.41.3
-      apisix-catalog-target:
-        ipv4_address: 172.30.42.3
-
-  # /models-table 对外发布：netns 持有 Tailscale/localhost 双绑定，socat 单向转发到边车
-  models-table-host-netns:
-    <<: *netns-owner
-    ports:
-      - "100.94.238.35:9083:9080"
-      - "127.0.0.1:9083:9080"
-    networks:
-      models-table-host-source:
-        ipv4_address: 172.30.43.2
-      apisix-catalog-source:
-        ipv4_address: 172.30.41.4
-
-  models-table-relay:
-    <<: *socat-relay
-    network_mode: service:models-table-host-netns
-    command: ["TCP4-LISTEN:9080,bind=172.30.43.2,reuseaddr,fork", "TCP4:172.30.41.3:8080,connect-timeout=10"]
-    depends_on:
-      models-table-host-netns: {condition: service_started, restart: true}
-      model-catalog-sidecar: {condition: service_started}
 
   aisix-netns:
     <<: *netns-owner
@@ -922,7 +892,7 @@ services:
         ipv4_address: 172.30.61.2
       aisix-cpa-source:
         ipv4_address: 172.30.62.2
-      enricher-aisix-target:
+      catalog-aisix-target:
         ipv4_address: 172.30.65.2
       apisix-models-aisix-target:
         ipv4_address: 172.30.71.2
@@ -942,16 +912,16 @@ services:
       sub2api-aisix-target:
         ipv4_address: 172.30.61.3
 
-  enricher-aisix-relay:
+  catalog-aisix-relay:
     <<: *socat-relay
     command: ["TCP4-LISTEN:3000,bind=172.30.64.3,reuseaddr,fork", "TCP4:172.30.65.2:3000,connect-timeout=10"]
     depends_on:
       aisix: {condition: service_started}
     networks:
-      enricher-aisix-source:
+      catalog-aisix-source:
         aliases: [aisix]
         ipv4_address: 172.30.64.3
-      enricher-aisix-target:
+      catalog-aisix-target:
         ipv4_address: 172.30.65.3
 
   apisix-models-aisix-relay:
@@ -1060,7 +1030,7 @@ services:
 
 volumes:
   openai-api-cache-keeper-cache: {}
-  models-enricher-cache: {}
+  model-catalog-cache: {}
   responses-ws-sse-bridge-spool: {}
 
 networks:
@@ -1082,10 +1052,10 @@ networks:
   aisix-cpa-target:
     internal: true
     ipam: {config: [{subnet: 172.30.63.0/29}]}
-  enricher-aisix-source:
+  catalog-aisix-source:
     internal: true
     ipam: {config: [{subnet: 172.30.64.0/29}]}
-  enricher-aisix-target:
+  catalog-aisix-target:
     internal: true
     ipam: {config: [{subnet: 172.30.65.0/29}]}
   aisix-status-admin:
@@ -1176,25 +1146,23 @@ networks:
   apisix-models-cpa-target:
     internal: true
     ipam: {config: [{subnet: 172.30.36.0/29}]}
-  apisix-models-enricher-source:
+  front-catalog:
+    internal: true
+    ipam: {config: [{subnet: 172.30.45.0/29}]}
+  front-model-table:
+    internal: true
+    ipam: {config: [{subnet: 172.30.46.0/29}]}
+  apisix-models-catalog-source:
     internal: true
     ipam: {config: [{subnet: 172.30.27.0/29}]}
-  apisix-models-enricher-target:
+  apisix-models-catalog-target:
     internal: true
     ipam: {config: [{subnet: 172.30.28.0/29}]}
-  enricher-cpa-source:
+  catalog-cpa-source:
     internal: true
     ipam: {config: [{subnet: 172.30.29.0/29}]}
-  enricher-cpa-target:
+  catalog-cpa-target:
     internal: true
     ipam: {config: [{subnet: 172.30.30.0/29}]}
-  apisix-catalog-source:
-    internal: true
-    ipam: {config: [{subnet: 172.30.41.0/29}]}
-  apisix-catalog-target:
-    internal: true
-    ipam: {config: [{subnet: 172.30.42.0/29}]}
-  models-table-host-source:
-    ipam: {config: [{subnet: 172.30.43.0/29}]}
   proxy-egress:
   cloudflare-egress:

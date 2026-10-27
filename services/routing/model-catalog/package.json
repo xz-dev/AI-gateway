@@ -1,5 +1,5 @@
 {
-  "name": "models-enricher",
+  "name": "model-catalog",
   "private": true,
   "type": "module",
   "engines": {
@@ -24,7 +24,7 @@
     "typescript": "7.0.2"
   },
   "imports": {
-    "#core": "./vendor/openai-api-pi-extension/metadata-core.ts",
-    "#core-worker": "./vendor/openai-api-pi-extension/metadata-worker.ts"
+    "#core": "./vendor/openai-api-pi-extension/src/metadata-core.ts",
+    "#core-worker": "./vendor/openai-api-pi-extension/src/metadata-worker.ts"
   }
 }

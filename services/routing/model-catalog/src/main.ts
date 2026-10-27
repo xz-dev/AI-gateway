@@ -1,4 +1,4 @@
-// Entry point: `/models-enricher` runs the server; subcommands `healthcheck`, `validate-config` and
+// Entry point: `/model-catalog` runs the server; subcommands `healthcheck`, `validate-config` and
 // `warm-compile-cache` keep the Compose/Ansible command interface.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -42,7 +42,7 @@ async function readStdin(limit: number): Promise<Buffer> {
 /** Prints only a schema version and the input digest; never YAML contents or secrets. */
 export async function validateConfig(path: string | undefined): Promise<number> {
   if (!path) {
-    process.stderr.write("usage: models-enricher validate-config <path|->\n");
+    process.stderr.write("usage: model-catalog validate-config <path|->\n");
     return 2;
   }
   let raw: Buffer;
@@ -101,7 +101,7 @@ async function serve(): Promise<number> {
     log.error("missing CPA_MANAGEMENT_KEY or CPA_CLIENT_KEY");
     return 1;
   }
-  const cacheDir = env("CACHE_DIR", "/var/cache/models-enricher");
+  const cacheDir = env("CACHE_DIR", "/var/cache/model-catalog");
   let disk: DiskCache;
   let outputs: OutputStore;
   try {
@@ -158,7 +158,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   if (command === "validate-config") return args.length === 1 ? validateConfig(args[0]) : validateConfig(undefined);
   if (command === "warm-compile-cache" && args.length === 0) return warmCompileCache();
   if (command === undefined) return serve();
-  process.stderr.write("usage: models-enricher [healthcheck | validate-config <path|-> | warm-compile-cache]\n");
+  process.stderr.write("usage: model-catalog [healthcheck | validate-config <path|-> | warm-compile-cache]\n");
   return 2;
 }
 

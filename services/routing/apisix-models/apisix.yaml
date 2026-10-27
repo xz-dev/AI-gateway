@@ -1,8 +1,8 @@
 upstreams:
-  - id: enricher
+  - id: model-catalog
     type: roundrobin
     nodes:
-      "models-enricher:8090": 1
+      "model-catalog:8090": 1
     timeout:
       connect: 5
       send: 30
@@ -97,28 +97,14 @@ routes:
       - POST
     priority: 90
     upstream_id: aisix
-  # HTML只接收目录边车的真实连接来源，不信任转发头中的地址。
-  - id: models-table-refresh
-    uri: /models-table/refresh
-    methods: [POST]
-    priority: 21
-    vars:
-      - ["realip_remote_addr", "==", "172.30.42.3"]
-    upstream_id: enricher
-  - id: models-table
-    uri: /models-table
-    methods: [GET]
-    priority: 20
-    vars:
-      - ["realip_remote_addr", "==", "172.30.42.3"]
-    upstream_id: enricher
-  # 标准OpenAI与Codex目录都交给enricher；最终富目录不缓存。
+  # 标准OpenAI与Codex目录都交给model-catalog；最终富目录不缓存。
+  # /models-table 不经本平面：由前门 9083 运维监听直连 model-catalog。
   - id: codex-models
     uri: /v1/models
     methods:
       - GET
     priority: 20
-    upstream_id: enricher
+    upstream_id: model-catalog
   - id: catch-all
     uri: /*
     priority: 1

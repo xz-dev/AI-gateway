@@ -1,4 +1,4 @@
-# models-enricher configuration (example; production policy lives in the private config).
+# model-catalog configuration (example; production policy lives in the private config).
 # The `metadata` block uses the openai-api-pi-extension chain schema:
 #   chain           field sources in order; each field takes its first valid value.
 #                   @self = the CPA native manifest row; @cpa-upstream = the rich row CPA reads

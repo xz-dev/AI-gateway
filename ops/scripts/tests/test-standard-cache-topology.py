@@ -134,7 +134,7 @@ class StandardCacheTopology(unittest.TestCase):
         program = script.split('services = compose.get("services") or {}\n', 1)[1].split("def service_networks", 1)[0]
         program = 'services = compose.get("services") or {}\n' + program
         keeper = "openai-api-cache-keeper"
-        enricher = "models-enricher"
+        enricher = "model-catalog"
         bridge = "responses-ws-sse-bridge"
         cache = {
             "services": {

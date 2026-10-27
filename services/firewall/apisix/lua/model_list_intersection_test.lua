@@ -34,9 +34,9 @@ local function run(original, options)
     package.loaded["resty.http"] = {new = function()
         return {
             set_timeouts = function() end,
-            connect = function(self, host) self.host = host; return true end,
+            connect = function(self, host, port) self.host = host; self.port = port; return true end,
             request = function(self, request)
-                calls[#calls + 1] = {host = self.host, request = request}
+                calls[#calls + 1] = {host = self.host, port = self.port, request = request}
                 local basic = self.host == "ai-sse-keepalive-ingress-relay"
                 local body = basic and (options.basic or '{"models":[{"slug":"c/allowed"}]}') or original
                 local headers = basic and (options.basic_headers or {}) or (options.headers or {})
@@ -78,6 +78,9 @@ test("authorized records retain exact JSON numbers and unknown metadata", functi
     assert(status == 200, "status " .. tostring(status))
     assert(body == expected, "JSON fidelity failed: " .. tostring(body))
     assert(#calls == 2 and calls[1].host == "ai-sse-keepalive-ingress-relay", "basic must run first")
+    assert(calls[2].host == "apisix-models" and calls[2].port == 9080, "catalog leg must reach apisix-models directly")
+    assert(calls[2].request.method == "GET" and calls[2].request.path == "/v1/models"
+        and calls[2].request.query == "client_version=fixture", "catalog leg must be GET /v1/models with client_version passthrough")
     assert(calls[1].request.path == "/v1/models" and calls[2].request.path == "/v1/models",
         "models path changed")
     assert(calls[1].request.headers.Authorization == "Bearer fixture-only", "client auth changed")

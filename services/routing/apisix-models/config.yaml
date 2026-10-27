@@ -1,5 +1,5 @@
 apisix:
-  # Bind only the inbound relay targets: healthcheck/self, host relay target, Sub2API relay target, catalog bridge target.
+  # Bind only the inbound relay targets: healthcheck/self, host relay target, Sub2API relay target, front-door catalog leg (front-catalog).
   node_listen:
     - ip: 127.0.0.1
       port: 9080
@@ -7,7 +7,7 @@ apisix:
       port: 9080
     - ip: 172.30.12.2
       port: 9080
-    - ip: 172.30.42.2
+    - ip: 172.30.45.3
       port: 9080
   enable_admin: false
   enable_control: false

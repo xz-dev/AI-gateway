@@ -20,11 +20,11 @@ local type = type
 
 local _M = {}
 
--- basic 腿：Sub2API（组 entitlement 名单）；original 腿：model-catalog 边车 → apisix-models → enricher
+-- basic 腿：Sub2API（组 entitlement 名单）；original 腿：apisix-models（front-catalog 直连）→ model-catalog
 local BASIC_UPSTREAM_HOST = "ai-sse-keepalive-ingress-relay"
 local BASIC_UPSTREAM_PORT = 8080
-local ORIGINAL_UPSTREAM_HOST = "model-catalog-sidecar"
-local ORIGINAL_UPSTREAM_PORT = 8080
+local ORIGINAL_UPSTREAM_HOST = "apisix-models"
+local ORIGINAL_UPSTREAM_PORT = 9080
 local BASIC_MAX_BYTES = 64 * 1024 * 1024
 local ORIGINAL_MAX_BYTES = 64 * 1024 * 1024
 local FINAL_MAX_BYTES = 64 * 1024 * 1024
@@ -39,9 +39,9 @@ local ACTIVE_KEY = "active"
 local ACTIVE_LEASE_SECONDS = 660
 -- One shared key serializes every external models request across callers and workers.
 local MAX_INFLIGHT = 1
--- 槽位占满时阻塞等待：后续请求通常能命中 enricher 的 catalog flight 缓存
+-- 槽位占满时阻塞等待：后续请求通常能命中 model-catalog 的 catalog flight 缓存
 -- （leader 一次构建，follower 直接取结果），等待即复用而非排队重做。
--- 等待预算需覆盖 enricher 的 OverallDeadline(25s) 冷启动构建上限。
+-- 等待预算需覆盖 model-catalog 的 OverallDeadline(25s) 冷启动构建上限。
 local ACQUIRE_WAIT_SECONDS = 30
 local ACQUIRE_RETRY_DELAY = 0.1
 
@@ -495,7 +495,7 @@ function _M.run(_, ctx)
 
     -- 串行双腿：basic 先行（隐式鉴权 + entitlement）；非 2xx 原样透传且不发 original 腿
     -- basic 腿携带与 original 相同的 query：Sub2API 带 client_version 走本地生成（mapping 并集 ∩ 组清单），
-    -- slug 集合即组 entitlement；其元数据不可信（硬编码兑底），交集时仅取 slug、内容取自 enricher
+    -- slug 集合即组 entitlement；其元数据不可信（硬编码兑底），交集时仅取 slug、内容取自 model-catalog
     local basic, basic_err = fetch(BASIC_UPSTREAM_HOST, BASIC_UPSTREAM_PORT,
         path, raw_query, BASIC_MAX_BYTES, copy_request_headers(BASIC_UPSTREAM_HOST))
     if not basic then

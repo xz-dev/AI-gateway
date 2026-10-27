@@ -76,6 +76,15 @@ upstreams:
       connect: 10
       send: 600
       read: 600
+  # Operator listener only: model-catalog over the two-member front-model-table network.
+  - id: model-catalog
+    type: roundrobin
+    nodes:
+      "model-catalog:8090": 1
+    timeout:
+      connect: 3
+      send: 60
+      read: 60
 
 plugin_configs:
   - id: apisix-native-upstream-404
@@ -88,6 +97,24 @@ plugin_configs:
               ngx.header["X-Client-Request-ID"] = nil
             end
 routes:
+  # Models table diagnostics: matched only on the 9083 operator listener.
+  # Localhost and Tailscale are the trusted domain, so no source-address filter.
+  - id: models-table
+    uri: /models-table
+    methods: [GET]
+    priority: 300
+    vars:
+      - [server_port, "==", "9083"]
+    upstream_id: model-catalog
+
+  - id: models-table-refresh
+    uri: /models-table/refresh
+    methods: [POST]
+    priority: 300
+    vars:
+      - [server_port, "==", "9083"]
+    upstream_id: model-catalog
+
   - id: ai-api-models-intersect
     uris:
       - /v1/models

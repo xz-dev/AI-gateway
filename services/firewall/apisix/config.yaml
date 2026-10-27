@@ -1,5 +1,6 @@
 apisix:
   # Bind only the inbound relay targets: healthcheck, host relay target, cloudflared relay target.
+  # 9083 is the operator models-table listener; only the host table relay reaches it.
   node_listen:
     - ip: 127.0.0.1
       port: 9080
@@ -7,6 +8,8 @@ apisix:
       port: 9080
     - ip: 172.30.8.2
       port: 9080
+    - ip: 172.30.6.2
+      port: 9083
   enable_admin: false
   enable_control: false
   enable_ipv6: false
