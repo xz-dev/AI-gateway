@@ -4,7 +4,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --locked
 
-FROM docker.io/library/debian:12.11-slim
+FROM docker.io/library/debian:13.7-slim
 COPY --from=build /build/target/release/cpa-model-sync /usr/local/bin/cpa-model-sync
 USER 65534:65534
 ENTRYPOINT ["/usr/local/bin/cpa-model-sync"]
