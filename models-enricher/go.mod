@@ -1,10 +1,10 @@
 module models-enricher
 
-go 1.24.0
+go 1.25.0
 
 require (
-	go.etcd.io/bbolt v1.4.3
+	go.etcd.io/bbolt v1.5.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require golang.org/x/sys v0.40.0 // indirect
+require golang.org/x/sys v0.45.0 // indirect
