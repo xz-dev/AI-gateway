@@ -24,25 +24,18 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
       - uses: actions/setup-go@v5
         with:
-          go-version-file: models-enricher/go.mod
-          cache-dependency-path: |
-            models-enricher/go.sum
-            aisix-status/go.sum
-      - name: Check Go metadata boundary
-        working-directory: models-enricher
-        run: |
-          go test -race ./...
-          go vet ./...
+          go-version-file: aisix-status/go.mod
+          cache-dependency-path: aisix-status/go.sum
       - name: Check AISIX status boundary
         working-directory: aisix-status
         run: |
           go test -race ./...
           go vet ./...
-  models-enricher-ts:
+  models-enricher:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: models-enricher-ts
+        working-directory: models-enricher
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,7 +44,7 @@ jobs:
         with:
           node-version: 26
           cache: npm
-          cache-dependency-path: models-enricher-ts/package-lock.json
+          cache-dependency-path: models-enricher/package-lock.json
       - run: npm ci
       - run: npm run typecheck
       - run: npm test

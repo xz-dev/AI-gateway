@@ -4,11 +4,11 @@ updates:
   - package-ecosystem: gitsubmodule
     directory: /
     allow:
-      - dependency-name: models-enricher-ts/vendor/openai-api-pi-extension
+      - dependency-name: models-enricher/vendor/openai-api-pi-extension
     schedule:
       interval: weekly
   - package-ecosystem: npm
-    directory: /models-enricher-ts
+    directory: /models-enricher
     # Hourly so new models reach the bundled metadata snapshots quickly.
     schedule:
       interval: cron
@@ -26,7 +26,6 @@ updates:
       - /cpa-model-sync
       - /egress-proxy
       - /models-enricher
-      - /models-enricher-ts
     schedule:
       interval: weekly
   - package-ecosystem: cargo
@@ -36,7 +35,6 @@ updates:
   - package-ecosystem: gomod
     directories:
       - /aisix-status
-      - /models-enricher
     schedule:
       interval: weekly
   - package-ecosystem: github-actions

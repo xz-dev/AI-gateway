@@ -1,94 +1,72 @@
-# models-enricher 配置；channels.<key> 精确匹配 CPA prefix。
-# 未配置的渠道保留CPA基线；已配置渠道默认获取自身目录。
-# 全局 source_priority 是兜底链：模型链整体替换；渠道链之后追加全局链（渠道优先）；显式 [] 关闭。
-# 渠道 global_fallback: false 只用自身渠道链，不追加全局链。
-# bare_models_takeover 开启后，CPA manifest 里的裸模型（主人手设，无渠道前缀）
-# 不再被入口过滤，改用全局链动态补全；static/custom 显式声明仍覆盖动态结果。
-# 已启用步骤无可用缓存且失败时，整个渠道退回纯CPA记录。
+# models-enricher configuration (example; production policy lives in the private config).
+# The `metadata` block uses the openai-api-pi-extension chain schema:
+#   chain           field sources in order; each field takes its first valid value.
+#                   @self = the CPA native manifest row; @cpa-upstream = the rich row CPA reads
+#                   from the channel's upstream (Ollama: /api/show), read only when a chain needs it.
+#   models          ordered `match:` glob rules (`*` stays inside one segment, `**` spans `/`);
+#                   later matching rules replace the chain, overrides merge in order (RFC 7396).
+#   include_models  optional ordered globs, `!` hides, last match wins, unmatched = hidden.
+# Membership comes from CPA identity admission, the AISIX supplement and static_models only.
 cpa_base_url: http://cpa:8317
 
-# 全链刷新：启动时后台运行一次；进入窗口和定时周期独立配置，均须为正值。
+# Full-chain refresh: once at startup in the background; entry window and schedule are independent.
 scheduled_refresh_interval: 30m
 entry_refresh_window: 10m
 
-# 可选 AISIX 独有模型目录补充；凭证仅从环境变量 AISIX_TOKEN 读取，禁止写入 YAML。
+# Optional AISIX-only catalog supplement; the token comes only from the AISIX_TOKEN environment variable.
 aisix_models_url: http://aisix:3000/v1/models
 aisix_timeout: 5s
 
-bare_models_takeover: true
-source_priority: [models.dev/zai, models.dev/xai, models.dev/moonshotai, models.dev/openai, models.dev/anthropic, models.dev/deepseek]
-# max_context_window 一律等于 context_window；渠道 sync_max_context_window: false 可保留更大的可调上限。
-sync_max_context_window: true
-# AISIX-only 的 axis 前缀仅映射元数据来源，不改变推理路由。
-provider_prefix_map:
-  axis: openai
 http_concurrency: 8
+# Off by default: max_context_window is only raised to context_window when missing or smaller.
+# `true` sets max_context_window = context_window for every model; an ordered glob list selects
+# models like include_models (`!` excludes, last match wins), e.g. ["xl/**", "!xl/grok-*"].
+# An explicit max_context_window override always wins.
+# sync_max_context_window: ["xl/**"]
+
+metadata:
+  # Sources ahead of @self override CPA's values; @self last fills what they lack.
+  # Put "@self" first instead to keep CPA's values and only fill gaps.
+  chain: ["models.dev/@creator/api_key", "modelparams.dev/@creator/api_key", "@self"]
+  # Keeps every admitted model (same as omitting the list). ["*/**"] would hide unprefixed
+  # operator aliases; ["**", "!**/gpt-image-*"] would hide image models.
+  include_models: ["**"]
+  models:
+    - match: "{axis,congee}/**"
+      chain: ["models.dev/openai/api_key", "@self"]
+    - match: "xl/**"
+      chain: ["modelparams.dev/xai/subscription", "models.dev/openai/api_key", "models.dev/xai/api_key", "models.dev/zai-coding-plan/subscription", "models.dev/moonshotai/api_key", "models.dev/deepseek/api_key", "models.dev/tencent/api_key", "@self"]
+    - match: "xl/muse-spark-1.3-contributor"
+      chain: ["models.dev/meta/api_key", "@self"]
+    - match: "zcode/**"
+      chain: ["models.dev/zai-coding-plan/subscription", "modelparams.dev/z-ai/subscription", "models.dev/zai/api_key", "@self"]
+    - match: "ollama-cloud/**"
+      chain: ["@cpa-upstream", "models.dev/ollama-cloud/api_key", "@self"]
+    - match: "nim/**"
+      chain: ["models.dev/nvidia/api_key", "@self"]
+    # NVIDIA records keep the vendor path in their ID: query it literally.
+    - match: "nim/deepseek-ai/deepseek-v4-flash-0731"
+      chain: ["models.dev/nvidia/api_key/deepseek-ai/deepseek-v4-flash-0731", "@self"]
+    - match: "nim/minimaxai/minimax-m3"
+      chain: ["models.dev/nvidia/api_key/minimaxai/minimax-m3", "@self"]
+    - match: "shuaiapi/**"
+      chain: ["models.dev/anthropic/api_key", "@self"]
+    # Haiku 4.5 does not support effort; clearing CPA's placeholder levels drops the conflicting default.
+    - match: "shuaiapi/claude-haiku-4-5"
+      overrides: {supported_reasoning_levels: []}
+    - match: "commandcode/**"
+      chain: ["models.dev/openai/api_key", "models.dev/anthropic/api_key", "@self"]
+    - match: "gmicloud/**"
+      chain: ["@self"]
+    # CPA does not declare an output modality for OAuth gpt-image models.
+    - match: "**/gpt-image-*"
+      overrides: {output_modalities: [image]}
+
 channels:
-  cline:
-    fetch_models: false
-  aihub:
-    fetch_models: false
-  senseaudio:
-    fetch_models: false
-  axis:
-    fetch_models: false
-    source_priority: [models.dev/openai]
-  congee:
-    fetch_models: false
-    source_priority: [models.dev/openai]
-  xl:
-    # 不请求 XL 远程目录；保留 CPA 成员并沿用下列数据链补全元数据。
-    fetch_models: false
-    source_priority: [modelparams.dev/xai/subscription, models.dev/openai, models.dev/xai, models.dev/zai-coding-plan, models.dev/moonshotai, models.dev/deepseek, models.dev/tencent]
-    # XL 的 xz 子命名空间承载 OpenAI 系列；只改变元数据查询身份，不改变公开 ID 或推理路由。
-    provider_prefix_map:
-      xz: openai
-    models:
-      muse-spark-1.3-contributor:
-        source_priority: [models.dev/meta]
-  zcode:
-    source_priority: [models.dev/zai-coding-plan, modelparams.dev/z-ai/subscription, models.dev/zai]
   ollama-cloud:
     ollama_native_base_url: https://ollama.com
-    source_priority: [ollama_cloud, models.dev/ollama-cloud]
-  nim:
-    source_priority: [models.dev/nvidia]
-    # NVIDIA来源使用完整厂商路径；仅映射provider会丢失ID中的厂商部分。
-    provider_prefix_map:
-      deepseek-ai: nvidia
-      minimaxai: nvidia
-    models:
-      deepseek-ai/deepseek-v4-flash-0731:
-        lookup_ids:
-          models.dev/nvidia: deepseek-ai/deepseek-v4-flash-0731
-      minimaxai/minimax-m3:
-        lookup_ids:
-          models.dev/nvidia: minimaxai/minimax-m3
-  shuaiapi:
-    source_priority: [models.dev/anthropic]
-    models:
-      # Haiku 4.5 官方不支持 effort；清掉 CPA 占位档位，冲突的默认档随之省略。
-      claude-haiku-4-5:
-        overrides: {supported_reasoning_levels: []}
-  commandcode:
-    source_priority: [models.dev/openai, models.dev/anthropic]
-    # 只转换查询前缀；厂家目录参考不代表渠道实测能力。
-    provider_prefix_map:
-      MiniMaxAI: minimax
-      Qwen: alibaba
-      z-ai: zai
-      zai-org: zai
-  gmicloud:
-    source_priority: []
 
-# 裸模型经 bare_models_takeover 动态补全（fail-open）；
-# statics 只保留与动态源数据不同的真实差异：
-#   gpt 六项：聚合入口统一 500k；
-#   glm-5.3：聚合入口单独限制为 500k；
-#   glm-5.2：默认推理档 max（动态源无默认档声明）；
-#   kimi-k3-500k：models.dev 无此 ID，继承 kimi-k3 动态数据后压上下文。
-#   claude-*：动态源无默认 effort；按 Anthropic 官方默认档补齐（Opus 5.5 为 medium，Haiku 4.5 不支持 effort）；
-#     1M 型号默认上下文 500k，保留 1M 可调上限（显式 max_context_window 不受 sync 开关覆盖）。
+# Statics keep only real differences from the chain-selected data.
 static_models:
   - slug: gpt-5.6-terra
     overrides: {context_window: 500000, max_context_window: 500000}

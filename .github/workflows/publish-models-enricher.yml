@@ -7,12 +7,6 @@ on:
         description: Immutable image version
         required: true
         type: string
-      context:
-        description: Build context (models-enricher-ts = TypeScript shadow until cutover)
-        required: true
-        default: models-enricher
-        type: choice
-        options: [models-enricher, models-enricher-ts]
 
 permissions:
   contents: read
@@ -57,17 +51,17 @@ jobs:
           fi
       - uses: docker/build-push-action@v6
         with:
-          context: ./${{ inputs.context }}
+          context: ./models-enricher
           push: true
           pull: true
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
-            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}${{ inputs.context == 'models-enricher-ts' && '-ts' || '' }}
+            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.image.outputs.version }}
-          cache-from: type=gha,scope=${{ inputs.context }}
-          cache-to: type=gha,mode=max,scope=${{ inputs.context }}
+          cache-from: type=gha,scope=models-enricher
+          cache-to: type=gha,mode=max,scope=models-enricher
           provenance: mode=max
           sbom: true
