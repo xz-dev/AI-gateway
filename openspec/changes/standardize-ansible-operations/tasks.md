@@ -70,3 +70,4 @@
   - `recovery.yml`.
 
   Verify: every run reports `changed=0 failed=0`; preflight fetched and checksum-verified the pinned renderer itself and found the host Compose version equal to the pin; the output contains no secret values; `docker ps` and the `.ai-ops-state` listing are unchanged before and after; no hand-fetched binary was used.
+- [ ] 5.2 On an `openai/*` model, apply `deploy-config.yml -e component=model-catalog` against production once with the unchanged config. Verify: only `model-catalog` is recreated (other container IDs unchanged), it is healthy with restarts=0, public `/v1/models` and `:9083/models-table` return 200, and a following `--check --diff` of the same playbook reports `changed=0`.

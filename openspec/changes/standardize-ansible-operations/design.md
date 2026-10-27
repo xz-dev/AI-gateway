@@ -300,10 +300,4 @@ Decision: pin the controller renderer to the host's Compose version. Rejected: m
    - `recovery.yml`.
 
    Each must report `changed=0 failed=0`. Investigate any change before continuing.
-4. **No apply is required.** Rollback is `git revert`. Remote state is untouched, because check mode writes nothing. The module-based activations are proven by the shims and the parity test; their first production use is the next real deploy (see Open Questions).
-
-## Open Questions
-
-- **Q4 Prove the module activation path in production now?** Check mode skips every `docker_compose_v2` call (D12), so step 3 cannot exercise it on the host. Options:
-  - default: no production apply in this change; the first real deploy after it is the first production use, with the usual `block`/`rescue` restore;
-  - alternative: one deliberate low-impact apply, for example re-activating the model-catalog configuration (recreates only `model-catalog`, a few seconds without the catalog), to prove `docker_compose_v2` and `docker_container_info` against the production daemon before it matters.
+4. **One deliberate low-impact apply** proves the module path on the production daemon: re-activate the model-catalog configuration with `deploy-config.yml -e component=model-catalog`. It recreates only `model-catalog` (a few seconds without the catalog) through `docker_compose_v2` and `docker_container_info`, under the usual `block`/`rescue` restore. Rollback of the change itself is `git revert`.
