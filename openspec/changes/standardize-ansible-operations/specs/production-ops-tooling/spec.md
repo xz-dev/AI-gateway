@@ -93,7 +93,7 @@ Every tooling-defined variable SHALL start with the name of the role that define
 ### Requirement: Deliberate deviations are recorded as decisions
 
 The tooling's remaining deliberate deviations from Ansible conventions SHALL be documented in the change's design.md with their rationale, so future contributors treat them as accepted decisions rather than defects to "fix":
-- `command` Compose invocation instead of a Docker Compose module;
+- `command` Compose or Docker invocation where a `community.docker` module cannot keep a current guarantee (environment isolation of Compose interpolation, offline rendering, helper scripts), each listed with its reason;
 - the custom drift-gate/baseline/receipt state machine;
 - approval digests that bind an apply run to a reviewed check run.
 
@@ -104,8 +104,8 @@ The tooling's remaining deliberate deviations from Ansible conventions SHALL be 
 
 #### Scenario: Contributor proposes switching to the compose module
 
-- **WHEN** a contributor questions why the tooling doesn't use a Docker Compose module or native file baselines
-- **THEN** the design document contains the recorded rationale explaining the accepted deviation
+- **WHEN** a contributor questions why a Compose call is a `command` instead of a `community.docker` module, or why native file baselines are not used
+- **THEN** the design document lists that call with the guarantee the module cannot keep
 
 ### Requirement: Behavioral parity with pre-restructure tooling
 
@@ -278,6 +278,46 @@ A diff SHALL NOT print secret-bearing file contents. An apply run SHALL still re
 - **WHEN** an approval-bound operation runs without `--check` and without a matching approval digest
 - **THEN** it stops before any mutation and prints the digest to review
 
+### Requirement: Container operations use pinned community.docker modules where they keep the guarantees
+
+Container inspection, image inspection, image pull, Compose recreate and restart, and read-only exec SHALL use `community.docker` modules, unless a module cannot keep a guarantee of the current implementation. The collection version SHALL be pinned in `ops/ansible/requirements.yml` and installed into a project-local collections path, so a different user-level copy is never used. Module calls SHALL pass the Compose project name, files and env files explicitly and SHALL never include dependencies, build images or pull outside the approved step. Mutating module calls SHALL run only in apply mode. Compose calls that run with a cleared environment (`env -i`) SHALL keep that isolation.
+
+Preflight SHALL verify read-only that the host provides what the modules need, and SHALL stop and name the missing item instead of installing anything.
+
+#### Scenario: A component is recreated through the module
+
+- **WHEN** an approved deploy recreates one service with `docker_compose_v2`
+- **THEN** only that service is recreated, no image is pulled or built, every other project container keeps its ID and start time, and the project name is the configured one
+
+#### Scenario: Host lacks a module prerequisite
+
+- **WHEN** the host has no Compose plugin of a supported version, or no Python `requests` for the remote interpreter
+- **THEN** preflight fails before any change and names the missing prerequisite
+
+#### Scenario: A variable in the remote login environment shadows an `.env` key
+
+- **WHEN** the component transaction renders or recreates a service
+- **THEN** Compose interpolates only from the deployed `.env`, as before the restructure
+
+### Requirement: Controller Compose renderer is pinned to the host version
+
+The candidate render used by the drift gate and scope guard SHALL run on the controller with a Compose binary whose version and per-architecture checksum are recorded in the repository. Preflight SHALL obtain that binary into a task-scoped directory, verify its checksum, and stop before any render if its version differs from the host's Compose version. The render SHALL need no container daemon and no system-wide install.
+
+#### Scenario: Check run from a Podman workstation
+
+- **WHEN** an operator without Docker or a Compose binary on `PATH` runs any playbook with `--check --diff`
+- **THEN** preflight fetches and verifies the pinned renderer and the run completes without a hand-installed binary
+
+#### Scenario: Host Compose is upgraded
+
+- **WHEN** the host's Compose version no longer equals the pinned renderer version
+- **THEN** every run stops in preflight and names both versions, before any render or comparison
+
+#### Scenario: Renderer binary is tampered
+
+- **WHEN** the cached renderer does not match the recorded checksum
+- **THEN** preflight refuses to use it
+
 ### Requirement: Tooling passes a production lint gate
 
 All playbooks and roles SHALL pass `ansible-lint` at the `production` profile with zero violations and `ansible-playbook --syntax-check`, in CI and locally. A lint exception SHALL be a per-line `noqa` that names the rule and gives a reason; blanket rule skips SHALL NOT be used. The controller toolchain versions SHALL be pinned in the repository.
@@ -302,4 +342,4 @@ All playbooks and roles SHALL pass `ansible-lint` at the `production` profile wi
 - `--tags recover-stale-lock` → `playbooks/unlock.yml`;
 - `-e ai_ops_mode=plan` → `--check --diff`.
 
-`deploy-ws-keepalive` is replaced by `deploy.yml -e component=ai-sse-keepalive-proxy`. The `response-keeper` operations stay retired.
+`deploy-ws-keepalive` is replaced by `deploy.yml -e component=ai-sse-keepalive-proxy`; its optional source-revision check is dropped. The `response-keeper` operations stay retired.

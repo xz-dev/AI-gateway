@@ -27,7 +27,9 @@ Operators and agents must learn a private dialect, lint cannot guard changes, an
   Each role has `meta/argument_specs.yml`, and handlers where a restart is event-driven.
 - Variables follow role-prefixed names. The few operator variables whose role changes are renamed; the rename table is in design D4.
 - `.ansible-lint` at the `production` profile with zero violations, run in CI with `ansible-playbook --syntax-check` for every playbook. `requirements.txt` pins `ansible-core` and `ansible-lint`.
-- Retired operations are deleted: `deploy-response-keeper`, `deploy-responses-path` and `restart-response-keeper` with their task files. The dedicated `deploy-ws-keepalive` operation is also removed; the generic `ai-sse-keepalive-proxy` component profile replaces it (see design Open Questions).
+- Container operations use the `community.docker` collection (pinned to 5.4.0 in `requirements.yml`) wherever a module keeps every current guarantee: container and image inspection, image pull, Compose recreate/restart and read-only exec. The component transaction's `env -i` isolated Compose calls, the offline renders and the helper scripts stay `command`; design D12 lists each kept call with its reason.
+- The controller Compose renderer used by the drift gate is pinned to the host's Compose version (2.40.3) with a checksum. Preflight fetches it into `/var/tmp` and fails closed if the host's version differs. Check runs therefore work from a Podman workstation without a hand-fetched binary.
+- Retired operations are deleted: `deploy-response-keeper`, `deploy-responses-path` and `restart-response-keeper` with their task files. The dedicated `deploy-ws-keepalive` operation is also removed, with its optional source-revision check; the generic `ai-sse-keepalive-proxy` component profile replaces it.
 - The Squid source-only sync becomes `deploy-config.yml -e component=egress-proxy -e ai_ops_squid_source_only=true`. It no longer uses the `sync-squid-source` tag.
 - Tests, docs, READMEs and the operations spec move to the new entry points.
 
@@ -52,9 +54,10 @@ None.
 
 ## Impact
 
-- `ops/ansible/`: new `playbooks/`, `roles/*`, `inventories/example/`, `ansible.cfg`, `.ansible-lint`, `requirements.txt`, README. Removed: `ops.yml`, `inventory/` and `examples/vars.yml` (folded into `inventories/example/`).
-- `ops/ansible/private-config/inventories/production/`: new, gitignored. The tracked host address leaves the working tree, but it stays in git history (see design Open Questions).
+- `ops/ansible/`: new `playbooks/`, `roles/*`, `inventories/example/`, `ansible.cfg`, `.ansible-lint`, `requirements.txt`, `requirements.yml`, a gitignored `collections/`, README. Removed: `ops.yml`, `inventory/` and `examples/vars.yml` (folded into `inventories/example/`).
+- `ops/ansible/private-config/inventories/production/`: new, gitignored. The tracked host address leaves the working tree. It stays in git history; history is not rewritten (user decision).
 - `ops/scripts/tests/test-ansible-*`, `test-component-apply.py`, `test-component-deploy.py`, `test-standard-cache-topology.py`: entry points and the check-mode invocation.
-- `.github/workflows/validate.yml`: lint and syntax-check job.
+- `.github/workflows/validate.yml`: an `ansible` job for lint, syntax-check, the Ansible tests and the Compose module parity test on a real Docker Engine.
+- Remote prerequisites: Docker CLI with the Compose plugin 2.18+ and Python `requests` (no Docker SDK). Production already has them (read-only check, 2026-10-27); nothing is installed.
 - `docs/ansible-operations.md`, `docs/gateway-health-and-recovery.md`, service READMEs: commands.
 - Production: no host change. Remote `.ai-ops-state` keys depend on file labels and component names, not tags, and both are kept. Final check: every deploy playbook in `--check --diff` reports no change.
