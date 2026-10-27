@@ -153,15 +153,13 @@ Each row is one upstream inventory evaluated under one filter.
 
 ## Common mistakes
 
-- **Putting `include`/`exclude` in `models-enricher` for a managed kind.** The Go
-  runtime validator rejects that with
-  `channel prefix "<x>": move include/exclude to cpa-model-sync`. That validation runs
-  per catalog build after CPA discovery, and a conflict makes the catalog request
-  fail with HTTP 500 `catalog_configuration_conflict`; it is not a startup check.
-  Go only enriches members Rust has already configured.
-- **Confusing `models-enricher`'s `exclude_models` with this policy.** That Go key
-  hides exact *public* IDs from the catalog after enrichment. It does not change
-  membership, does not stop a model from being configured, and does not affect
+- **Putting `include`/`exclude` in `models-enricher`.** The TypeScript enricher has no
+  channel `include`/`exclude`; `validate-config` and startup reject them as legacy
+  fields. Membership filtering belongs here. The enricher only enriches members Rust
+  has already configured.
+- **Confusing `models-enricher`'s `metadata.include_models` with this policy.** Its `!`
+  entries hide *public* IDs from the catalog after admission. They do not change
+  membership, do not stop a model from being configured, and do not affect
   routing.
 - **Expecting `skip_channels` to remove models.** It only stops fetching and writing.
   Existing `models` stay in CPA and the channel stays enabled. To actually remove

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A Go sidecar that answers Codex models-manifest requests (`GET /v1/models` with `client_version`) by aggregating every enabled non-OAuth CPA channel's live model list through CPA's authenticated api-call proxy, filling missing metadata from models.dev/modelparams.dev, and applying operator overrides and filters.
+A TypeScript sidecar that answers Codex models-manifest requests (`GET /v1/models` with `client_version`) from CPA-admitted catalog members, selecting each model's metadata through the shared openai-api-pi-extension source chain (bundled models.dev/modelparams.dev snapshots, the CPA native row `@self` and the channel upstream row `@cpa-upstream` read through CPA's authenticated api-call proxy), and applying operator overrides, `include_models` filtering and gateway-only post-processing.
 
 ## Requirements
 

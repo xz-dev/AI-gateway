@@ -76,7 +76,7 @@ curl -X POST .../v1/responses -d '{"model":"aihub/<model>","input":"hi"}'       
 
 ## 4. models-enricher 目录来源（`models-enricher/config.yaml`）
 
-新 prefix 出现在 CPA 目录后，enricher 决定元数据。默认渠道继承全局 `source_priority` 链。若上游目录无需抓取：`channels.<prefix>: {fetch_models: false}`（zakk/aihub 这类按需开）。改后 `go test ./...`（`configured_catalog_test.go` 硬编码渠道清单需同步）。
+新 prefix 出现在 CPA 目录后，enricher 决定元数据。未配置规则的渠道使用根 `metadata.chain`。要为渠道指定来源，在 `metadata.models` 加一条规则，例如 `{match: "<prefix>/**", chain: ["models.dev/<provider>/api_key", "@self"]}`；需要渠道上游的富数据时在链中加入 `@cpa-upstream`（只在链需要时才经 CPA `api-call` 读取）。要隐藏模型，在 `metadata.include_models` 加 `!` 条目。上限同步需要时把该渠道 glob 加入根 `sync_max_context_window` 列表。改后在 `models-enricher/` 运行 `npm test`，并用部署镜像的 `/models-enricher validate-config -` 校验私有配置（输出 `{"version":1,"config_digest":...}`）。
 
 WebSocket 入站由 Sub2API 统一鉴权和处理；内部 models gateway 不再维护独立 WS 别名表。
 

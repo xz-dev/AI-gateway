@@ -357,9 +357,14 @@ managed config change. First adopt the reviewed live
 bytes match, readback establishes the reviewed baseline without recreation.
 
 For a changed config, plan mode streams local YAML to
-`models-enricher validate-config -` inside the running container — the same
-`loadConfig` path used at startup (YAML, required fields, provider prefixes,
-source tokens, regexes) — and shows the effective file diff. Apply revalidates,
+`/models-enricher validate-config -` inside the running container — the same
+config parser used at startup (YAML, required fields, the shared `metadata` chain
+schema, globs, rejected Go-era legacy fields) — and shows the effective file diff.
+The TypeScript image prints `{"version":1,"config_digest":"<sha256>"}` on success;
+the digest is what the post-recreate check compares. Since the TypeScript rewrite
+the config uses the openai-api-pi-extension chain schema (`metadata.chain`,
+`metadata.models`, `metadata.include_models`); a Go-era file fails validation with a
+migration hint. Apply revalidates,
 uploads, and force-recreates only `models-enricher` (`--no-deps --no-build`),
 then requires a fresh container on the same image whose mounted `/app/config.yaml`
 digest matches the candidate, whose `healthcheck` becomes ready within bounded

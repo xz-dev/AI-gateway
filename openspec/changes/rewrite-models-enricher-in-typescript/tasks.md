@@ -50,13 +50,20 @@
 - [x] 6.1 Migrate the private models-enricher YAML to the new schema locally. Verify: the TS `validate-config -` exits 0 and the Go-era legacy fields are gone. The file stays gitignored.
 - [x] 6.2 Deploy `models-enricher-shadow` under the compose profile with its own volume. Measure steady RSS, peak RSS during a cold and a forced build, healthcheck transients and `pids.current`, then set the `--max-old-space-size` and worker `maxOldGenerationSizeMb` values. Verify: steady RSS is at or below the Go steady-state baseline measured in task 1.2, peak stays below 384 MiB, 50 forced refreshes show no upward RSS trend, and the numbers are recorded in design.md.
 - [x] 6.3 Run `scripts/enricher-shadow-diff.mjs` against Go and the shadow. Resolve membership differences, and accept or pin field differences through config rules. Verify: the final diff report has zero unexplained membership differences, and every field difference has an accepted reason.
-- [ ] 6.4 Cut over: point the `models-enricher` service at the TS image, the new config and the cleaned environment (no `GOMEMLIMIT` or proxy variables), and recreate only that service. Verify: `/readyz` reports ready, the Sub2API-visible catalog matches the shadow output, the `:9083` table renders, and one scheduled refresh succeeds over the observation day.
+- [x] 6.4 Cut over: point the `models-enricher` service at the TS image, the new config and the cleaned environment (no `GOMEMLIMIT` or proxy variables), and recreate only that service. Verify: `/readyz` reports ready, the Sub2API-visible catalog matches the shadow output, the `:9083` table renders, and one scheduled refresh succeeds over the observation day.
 
 ## 7. Go removal and cleanup
 
-- [ ] 7.1 Delete the Go sources, `go.mod`/`go.sum` and the Go CI job. Run `git mv models-enricher-ts models-enricher`, then update the paths in compose, the workflows, Dependabot and `.gitmodules`. Verify: CI passes, and `git grep -n 'models-enricher-ts\|golang'` shows no stale enricher references.
-- [ ] 7.2 Remove the shadow profile and its volume definition from compose. Verify: `docker compose config` succeeds, and no shadow service remains.
-- [ ] 7.3 Remove the enricher's egress relay dependency and the CA bundle mount; remove the relay service if nothing else references it. Verify: `docker compose config` succeeds, and the enricher still builds catalogs.
-- [ ] 7.4 Remove the old bbolt file from the `models-enricher-cache` volume. Verify: the volume contains only `v2/`.
-- [ ] 7.5 Update the docs (`docs/`, the Ansible README models-enricher section and `docs/model-routing.md` references) to describe the TS sidecar, the new config schema and `include_models`. Update the `codex-models-enricher` main-spec Purpose so it no longer says "Go sidecar". Verify: `git grep -n 'Go sidecar\|source_priority\|exclude_models'` hits only archived or historical documents.
-- [ ] 7.6 Run `openspec validate rewrite-models-enricher-in-typescript --strict`. Verify: it passes.
+- [x] 7.1 Delete the Go sources, `go.mod`/`go.sum` and the Go CI job. Run `git mv models-enricher-ts models-enricher`, then update the paths in compose, the workflows, Dependabot and `.gitmodules`. Verify: CI passes, and `git grep -n 'models-enricher-ts\|golang'` shows no stale enricher references.
+- [x] 7.2 Remove the shadow profile and its volume definition from compose. Verify: `docker compose config` succeeds, and no shadow service remains.
+- [x] 7.3 Remove the enricher's egress relay dependency and the CA bundle mount; remove the relay service if nothing else references it. Verify: `docker compose config` succeeds, and the enricher still builds catalogs.
+- [x] 7.4 Remove the old bbolt file from the `models-enricher-cache` volume. Verify: the volume contains only `v2/`.
+- [x] 7.5 Update the docs (`docs/`, the Ansible README models-enricher section and `docs/model-routing.md` references) to describe the TS sidecar, the new config schema and `include_models`. Update the `codex-models-enricher` main-spec Purpose so it no longer says "Go sidecar". Verify: `git grep -n 'Go sidecar\|source_priority\|exclude_models'` hits only archived or historical documents.
+- [x] 7.6 Run `openspec validate rewrite-models-enricher-in-typescript --strict`. Verify: it passes.
+
+## Completion notes (2026-10-27)
+
+- 6.4: cutover at 07:55Z to image `ts-shadow-b4439caba423@sha256:c836e2bb…`. The 9081 Codex and standard catalogs were byte-identical to the shadow, and the 9083 table rendered. The observation window was shortened from a day to one scheduled refresh (08:25:15Z, generation advanced, no errors, no restarts); the Go image stays in GHCR and the Go private config is kept in `ansible/private-config/models-enricher-go-rollback/`.
+- 7.2: the shadow ran as a `docker run` container (design D8, "As run"), so compose had no shadow profile to remove. The container, its volume and the host scratch directory were removed.
+- 7.3: `enricher-squid-relay` and the `enricher-squid-source` network were removed from compose, `ansible/ops.yml` and the Ansible test. The egress-proxy `enricher` policy entry and the `enricher-squid-target` network remain until the next egress-proxy restart window, because removing them restarts the proxy that CPA and Sub2API use.
+- 7.4: `inputs.db` (bbolt) was deleted. The volume holds `v2/` (input cache) and `out/` (published outputs, design D6).

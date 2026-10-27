@@ -16,17 +16,16 @@ Round flow, write protocol and error reasons: [docs/architecture.md](docs/archit
 
 - **Rust (this project)** owns the configured model membership of the five managed
   kinds. It writes only the `models` array of those kinds.
-- **Go (`models-enricher`)** only enriches metadata of members CPA already publishes
-  for those kinds. It never decides the member set. Its runtime validator rejects a
-  configured `include`/`exclude` on a discovered managed channel with
-  `move include/exclude to cpa-model-sync`, returning HTTP 500
-  `catalog_configuration_conflict` instead of a catalog.
+- **`models-enricher`** (TypeScript) only enriches metadata of members CPA already
+  publishes. It never decides the member set, and its config has no channel
+  `include`/`exclude`: `validate-config` rejects them as legacy fields.
 - **Gemini and Interactions** (`gemini-api-key`, `interactions-api-key`) keep their
-  existing Go inventory and Go `include`/`exclude`; Rust never contacts them.
+  existing CPA inventory; Rust never contacts them.
 - **OAuth** (`auth-files`, `oauth-model-alias`) is not managed by Rust. This does not
   exclude OAuth models from the downstream catalog.
-- `models-enricher`'s `exclude_models` is unrelated: it hides exact public IDs from
-  the public catalog after enrichment and does not change synchronization.
+- `models-enricher`'s `metadata.include_models` (`!` entries hide matching public IDs)
+  is unrelated: it hides public IDs from the catalog after admission and does not
+  change synchronization.
 
 ## Run
 
