@@ -38,6 +38,25 @@ jobs:
         run: |
           go test -race ./...
           go vet ./...
+  models-enricher-ts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: models-enricher-ts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: models-enricher-ts/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build tables and bundles
+        run: npm run build
   template:
     runs-on: ubuntu-latest
     steps:
