@@ -1,0 +1,59 @@
+---
+# Verify response-keeper + the apisix-models /rk route after deploy.
+# Inputs: _ai_verify_expected_image_identity (running image ID expected),
+#         _ai_verify_expected_revision (OCI revision label = source SHA).
+
+- name: Read response-keeper container ID
+  ansible.builtin.command: "{{ _compose }} ps -q response-keeper"
+  register: _rk_container
+  changed_when: false
+  failed_when: _rk_container.rc != 0 or _rk_container.stdout | trim == ""
+
+- name: Read response-keeper image identity and revision
+  ansible.builtin.command:
+    argv:
+      - "{{ _runtime }}"
+      - inspect
+      - "--format={{ '{{' }}.Image{{ '}}' }} {{ '{{' }}index .Config.Labels \"org.opencontainers.image.revision\"{{ '}}' }}"
+      - "{{ _rk_container.stdout | trim }}"
+  register: _rk_image
+  changed_when: false
+
+- name: Require approved image and revision
+  ansible.builtin.assert:
+    that:
+      - _ai_verify_expected_image_identity | default('') | length == 0 or (_rk_image.stdout.split() | first) == _ai_verify_expected_image_identity
+      - _ai_verify_expected_revision | default('') | length == 0 or (_rk_image.stdout.split() | last) == _ai_verify_expected_revision
+    fail_msg: "response-keeper image mismatch: observed={{ _rk_image.stdout }}"
+
+- name: Wait for response-keeper healthcheck
+  ansible.builtin.command: "{{ _compose }} exec -T response-keeper /response-keeper healthcheck"
+  register: _rk_ready
+  changed_when: false
+  retries: "{{ ai_ops_response_keeper_verify_retries }}"
+  delay: "{{ ai_ops_response_keeper_verify_delay_seconds }}"
+  until: _rk_ready.rc == 0
+
+# Unknown previous_response_id is answered by the keeper itself (no upstream call):
+# proves apisix-models 9080 /rk route -> keeper wiring end to end.
+- name: Probe /rk route through apisix-models (keeper answers 400 previous_response_not_found)
+  ansible.builtin.command:
+    cmd: "{{ _compose }} exec -T apisix-models /bin/bash -e"
+    stdin: |
+      {% raw %}
+      body='{"model":"ai-ops-probe","input":"x","previous_response_id":"resp_ai_ops_probe"}'
+      exec 3<>/dev/tcp/127.0.0.1/9080
+      printf 'POST /rk/v1/responses HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n%s' "${#body}" "$body" >&3
+      out=$(timeout 10 cat <&3)
+      case "$out" in *" 400 "*previous_response_not_found*) echo rk_route=ok ;; *) echo rk_route=bad; exit 1 ;; esac
+      {% endraw %}
+  register: _rk_route
+  changed_when: false
+  retries: "{{ ai_ops_response_keeper_verify_retries }}"
+  delay: "{{ ai_ops_response_keeper_verify_delay_seconds }}"
+  until: _rk_route.rc == 0
+
+- name: Record verified response-keeper identity
+  ansible.builtin.set_fact:
+    ai_response_keeper_verified_container: "{{ _rk_container.stdout | trim }}"
+    ai_response_keeper_verified_image: "{{ _rk_image.stdout }}"

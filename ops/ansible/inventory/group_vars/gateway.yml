@@ -1,0 +1,5 @@
+---
+# Group-level defaults for the gateway group. Host-specific values (and anything
+# sensitive) belong in inventory/host_vars/<host>.yml. See examples/vars.yml for
+# the full documented template. All variables are declared with defaults in
+# roles/ai_ops/defaults/main.yml — set here only what differs for this group.

@@ -1,0 +1,105 @@
+---
+# Verify one freshly started cpa-model-sync container and its CPA read-back.
+# Inputs: _ai_verify_expected_policy_digest, _ai_verify_expected_state_digest,
+#         _ai_verify_expected_image_identity.
+
+- name: Read cpa-model-sync container ID
+  ansible.builtin.command: "{{ _compose }} ps -q cpa-model-sync"
+  register: _model_sync_container
+  changed_when: false
+  failed_when: _model_sync_container.rc != 0 or _model_sync_container.stdout | trim == ""
+
+- name: Read cpa-model-sync image identity
+  ansible.builtin.command: >-
+    {{ _runtime }} inspect --format={{ '{{' }}.Image{{ '}}' }}
+    {{ _model_sync_container.stdout | trim }}
+  register: _model_sync_image
+  changed_when: false
+
+- name: Require approved cpa-model-sync image identity
+  ansible.builtin.assert:
+    that:
+      - _model_sync_image.stdout | trim == _ai_verify_expected_image_identity
+    fail_msg: >-
+      cpa-model-sync image changed during the operation
+      (expected={{ _ai_verify_expected_image_identity }},
+      observed={{ _model_sync_image.stdout | trim }}).
+
+- name: Wait for the first bounded synchronization summary
+  ansible.builtin.shell: |
+    {{ _compose }} logs --no-color --tail {{ ai_ops_model_sync_log_tail }} cpa-model-sync 2>&1 |
+    python3 -c '
+    import json, sys
+    keys = {"updated", "unchanged", "failed", "unconfirmed", "skipped"}
+    found = None
+    for line in sys.stdin:
+        start = line.find("{")
+        if start < 0:
+            continue
+        try:
+            value = json.loads(line[start:])
+        except json.JSONDecodeError:
+            continue
+        if keys <= value.keys():
+            found = value
+    if found is None:
+        raise SystemExit(1)
+    print(json.dumps(found, sort_keys=True, separators=(",", ":")))
+    '
+  args:
+    executable: /bin/sh
+  register: _model_sync_summary_raw
+  changed_when: false
+  retries: "{{ ai_ops_model_sync_verify_retries }}"
+  delay: "{{ ai_ops_model_sync_verify_delay_seconds }}"
+  until: _model_sync_summary_raw.rc == 0
+
+- name: Parse synchronization summary
+  ansible.builtin.set_fact:
+    _model_sync_summary: "{{ _model_sync_summary_raw.stdout | from_json }}"
+
+- name: Require a successful synchronization round
+  ansible.builtin.assert:
+    that:
+      - _model_sync_summary.failed | int == 0
+      - _model_sync_summary.unconfirmed | int == 0
+    fail_msg: >-
+      cpa-model-sync round was incomplete
+      (failed={{ _model_sync_summary.failed }},
+      unconfirmed={{ _model_sync_summary.unconfirmed }}).
+
+- name: Read back CPA model-set digests
+  ansible.builtin.command: >-
+    {{ _compose }} exec -T cpa-model-sync env
+    CPA_MODEL_SYNC_IMAGE_IDENTITY={{ _model_sync_image.stdout | trim }}
+    /usr/local/bin/cpa-model-sync --preview /app/config.json
+  register: _model_sync_readback_raw
+  changed_when: false
+  no_log: true
+
+- name: Parse CPA read-back
+  ansible.builtin.set_fact:
+    _model_sync_readback: "{{ _model_sync_readback_raw.stdout | from_json }}"
+  no_log: true
+
+- name: Require policy and CPA state to match the approved transition
+  ansible.builtin.assert:
+    that:
+      - _model_sync_readback.version | int == 1
+      - _model_sync_readback.policy_digest == _ai_verify_expected_policy_digest
+      - _model_sync_readback.image_identity == _ai_verify_expected_image_identity
+      - _model_sync_readback.current_state_digest == _ai_verify_expected_state_digest
+    fail_msg: >-
+      cpa-model-sync read-back did not match the approved state
+      (expected_policy={{ _ai_verify_expected_policy_digest }},
+      observed_policy={{ _model_sync_readback.policy_digest | default('missing') }},
+      expected_state={{ _ai_verify_expected_state_digest }},
+      observed_state={{ _model_sync_readback.current_state_digest | default('missing') }}).
+
+- name: Preserve sanitized verification facts
+  ansible.builtin.set_fact:
+    ai_model_sync_verified_container: "{{ _model_sync_container.stdout | trim }}"
+    ai_model_sync_verified_image: "{{ _model_sync_image.stdout | trim }}"
+    ai_model_sync_verified_policy_digest: "{{ _model_sync_readback.policy_digest }}"
+    ai_model_sync_verified_state_digest: "{{ _model_sync_readback.current_state_digest }}"
+    ai_model_sync_summary: "{{ _model_sync_summary }}"

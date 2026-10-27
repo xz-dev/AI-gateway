@@ -1,0 +1,85 @@
+---
+# Read-only drift gate and local/remote comparison for one managed file.
+# Params: ai_file_local, ai_file_remote, ai_file_label.
+
+- name: "Baseline copy path"
+  ansible.builtin.set_fact:
+    _ai_baseline: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_file_label | replace('/', '__') }}.baseline"
+    _ai_predeploy: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_file_label | replace('/', '__') }}.predeploy"
+
+- name: "Read remote current checksum of {{ ai_file_label }}"
+  ansible.builtin.stat:
+    path: "{{ ai_file_remote }}"
+    checksum_algorithm: sha256
+  register: _ai_remote_stat
+
+- name: "Read baseline checksum of {{ ai_file_label }}"
+  ansible.builtin.stat:
+    path: "{{ _ai_baseline }}"
+    checksum_algorithm: sha256
+  register: _ai_baseline_stat
+
+- name: "Read local file checksum"
+  ansible.builtin.stat:
+    path: "{{ ai_file_local }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  register: _ai_local_stat
+  failed_when: not _ai_local_stat.stat.exists
+
+- name: "Drift gate for {{ ai_file_label }}"
+  ansible.builtin.fail:
+    msg: >-
+      Remote {{ ai_file_label }} changed since last deploy
+      (remote={{ _ai_remote_stat.stat.checksum }} baseline={{ _ai_baseline_stat.stat.checksum }}).
+      Show the diff, adopt changes into the local file, or reconcile manually. Nothing was uploaded.
+  when:
+    - _ai_remote_stat.stat.exists
+    - _ai_baseline_stat.stat.exists
+    - _ai_remote_stat.stat.checksum != _ai_baseline_stat.stat.checksum
+    # remote matches local file = operator already adopted it; refresh baseline below
+    - _ai_remote_stat.stat.checksum != _ai_local_stat.stat.checksum
+
+- name: "Fetch remote copy for diff when content differs"
+  ansible.builtin.slurp:
+    src: "{{ ai_file_remote }}"
+  register: _ai_remote_slurp
+  no_log: true
+  when:
+    - _ai_remote_stat.stat.exists
+    - _ai_remote_stat.stat.checksum != _ai_local_stat.stat.checksum
+
+- name: "Show effective diff (local vs remote)"
+  ansible.builtin.command:
+    argv:
+      - diff
+      - -u
+      - "-"
+      - "{{ ai_file_local }}"
+    stdin: "{{ (_ai_remote_slurp.content | default('') | b64decode) if _ai_remote_stat.stat.exists else '' }}"
+    stdin_add_newline: false
+  delegate_to: localhost
+  register: ai_file_diff
+  changed_when: false
+  failed_when: ai_file_diff.rc > 1
+  check_mode: false
+  no_log: "{{ ai_file_label == '.env' }}"
+  when:
+    - _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+
+- name: "Diff output"
+  ansible.builtin.debug:
+    var: ai_file_diff.stdout_lines
+  when:
+    - ai_file_diff is defined
+    - ai_file_diff.rc is defined
+    - ai_file_diff.rc == 1
+
+- name: "No effective change for {{ ai_file_label }}"
+  ansible.builtin.debug:
+    msg: "{{ ai_file_label }}: no effective change"
+  when:
+    - _ai_remote_stat.stat.exists
+    - _ai_remote_stat.stat.checksum == _ai_local_stat.stat.checksum
+    - _ai_baseline_stat.stat.exists
+    - _ai_local_stat.stat.checksum == _ai_baseline_stat.stat.checksum

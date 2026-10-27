@@ -1,0 +1,554 @@
+---
+# The existing deploy/rollback entry points select this transaction via ai_ops_profiles.
+# No remote Git, build, dependency restart, or unreviewed full-stack activation.
+- name: Require supported component operation and Docker Compose
+  ansible.builtin.assert:
+    that:
+      - ai_ops_mode in ['plan', 'apply']
+      - _runtime == 'docker'
+      - _front_operation in ['deploy', 'rollback']
+      - ansible_run_tags | difference(['always', _front_operation]) | length == 0
+    fail_msg: Front component operations require Docker Compose and explicit plan/apply mode.
+
+- name: Select shared component command prefix
+  ansible.builtin.command: printenv PATH
+  register: _front_path
+  changed_when: false
+
+- name: Build the exact secret-free Compose argv for plan and apply
+  ansible.builtin.set_fact:
+    _front_compose_argv: "{{ ['env', '-i', 'PATH=' + _front_path.stdout] + ai_ops_compose_cmd.split() + ['-p', ai_ops_compose_project, '-f', ai_ops_deploy_root + '/compose.yaml', '-f', ai_ops_deploy_root + '/compose.override.yaml', '--env-file', ai_ops_deploy_root + '/.env'] }}"
+
+- name: Validate the actual remote Compose argv before any mutation
+  ansible.builtin.command:
+    argv: "{{ _front_compose_argv + ['config', '--quiet'] }}"
+  changed_when: false
+  no_log: true
+
+- name: Read component writer lock ownership without creating state
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file', playbook_dir + '/../scripts/host/component-lock.py', rstrip=false) }}", info, "{{ ai_ops_deploy_root }}"]
+    stdin: '{}'
+  register: _front_lock_raw
+  changed_when: false
+
+- name: Parse component writer lock ownership
+  ansible.builtin.set_fact:
+    _front_lock: "{{ _front_lock_raw.stdout | from_json }}"
+
+- name: Read immutable rollback snapshot reference
+  ansible.builtin.slurp:
+    src: "{{ ai_ops_deploy_root }}/.ai-ops-state/front-{{ service }}-last.json"
+  register: _front_rollback_raw
+  no_log: true
+  when: _front_operation == 'rollback'
+
+- name: Select rollback snapshot
+  ansible.builtin.set_fact:
+    _front_previous: "{{ _front_rollback_raw.content | b64decode | from_json }}"
+  no_log: true
+  when: _front_operation == 'rollback'
+
+- name: Require snapshot belonging to this component
+  ansible.builtin.assert:
+    that:
+      - _front_previous.service == service
+      - _front_previous.snapshot.startswith(ai_ops_deploy_root + '/.ai-ops-state/front-' + service + '-')
+    fail_msg: Invalid front component rollback receipt; recover manually without overwriting live files.
+  when: _front_operation == 'rollback'
+
+- name: Select protected configuration source
+  ansible.builtin.set_fact:
+    _front_source_root: "{{ ai_ops_config_dir if _front_operation == 'deploy' else _front_previous.snapshot }}"
+    _front_source_host: "{{ 'localhost' if _front_operation == 'deploy' else inventory_hostname }}"
+  no_log: true
+
+- name: Read candidate configuration checksums
+  ansible.builtin.stat:
+    path: "{{ _front_source_root }}/{{ item }}"
+    checksum_algorithm: sha256
+  loop: [compose.yaml, compose.override.yaml, .env]
+  delegate_to: "{{ _front_source_host }}"
+  register: _front_source_files
+  no_log: true
+
+- name: Require all candidate files
+  ansible.builtin.assert:
+    that: _front_source_files.results | selectattr('stat.exists', 'equalto', true) | list | length == 3
+    fail_msg: Candidate configuration is incomplete.
+
+- name: Collect candidate file hashes
+  ansible.builtin.set_fact:
+    _front_source_hashes: "{{ dict(_front_source_files.results | map(attribute='item') | zip(_front_source_files.results | map(attribute='stat.checksum'))) }}"
+  no_log: true
+
+- name: Validate candidate Compose explicitly without mutation
+  ansible.builtin.shell: >-
+    env -i PATH="$PATH" {{ ai_ops_local_compose_cmd if _front_operation == 'deploy' else ai_ops_compose_cmd }}
+    -p {{ ai_ops_compose_project }}
+    -f {{ (_front_source_root + '/compose.yaml') | quote }} -f {{ (_front_source_root + '/compose.override.yaml') | quote }}
+    --env-file {{ (_front_source_root + '/.env') | quote }} config --quiet
+  delegate_to: "{{ _front_source_host }}"
+  changed_when: false
+  no_log: true
+
+- name: Render candidate Compose without exposing secrets
+  ansible.builtin.shell: >-
+    env -i PATH="$PATH" {{ ai_ops_local_compose_cmd if _front_operation == 'deploy' else ai_ops_compose_cmd }}
+    -p {{ ai_ops_compose_project }}
+    -f {{ (_front_source_root + '/compose.yaml') | quote }} -f {{ (_front_source_root + '/compose.override.yaml') | quote }}
+    --env-file {{ (_front_source_root + '/.env') | quote }} config --no-path-resolution --format json
+  delegate_to: "{{ _front_source_host }}"
+  register: _front_source_config_raw
+  no_log: true
+  changed_when: false
+
+- name: Parse candidate Compose
+  ansible.builtin.set_fact:
+    _front_source_config: "{{ _front_source_config_raw.stdout | from_json }}"
+  no_log: true
+
+- name: Select namespace ownership contract
+  ansible.builtin.set_fact:
+    _front_shared_namespace: "{{ _front_source_config.services[service].get('network_mode', '').startswith('service:') }}"
+
+- name: Read current configuration and container identities
+  ansible.builtin.include_tasks: front-state.yml
+
+- name: Refuse stale rollback selection or unrelated live identity
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file', playbook_dir + '/../scripts/host/component-lock.py', rstrip=false) }}", rollback-guard, "{{ ai_ops_deploy_root }}"]
+    stdin: "{{ {'service': service, 'snapshot': _front_previous.snapshot, 'live': _front_runtime.identity.target} | to_json }}"
+    stdin_add_newline: false
+  changed_when: false
+  when: _front_operation == 'rollback'
+
+- name: Validate single-service scope and pure-cache topology
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import json, re, sys
+        data = json.load(sys.stdin)
+        service = data['service']
+        current, candidate = data['current'], data['candidate']
+        try:
+            old, new = current['services'][service], candidate['services'][service]
+            for config in (current, candidate):
+                config['services'].pop(service)
+            assert current == candidate, 'unrelated effective Compose configuration changed'
+            assert {k: v for k, v in old.items() if k not in ('image', 'environment')} == {k: v for k, v in new.items() if k not in ('image', 'environment')}, 'component profile only permits image and environment changes'
+            expected = data['expected_env']
+            if data['front_cache']:
+                assert all(str(new.get('environment', {}).get(k)) == v for k, v in expected.items()), 'front topology environment mismatch'
+                assert new.get('network_mode') == 'service:ai-sse-keepalive-proxy-netns', 'wrong namespace owner'
+                assert not new.get('ports') and not new.get('networks'), 'front component must remain private'
+                assert not any(k in new.get('environment', {}) for k in ('CPA_API_KEY', 'ROUTING_INDEX_URL', 'UPSTREAM_CPA_URL', 'UPSTREAM_AISIX_URL')), 'front component must not acquire provider credentials or routing'
+                pattern = r'ghcr\.io/xz-dev/' + re.escape(service) + r':[0-9a-f]{40}@sha256:[0-9a-f]{64}'
+                assert re.fullmatch(pattern, new['image']), 'candidate image must pin source revision and digest'
+                assert re.fullmatch(pattern, old['image']), 'current image must be immutable for rollback'
+            elif data['pull']:
+                assert re.search(r'@sha256:[0-9a-f]{64}$', new['image']), 'registry image requires immutable digest'
+                assert re.search(r'@sha256:[0-9a-f]{64}$', old['image']), 'current registry image must be immutable for rollback'
+            assert new.get('image'), 'candidate image missing'
+            print(json.dumps({'image': new['image'], 'current_image': old['image'],
+                              'env': {k: str(new['environment'][k]) for k in expected},
+                              'environment_changes': sorted(k for k in set(old.get('environment', {})) | set(new.get('environment', {})) if old.get('environment', {}).get(k) != new.get('environment', {}).get(k))}))
+        except (AssertionError, KeyError) as exc:
+            sys.exit(str(exc) if isinstance(exc, AssertionError) else 'missing required front component field')
+    stdin: "{{ {'service': service, 'current': _front_live_config, 'candidate': _front_source_config, 'expected_env': ai_ops_profiles[service].get('env', {}), 'front_cache': ai_ops_profiles[service].get('front_cache', false), 'pull': ai_ops_profiles[service].get('pull', true)} | to_json }}"
+    stdin_add_newline: false
+  register: _front_scope_raw
+  changed_when: false
+  no_log: true
+
+- name: Parse validated component plan
+  ansible.builtin.set_fact:
+    _front_scope: "{{ _front_scope_raw.stdout | from_json }}"
+    _front_before_hashes: "{{ _front_live_hashes }}"
+    _front_before_runtime: "{{ _front_runtime }}"
+    _front_before_config: "{{ _front_live_config }}"
+  no_log: true
+
+- name: Verify candidate image before approval without pulling
+  ansible.builtin.include_tasks: component-image.yml
+  vars:
+    _front_image_mode: "{{ 'plan' if _front_operation == 'deploy' else 'local' }}"
+
+- name: Remember the image identity bound by the reviewed plan
+  ansible.builtin.set_fact:
+    _front_planned_image_id: "{{ _front_image.image_id }}"
+
+- name: Require healthy namespace ownership and stable active component
+  ansible.builtin.assert:
+    that:
+      - _front_runtime.owner.running
+      - _front_operation == 'rollback' or _front_runtime.target.running
+      - not _front_runtime.target.paused
+      - _front_operation == 'rollback' or not _front_runtime.target.restarting
+      - _front_operation == 'rollback' or _front_runtime.target.netns == _front_runtime.owner.netns
+      - _front_operation == 'rollback' or not _front_shared_namespace or _front_runtime.target.network_mode == 'container:' + _front_runtime.owner.id
+      - _front_operation == 'rollback' or not ai_ops_profiles[service].get('front_cache', false) or _front_runtime.target.ready
+      - _front_operation == 'rollback' or _front_runtime.target.image_ref == _front_scope.current_image
+      - _front_operation == 'rollback' or not ai_ops_profiles[service].get('front_cache', false) or _front_runtime.target.env == _front_live_config.services[service].get('environment', {}) | dict2items | selectattr('key', 'in', ['PORT', 'LISTEN_ADDR', 'UPSTREAM_URL', 'IGNORE_CLIENT_STORE_FALSE']) | items2dict
+    fail_msg: Front component is not on the expected active namespace; stop rather than repairing adjacent services.
+
+- name: Guard rollback against intervening configuration or container changes
+  ansible.builtin.assert:
+    that:
+      - _front_source_hashes == _front_previous.before_hashes
+      - _front_runtime.identity.protected == _front_previous.before_runtime.identity.protected
+      - _front_runtime.target.image in [_front_previous.before_runtime.target.image, _front_previous.candidate_image_id]
+      - _front_live_hashes['compose.yaml'] in [_front_previous.before_hashes['compose.yaml'], _front_previous.candidate_hashes['compose.yaml']]
+      - _front_live_hashes['compose.override.yaml'] in [_front_previous.before_hashes['compose.override.yaml'], _front_previous.candidate_hashes['compose.override.yaml']]
+      - _front_live_hashes['.env'] in [_front_previous.before_hashes['.env'], _front_previous.candidate_hashes['.env']]
+    fail_msg: Rollback snapshot or live state drifted; no file was restored. Reconcile with the coordinator.
+  when: _front_operation == 'rollback'
+
+- name: Bind approval to candidate files and freshly read live identities
+  ansible.builtin.set_fact:
+    _front_plan_digest: "{{ {'host': inventory_hostname, 'root': ai_ops_deploy_root, 'project': ai_ops_compose_project, 'operation': _front_operation, 'service': service, 'source': _front_source_root, 'candidate': _front_source_hashes, 'live': _front_before_hashes, 'identity': _front_before_runtime.identity, 'image_proof': _front_image} | to_json(sort_keys=true) | hash('sha256') }}"
+
+- name: Determine whether an already verified component needs activation
+  ansible.builtin.set_fact:
+    _front_apply_required: "{{ _front_source_hashes != _front_before_hashes or not _front_runtime.target.ready or _front_runtime.target.config_env_hash != (_front_source_config.services[service].get('environment', {}) | to_json(sort_keys=true) | hash('sha256')) or (_front_planned_image_id is not none and _front_runtime.target.image != _front_planned_image_id) }}"
+
+- name: Show sanitized front component plan
+  ansible.builtin.debug:
+    msg:
+      operation: "{{ _front_operation }}"
+      host: "{{ inventory_hostname }}"
+      deployment_root: "{{ ai_ops_deploy_root }}"
+      project: "{{ ai_ops_compose_project }}"
+      service: "{{ service }}"
+      config_diff: "{{ _front_source_hashes != _front_before_hashes }}"
+      activation_required: "{{ _front_apply_required }}"
+      image: "{{ _front_scope.image }}"
+      current_image_id: "{{ _front_runtime.target.image }}"
+      env: "{{ _front_scope.env }}"
+      environment_changes: "{{ _front_scope.environment_changes }}"
+      candidate_sha256: "{{ _front_source_hashes }}"
+      live_sha256: "{{ _front_before_hashes }}"
+      health: "{{ _front_runtime.target.health }}"
+      namespace_owner: "{{ _front_runtime.owner.id }}"
+      protected_containers: "{{ _front_runtime.identity.protected | length }}"
+      approval_digest: "{{ _front_plan_digest }}"
+      readiness_source: "{{ _front_runtime.target.readiness_source }}"
+      ready: "{{ _front_runtime.target.ready }}"
+      writer_lock: "{{ _front_lock }}"
+      image_proof: "{{ _front_image }}"
+      compose_validation_argv: "{{ _front_compose_argv + ['config', '--quiet'] }}"
+      pull_argv: "{{ [_runtime, 'pull', _front_scope.image] if _front_operation == 'deploy' and ai_ops_profiles[service].get('pull', true) else [] }}"
+      recreate_argv: "{{ _front_compose_argv + ['up', '-d', '--force-recreate', '--no-deps', '--no-build', '--pull', 'never', service] }}"
+      interruption: Recreating the selected component interrupts its in-flight streams. No dependency is restarted.
+
+- name: Require the exact approved front plan before any mutation
+  ansible.builtin.assert:
+    that:
+      - not _front_lock.held
+      - _front_runtime.target.readiness_source != 'missing'
+      - ai_ops_front_approved_digest | length > 0
+      - ai_ops_front_approved_digest == _front_plan_digest
+    fail_msg: Review plan and rerun apply with ai_ops_front_approved_digest; stale plans fail closed.
+  when: ai_ops_mode == 'apply'
+
+- name: Report an already verified no-op without restarting anything
+  ansible.builtin.debug:
+    msg: No activation needed; reviewed files and ready runtime already match.
+  when: ai_ops_mode == 'apply' and not _front_apply_required
+
+- name: Apply reviewed front component transaction
+  when: ai_ops_mode == 'apply' and _front_apply_required
+  block:
+    - name: Ensure private component state directory
+      ansible.builtin.file:
+        path: "{{ ai_ops_deploy_root }}/.ai-ops-state"
+        state: directory
+        mode: '0700'
+
+    - name: Read outermost Ansible controller identity (not its per-task worker)
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file', playbook_dir + '/../scripts/host/component-lock.py', rstrip=false) }}", controller-identity, "{{ ai_ops_deploy_root }}"]
+        stdin: '{}'
+      delegate_to: localhost
+      register: _front_controller_raw
+      changed_when: false
+
+    - name: Identify this controller transaction
+      ansible.builtin.set_fact:
+        _front_transaction: "{{ lookup('pipe', 'python3 -c \"import uuid; print(uuid.uuid4().hex)\"') }}"
+        _front_controller: "{{ _front_controller_raw.stdout | from_json }}"
+
+    - name: Acquire exclusive owned component lock and durable initial receipt
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file', playbook_dir + '/../scripts/host/component-lock.py', rstrip=false) }}", acquire, "{{ ai_ops_deploy_root }}"]
+        stdin: "{{ {'transaction': _front_transaction, 'controller_host': _front_controller.controller_host, 'controller_pid': _front_controller.controller_pid, 'service': service, 'operation': _front_operation, 'approval_digest': _front_plan_digest} | to_json }}"
+      register: _front_writer_lock
+      no_log: true
+
+    - name: Record image preparation stage durably
+      ansible.builtin.include_tasks: component-progress.yml
+      vars:
+        _front_stage: preparing-image
+
+    - name: Pull only the exact pinned candidate image independently of pull_policy
+      ansible.builtin.command:
+        argv: ["{{ _runtime }}", pull, "{{ _front_scope.image }}"]
+      async: "{{ ai_ops_component_command_timeout }}"
+      poll: 5
+      when: _front_operation == 'deploy' and ai_ops_profiles[service].get('pull', true)
+
+    - name: Verify exact candidate digest locally (rollback and preload never pull)
+      ansible.builtin.include_tasks: component-image.yml
+      vars:
+        _front_image_mode: local
+
+    - name: Save verified candidate image identity
+      ansible.builtin.set_fact:
+        _front_candidate_image_id: "{{ _front_image.image_id }}"
+
+    - name: Record prepared image stage durably
+      ansible.builtin.include_tasks: component-progress.yml
+      vars:
+        _front_stage: image-ready
+
+    - name: Re-read live state immediately before backup and writes
+      ansible.builtin.include_tasks: front-state.yml
+
+    - name: Refuse changed live state after image preparation
+      ansible.builtin.assert:
+        that:
+          - _front_live_hashes == _front_before_hashes
+          - _front_runtime.identity == _front_before_runtime.identity
+          - _front_candidate_image_id != ''
+          - _front_planned_image_id is none or _front_candidate_image_id == _front_planned_image_id
+          - _front_operation != 'rollback' or _front_candidate_image_id == _front_previous.before_runtime.target.image
+        fail_msg: CAS failed after image preparation; no configuration was uploaded and no container recreated.
+
+    - name: Recheck rollback provenance under the owned lock before writes
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file', playbook_dir + '/../scripts/host/component-lock.py', rstrip=false) }}", rollback-guard, "{{ ai_ops_deploy_root }}"]
+        stdin: "{{ {'service': service, 'snapshot': _front_previous.snapshot, 'live': _front_runtime.identity.target, 'transaction': _front_transaction} | to_json }}"
+        stdin_add_newline: false
+      changed_when: false
+      when: _front_operation == 'rollback'
+
+    - name: Allocate immutable private snapshot
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ ai_ops_deploy_root }}/.ai-ops-state"
+        prefix: "front-{{ service }}-"
+      register: _front_snapshot_dir
+
+    - name: Save private pre-operation configuration
+      ansible.builtin.copy:
+        src: "{{ ai_ops_deploy_root }}/{{ item }}"
+        dest: "{{ _front_snapshot_dir.path }}/{{ item }}"
+        remote_src: true
+        mode: '0600'
+      loop: [compose.yaml, compose.override.yaml, .env]
+      no_log: true
+
+    - name: Record guarded rollback set before activation
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/front-{{ service }}-last.json"
+        mode: '0600'
+        content: "{{ {'service': service, 'snapshot': _front_snapshot_dir.path, 'before_hashes': _front_before_hashes, 'before_runtime': _front_before_runtime, 'candidate_hashes': _front_source_hashes, 'candidate_image_id': _front_candidate_image_id} | to_nice_json }}\n"
+      when: _front_operation == 'deploy'
+      no_log: true
+
+    - name: Verify private snapshot checksums before upload
+      ansible.builtin.stat:
+        path: "{{ _front_snapshot_dir.path }}/{{ item }}"
+        checksum_algorithm: sha256
+      loop: [compose.yaml, compose.override.yaml, .env]
+      register: _front_snapshot_files
+      no_log: true
+
+    - name: Refuse a changed snapshot
+      ansible.builtin.assert:
+        that: item.stat.checksum == _front_before_hashes[item.item]
+        fail_msg: Snapshot changed; no live configuration was uploaded.
+      loop: "{{ _front_snapshot_files.results }}"
+      no_log: true
+
+    - name: Re-read candidate source checksums before upload
+      ansible.builtin.stat:
+        path: "{{ _front_source_root }}/{{ item }}"
+        checksum_algorithm: sha256
+      loop: [compose.yaml, compose.override.yaml, .env]
+      delegate_to: "{{ _front_source_host }}"
+      register: _front_candidate_files
+      no_log: true
+
+    - name: Refuse a changed candidate source
+      ansible.builtin.assert:
+        that: item.stat.checksum == _front_source_hashes[item.item]
+        fail_msg: Candidate changed after planning; no live configuration was uploaded.
+      loop: "{{ _front_candidate_files.results }}"
+      no_log: true
+
+    - name: Re-read state after snapshot and before upload
+      ansible.builtin.include_tasks: front-state.yml
+
+    - name: Refuse changed live state immediately before configuration writes
+      ansible.builtin.assert:
+        that:
+          - _front_live_hashes == _front_before_hashes
+          - _front_runtime.identity == _front_before_runtime.identity
+        fail_msg: CAS failed before configuration upload; private snapshot retained, no live configuration was uploaded.
+
+    - name: Record stage before configuration upload
+      ansible.builtin.include_tasks: component-progress.yml
+      vars:
+        _front_stage: uploading-config
+
+    - name: Upload or restore only reviewed private configuration
+      ansible.builtin.copy:
+        src: "{{ _front_source_root }}/{{ item }}"
+        dest: "{{ ai_ops_deploy_root }}/{{ item }}"
+        remote_src: "{{ _front_operation == 'rollback' }}"
+        mode: '0600'
+      loop: [compose.yaml, compose.override.yaml, .env]
+      no_log: true
+
+    - name: Verify candidate checksums before recreating anything
+      ansible.builtin.include_tasks: front-state.yml
+
+    - name: Refuse changed upload or runtime before activation
+      ansible.builtin.assert:
+        that:
+          - _front_live_hashes == _front_source_hashes
+          - _front_runtime.identity == _front_before_runtime.identity
+          - _front_live_config == _front_source_config
+        fail_msg: CAS failed before activation; private snapshot retained. No recreate performed; inspect before rollback.
+
+    - name: Validate uploaded candidate using the exact apply Compose argv
+      ansible.builtin.command:
+        argv: "{{ _front_compose_argv + ['config', '--quiet'] }}"
+      changed_when: false
+      no_log: true
+
+    - name: Record stage before selected component activation
+      ansible.builtin.include_tasks: component-progress.yml
+      vars:
+        _front_stage: activating
+
+    - name: Recreate only selected front component without builds or implicit pulls
+      ansible.builtin.command:
+        argv: "{{ _front_compose_argv + ['up', '-d', '--force-recreate', '--no-deps', '--no-build', '--pull', 'never', service] }}"
+      async: "{{ ai_ops_component_command_timeout }}"
+      poll: 5
+
+    - name: Record activation returned before readiness verification
+      ansible.builtin.include_tasks: component-progress.yml
+      vars:
+        _front_stage: verifying
+
+    - name: Wait for selected component health without touching dependencies
+      ansible.builtin.include_tasks: front-runtime.yml
+      vars:
+        _front_wait: true
+
+    - name: Verify exact image, environment, namespace and protected containers
+      ansible.builtin.assert:
+        that:
+          - _front_runtime.target.image == _front_candidate_image_id
+          - _front_runtime.target.image_ref == _front_scope.image
+          - _front_runtime.target.config_env_hash == _front_source_config.services[service].get('environment', {}) | to_json(sort_keys=true) | hash('sha256')
+          - _front_runtime.target.netns == _front_runtime.owner.netns
+          - not _front_shared_namespace or _front_runtime.target.network_mode == 'container:' + _front_runtime.owner.id
+          - _front_runtime.identity.protected == _front_before_runtime.identity.protected
+          - not _front_runtime.target.paused
+          - not _front_runtime.target.restarting
+        fail_msg: Front component verification failed; stop and review the private snapshot before explicit rollback.
+
+    - name: Re-read all configuration after verified activation
+      ansible.builtin.include_tasks: front-state.yml
+
+    - name: Refuse post-activation drift before advancing any baseline
+      ansible.builtin.assert:
+        that:
+          - _front_live_hashes == _front_source_hashes
+          - _front_runtime.target.image == _front_candidate_image_id
+          - _front_runtime.target.ready
+          - _front_runtime.identity.protected == _front_before_runtime.identity.protected
+        fail_msg: Activation verification or group CAS failed; baselines remain unchanged.
+
+    - name: Record stage before committing verified configuration baselines
+      ansible.builtin.include_tasks: component-progress.yml
+      vars:
+        _front_stage: committing-baselines
+
+    - name: Advance baselines only after activation and readback succeed
+      ansible.builtin.copy:
+        src: "{{ ai_ops_deploy_root }}/{{ item }}"
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ item }}.baseline"
+        remote_src: true
+        mode: '0600'
+      loop: [compose.yaml, compose.override.yaml, .env]
+      no_log: true
+
+    - name: Write sanitized successful operation receipt
+      ansible.builtin.copy:
+        dest: "{{ _front_snapshot_dir.path }}/receipt.json"
+        mode: '0600'
+        content: "{{ {'operation': _front_operation, 'service': service, 'approval_digest': _front_plan_digest, 'before': _front_before_runtime.identity.target, 'after': _front_runtime.identity.target, 'namespace_owner': _front_runtime.owner.id, 'health': _front_runtime.target.health, 'config_hashes': _front_source_hashes, 'snapshot': _front_snapshot_dir.path} | to_nice_json }}\n"
+
+    - name: Commit durable success before releasing ownership
+      ansible.builtin.include_tasks: component-progress.yml
+      vars:
+        _front_stage: complete
+        _front_outcome: success
+
+    - name: Show verified front component result
+      ansible.builtin.debug:
+        msg:
+          service: "{{ service }}"
+          image_id: "{{ _front_runtime.target.image }}"
+          health: "{{ _front_runtime.target.health }}"
+          env: "{{ _front_scope.env }}"
+          namespace_owner: "{{ _front_runtime.owner.id }}"
+          protected_containers_unchanged: "{{ _front_runtime.identity.protected | length }}"
+          private_snapshot: "{{ _front_snapshot_dir.path }}"
+  rescue:
+    - name: Read stopped component identity for explicit rollback provenance
+      when: _front_snapshot_dir is defined
+      block:
+        - name: Read failed activation runtime without requiring health
+          ansible.builtin.include_tasks: front-runtime.yml
+          vars:
+            _front_wait: false
+        - name: Remember observed failure identity
+          ansible.builtin.set_fact:
+            _front_failure_after: "{{ _front_runtime.identity.target }}"
+      rescue:
+        - name: Leave unreadable failure identity unproven
+          ansible.builtin.set_fact:
+            _front_failure_after: null
+
+    - name: Record sanitized stopped operation without claiming recovery
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/front-{{ service }}-failure.json"
+        mode: '0600'
+        content: "{{ {'service': service, 'operation': _front_operation, 'approval_digest': _front_plan_digest, 'stage': ansible_failed_task.name, 'snapshot': _front_snapshot_dir.path if _front_snapshot_dir is defined else '', 'transaction': _front_transaction, 'after': _front_failure_after | default(none), 'outcome': 'recovery-required' if _front_snapshot_dir is defined else 'stopped-before-upload'} | to_nice_json }}\n"
+      when: _front_writer_lock is defined and _front_writer_lock.rc | default(1) == 0
+
+    - name: Persist failed transaction stage without claiming rollback
+      ansible.builtin.include_tasks: component-progress.yml
+      vars:
+        _front_stage: "{{ ansible_failed_task.name }}"
+        _front_outcome: failed
+      when: _front_writer_lock is defined and _front_writer_lock.rc | default(1) == 0
+
+    - name: Stop after failed front operation for explicit reviewed recovery
+      ansible.builtin.fail:
+        msg: Front operation failed; inspect private failure/snapshot receipts and plan explicit rollback. No automatic recovery or success is claimed.
+  always:
+    - name: Release only this operation's front writer lock
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file', playbook_dir + '/../scripts/host/component-lock.py', rstrip=false) }}", release, "{{ ai_ops_deploy_root }}"]
+        stdin: "{{ {'transaction': _front_transaction} | to_json }}"
+      when: _front_writer_lock is defined and _front_writer_lock.rc | default(1) == 0
+      no_log: true

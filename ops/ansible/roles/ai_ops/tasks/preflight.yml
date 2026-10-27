@@ -1,0 +1,98 @@
+---
+# Shared preflight: compose provider detection, connectivity, deploy root, state dir.
+# Variables come from this role's defaults/main.yml; override in inventory.
+
+- name: Reject retired cache tags and default all before any production writes
+  ansible.builtin.assert:
+    that:
+      - ansible_run_tags | intersect(['deploy-response-keeper', 'deploy-responses-path', 'restart-response-keeper', 'deploy-standard-cache-path', 'restart-openai-api-cache-keeper', 'rollback-standard-cache-path']) | length == 0
+      - "'all' not in ansible_run_tags"
+    fail_msg: >-
+      Select one explicit supported operation; default all is forbidden. The
+      inner response-keeper and scoped standard-cache tags are retired: they
+      predate the keeper -> ws-sse bridge chain. Use the reviewed generic
+      deploy/rollback profiles for keeper or bridge. Never apply the full
+      development Compose to production.
+
+- name: Require explicit component mode and one operation before preflight writes
+  ansible.builtin.assert:
+    that:
+      - ai_ops_mode in ['plan', 'apply']
+      - (ansible_run_tags | difference(['always', 'deploy']) | length == 0) or (ansible_run_tags | difference(['always', 'rollback']) | length == 0)
+    fail_msg: Components require one deploy or rollback operation and explicit plan/apply mode.
+  when: service | default('') in ai_ops_profiles and 'recover-stale-lock' not in ansible_run_tags
+
+- name: Detect Compose provider (mirrors ops/scripts/container-runtime.sh)
+  ansible.builtin.shell: |
+    runtime="{{ ai_ops_runtime }}"
+    if [ -z "$runtime" ]; then
+      if command -v docker >/dev/null && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then runtime=docker;
+      elif command -v podman >/dev/null && podman info >/dev/null 2>&1; then runtime=podman;
+      else echo 'no usable container runtime' >&2; exit 1; fi
+    fi
+    if [ "$runtime" = docker ]; then echo "docker compose";
+    elif podman compose version >/dev/null 2>&1; then echo "podman compose";
+    elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose";
+    else echo 'no compose provider' >&2; exit 1; fi
+  register: _ai_ops_compose
+  changed_when: false
+  when: ai_ops_compose_cmd == ""
+
+- name: Set compose command (inventory override wins)
+  ansible.builtin.set_fact:
+    ai_ops_compose_cmd: "{{ ai_ops_compose_cmd if ai_ops_compose_cmd != '' else _ai_ops_compose.stdout }}"
+
+- name: Show detected compose provider
+  ansible.builtin.debug:
+    msg: "compose provider: {{ ai_ops_compose_cmd }}"
+
+- name: Verify SSH connectivity (no fallback auth)
+  ansible.builtin.ping:
+
+- name: Verify deploy root exists
+  ansible.builtin.stat:
+    path: "{{ ai_ops_deploy_root }}"
+  register: _ai_ops_root
+  failed_when: not (_ai_ops_root.stat.exists and _ai_ops_root.stat.isdir)
+
+- name: Verify local config dir exists
+  ansible.builtin.stat:
+    path: "{{ ai_ops_config_dir }}"
+  delegate_to: localhost
+  register: _ai_ops_cfg
+  failed_when: not (_ai_ops_cfg.stat.exists and _ai_ops_cfg.stat.isdir)
+
+- name: Check worker-owned CPA YAML only for CPA component operations
+  when: service | default('') in ['cli-proxy-api', 'cpa-model-sync']
+  block:
+    - name: Read live CPA config without exposing credentials
+      ansible.builtin.slurp:
+        src: "{{ ai_ops_deploy_root }}/data/cpa/conf/config.yaml"
+      register: _cpa_live_yaml
+      no_log: true
+
+    - name: Parse live CPA YAML on the controller
+      ansible.builtin.set_fact:
+        _cpa_document: "{{ _cpa_live_yaml.content | b64decode | from_yaml }}"
+      no_log: true
+
+    - name: Require a live CPA YAML mapping without enforcing a config schema
+      ansible.builtin.assert:
+        that: _cpa_document is mapping
+      no_log: true
+
+- name: Ensure protected state dir (apply only)
+  ansible.builtin.file:
+    path: "{{ ai_ops_deploy_root }}/.ai-ops-state"
+    state: directory
+    mode: "0700"
+  when:
+    - ai_ops_mode != "plan"
+    - service | default('') not in ai_ops_profiles
+    - "'recover-stale-lock' not in ansible_run_tags"
+
+- name: Gather runtime versions
+  ansible.builtin.shell: "{{ ai_ops_runtime if ai_ops_runtime != '' else 'docker' }} version --format '{{ '{{' }} .Server.Version {{ '}}' }}'"
+  register: ai_ops_runtime_version
+  changed_when: false
+  failed_when: false

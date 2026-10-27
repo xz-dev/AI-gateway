@@ -1,0 +1,112 @@
+---
+# Verify the single-traversal Responses path after deploy-responses-path.
+# Inputs: _ai_verify_expected_image_identity (keeper image ID, empty = skip),
+#         _ai_verify_expected_revision (keeper OCI revision, empty = skip),
+#         ai_verify_old_containers (service -> pre-activation ID; new must differ, empty = skip),
+#         ai_protected_containers (service -> captured ID; must be unchanged).
+
+- name: Read response-keeper and apisix-models container IDs
+  ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
+  register: _rp_ids
+  changed_when: false
+  failed_when: _rp_ids.rc != 0 or _rp_ids.stdout | trim == ""
+  loop: [response-keeper, apisix-models]
+
+- name: Index current container IDs
+  ansible.builtin.set_fact:
+    _rp_current: "{{ dict(_rp_ids.results | map(attribute='item') | zip(_rp_ids.results | map(attribute='stdout') | map('trim'))) }}"
+
+- name: Require both services recreated
+  ansible.builtin.assert:
+    that: _rp_current[item.key] != item.value
+    fail_msg: "{{ item.key }} still runs pre-activation container {{ item.value }}"
+  loop: "{{ ai_verify_old_containers | default({}) | dict2items | selectattr('value') | list }}"
+
+- name: Read keeper image identity, revision, OOM state and store mount
+  ansible.builtin.command:
+    argv:
+      - "{{ _runtime }}"
+      - inspect
+      - "--format={{ '{{' }}.Image{{ '}}' }} {{ '{{' }}index .Config.Labels \"org.opencontainers.image.revision\"{{ '}}' }} {{ '{{' }}.State.OOMKilled{{ '}}' }} {{ '{{' }}range .Mounts{{ '}}' }}{{ '{{' }}if eq .Destination \"/var/tmp/response-keeper\"{{ '}}' }}{{ '{{' }}.Type{{ '}}' }}{{ '{{' }}end{{ '}}' }}{{ '{{' }}end{{ '}}' }}"
+      - "{{ _rp_current['response-keeper'] }}"
+  register: _rp_keeper
+  changed_when: false
+
+- name: Require approved keeper image, no OOM and named store volume
+  ansible.builtin.assert:
+    that:
+      - _ai_verify_expected_image_identity | default('') | length == 0 or (_rp_keeper.stdout.split()[0]) == _ai_verify_expected_image_identity
+      - _ai_verify_expected_revision | default('') | length == 0 or (_rp_keeper.stdout.split()[1]) == _ai_verify_expected_revision
+      - _rp_keeper.stdout.split()[2] == 'false'
+      - _rp_keeper.stdout.split()[3] | default('') == 'volume'
+    fail_msg: "response-keeper identity/state mismatch: observed={{ _rp_keeper.stdout }}"
+
+- name: Wait for response-keeper healthcheck
+  ansible.builtin.command: "{{ _compose }} exec -T response-keeper /response-keeper healthcheck"
+  register: _rp_ready
+  changed_when: false
+  retries: "{{ ai_ops_response_keeper_verify_retries }}"
+  delay: "{{ ai_ops_response_keeper_verify_delay_seconds }}"
+  until: _rp_ready.rc == 0
+
+# Both aliases must reach keeper directly. Keeper answers an unknown
+# previous_response_id itself after a routing lookup, without any backend call.
+# A non-catalog model returns 404 model_not_found from keeper's classifier.
+# A 503 is not accepted: its body matches the old Lua selector's, so it cannot
+# prove which component answered. Single traversal is checked from logs below.
+- name: Probe both Responses aliases through apisix-models
+  ansible.builtin.command:
+    cmd: "{{ _compose }} exec -T apisix-models /bin/bash -e"
+    stdin: |
+      {% raw %}
+      body='{"model":"ai-ops-probe-unknown-model","input":"x","previous_response_id":"resp_ai_ops_probe"}'
+      for path in /v1/responses /rk/v1/responses; do
+        exec 3<>/dev/tcp/127.0.0.1/9080
+        printf 'POST %s HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n%s' "$path" "${#body}" "$body" >&3
+        out=$(timeout 10 cat <&3)
+        exec 3<&-
+        case "$out" in
+          *" 404 "*model_not_found*|*" 400 "*previous_response_not_found*) echo "$path=keeper" ;;
+          *) echo "$path=bad"; exit 1 ;;
+        esac
+      done
+      {% endraw %}
+  register: _rp_route
+  changed_when: false
+  retries: "{{ ai_ops_response_keeper_verify_retries }}"
+  delay: "{{ ai_ops_response_keeper_verify_delay_seconds }}"
+  until: _rp_route.rc == 0
+
+# The probes above must appear only as keeper upstream in apisix-models access
+# logs; any Responses access line with upstream 127.0.0.1:9080 is a second hop.
+- name: Require no Responses self-traversal in recent apisix-models access log
+  ansible.builtin.shell: |
+    set -o pipefail
+    {{ _compose }} logs --no-color --since 2m apisix-models 2>/dev/null \
+      | grep -E '"(GET|POST) /(rk/)?v1/responses' \
+      | grep -F ' 127.0.0.1:9080 ' && exit 1 || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Read protected container IDs
+  ansible.builtin.command: "{{ _compose }} ps -q {{ item.key }}"
+  register: _rp_protected_now
+  changed_when: false
+  failed_when: false
+  loop: "{{ ai_protected_containers | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Require protected containers unchanged
+  ansible.builtin.assert:
+    that: item.stdout | trim == item.item.value
+    fail_msg: "protected container {{ item.item.key }} changed: {{ item.item.value }} -> {{ item.stdout | trim }}"
+  loop: "{{ _rp_protected_now.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Record verified Responses path identity
+  ansible.builtin.set_fact:
+    ai_responses_path_verified: "{{ _rp_current }}"
+    ai_response_keeper_verified_image: "{{ _rp_keeper.stdout }}"

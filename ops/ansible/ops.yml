@@ -1,0 +1,1375 @@
+---
+# Single entry point for all push-model operations.
+# Select the operation with tags:
+#   ansible-playbook ops.yml --tags deploy        -e service=cli-proxy-api [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags deploy-squid  [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags deploy-aisix      [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags deploy-model-sync  [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags deploy-response-keeper [-e ai_ops_mode=plan]  (legacy: also recreates sub2api)
+#   ansible-playbook ops.yml --tags deploy-responses-path [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags restart-response-keeper [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags deploy-recovery [-e ai_ops_mode=plan]
+#   ansible-playbook ops.yml --tags rollback-model-sync
+#   ansible-playbook ops.yml --tags rollback           -e service=cli-proxy-api
+#
+# Push model: local private config (ai_ops_config_dir) is the source of truth;
+# Ansible uploads + activates, never constructs configuration on the remote.
+# Role defaults in roles/ai_ops/defaults/main.yml; override in inventory/.
+
+- name: AI-gateway operations
+  hosts: gateway
+  gather_facts: false
+  roles:
+    - role: ai_ops  # declared play-level so its defaults/main.yml apply to pre_tasks too
+  vars:
+    _runtime: "{{ ai_ops_runtime if ai_ops_runtime != '' else (ai_ops_compose_cmd.split() | first) }}"
+    _compose: >-
+      {{ ai_ops_compose_cmd }} -p {{ ai_ops_compose_project }}
+      -f {{ ai_ops_deploy_root }}/compose.yaml
+      -f {{ ai_ops_deploy_root }}/compose.override.yaml
+      --env-file {{ ai_ops_deploy_root }}/.env
+
+  pre_tasks:
+    - name: Require service parameter for component operations
+      ansible.builtin.assert:
+        that:
+          - service is defined
+          - service in ai_ops_profiles.keys()
+        fail_msg: "pass -e service=<name> (supported: {{ ai_ops_profiles.keys() | join(', ') }})"
+      when: "'deploy' in ansible_run_tags or 'rollback' in ansible_run_tags"
+      tags: [deploy, rollback]
+
+    - name: Preflight
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: preflight
+        apply:
+          tags: [always]
+      tags: [always]
+
+    # ---- deploy (component) preflight additions ----
+    - name: Capacity gate (memory/disk, no tuning)
+      ansible.builtin.shell: |
+        set -e
+        avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+        disk_mb=$(df -m "{{ ai_ops_deploy_root }}" | awk 'NR==2 {print $4}')
+        echo "mem_available_mb=${avail_mb} disk_free_mb=${disk_mb}"
+      register: _capacity
+      changed_when: false
+      tags: [deploy]
+
+    - name: Show capacity
+      ansible.builtin.debug:
+        var: _capacity.stdout
+      tags: [deploy]
+
+    - name: Capacity gate blocks apply below thresholds
+      ansible.builtin.shell: |
+        avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+        disk_mb=$(df -m "{{ ai_ops_deploy_root }}" | awk 'NR==2 {print $4}')
+        [ "$avail_mb" -ge "{{ ai_ops_min_mem_mb }}" ] || { echo "insufficient memory: ${avail_mb}MB"; exit 1; }
+        [ "$disk_mb" -ge "{{ ai_ops_min_disk_mb }}" ] || { echo "insufficient disk: ${disk_mb}MB"; exit 1; }
+        echo "capacity ok"
+      when: ai_ops_mode != "plan"
+      changed_when: false
+      tags: [deploy]
+
+    # ---- deploy-squid preflight additions: local render + pinned parse check ----
+    - name: Render policy locally into staging
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../scripts/render-egress-policy.py
+        {{ ai_ops_config_dir }}/data/egress-proxy/policy.json
+        {{ _squid_staging }}
+      delegate_to: localhost
+      vars:
+        _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
+      tags: [deploy-squid]
+
+    - name: Generate throwaway CA for offline parse validation
+      ansible.builtin.shell: >
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=ops-validation
+        -addext basicConstraints=critical,CA:TRUE
+        -addext keyUsage=critical,keyCertSign,cRLSign
+        -keyout {{ _squid_staging }}/ca.key -out {{ _squid_staging }}/ca.crt 2>/dev/null
+        && chmod 644 {{ _squid_staging }}/ca.key {{ _squid_staging }}/ca.crt
+      delegate_to: localhost
+      changed_when: false
+      vars:
+        _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
+      tags: [deploy-squid]
+
+    - name: Validate rendered config with pinned Squid (k parse)
+      ansible.builtin.command: >
+        podman run --rm --entrypoint /usr/sbin/squid
+        -v {{ _squid_staging }}:/etc/squid/generated:ro
+        -v {{ _squid_staging }}/ca.crt:/etc/squid/ca.crt:ro
+        -v {{ _squid_staging }}/ca.key:/etc/squid/ca.key:ro
+        {{ ai_ops_squid_image }} -k parse -f /etc/squid/generated/squid.conf
+      delegate_to: localhost
+      register: _squid_parse
+      changed_when: false
+      vars:
+        _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
+      tags: [deploy-squid]
+
+    - name: Show parse result
+      ansible.builtin.debug:
+        var: _squid_parse.stderr_lines | default([]) + _squid_parse.stdout_lines
+      tags: [deploy-squid]
+
+    # ---- deploy-aisix preflight additions: normalize + local validation + orphan report ----
+    - name: Normalize max_fallbacks from targets count
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../scripts/host/normalize-aisix-resources.py
+        {{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml
+      delegate_to: localhost
+      register: _aisix_normalize
+      changed_when: _aisix_normalize.stdout != 'normalized 0'
+      tags: [deploy-aisix]
+
+    - name: Validate fallback-status contract
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../scripts/check-aisix-resource-policy.py
+        --yaml {{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml
+      delegate_to: localhost
+      changed_when: false
+      tags: [deploy-aisix]
+
+    - name: Reject unverified literal retries=-1
+      ansible.builtin.shell: |
+        grep -nE 'retries:\s*-1' "{{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml" && exit 1 || true
+      delegate_to: localhost
+      register: _retry_guard
+      changed_when: false
+      failed_when: _retry_guard.rc != 0
+      tags: [deploy-aisix]
+
+    - name: Orphan report
+      ansible.builtin.command: >
+        python3 {{ playbook_dir }}/../scripts/host/check-aisix-orphans.py
+        {{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml
+        --adopted '{{ ai_ops_adopted_direct_models | to_json }}'
+        --standalone '{{ ai_ops_standalone_retained | to_json }}'
+      delegate_to: localhost
+      register: _orphans
+      changed_when: false
+      tags: [deploy-aisix]
+
+    - name: Show orphan candidates (deletion requires explicit approval)
+      ansible.builtin.debug:
+        var: _orphans.stdout_lines
+      tags: [deploy-aisix]
+
+    # ---- deploy-model-sync preflight: drift gate + read-only live preview ----
+    - name: Prepare model-sync policy
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: prepare-file
+        apply:
+          tags: [deploy-model-sync]
+      vars:
+        ai_file_label: cpa-model-sync/config.json
+        ai_file_local: "{{ ai_ops_config_dir }}/services/cpa/cpa-model-sync/config.json"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/cpa/cpa-model-sync/config.json"
+      tags: [deploy-model-sync]
+
+    - name: Read current cpa-model-sync container ID
+      ansible.builtin.command: "{{ _compose }} ps -q cpa-model-sync"
+      register: _model_sync_plan_container
+      changed_when: false
+      failed_when: _model_sync_plan_container.rc != 0 or _model_sync_plan_container.stdout | trim == ""
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Read current cpa-model-sync image identity
+      ansible.builtin.command: >-
+        {{ _runtime }} inspect --format={{ '{{' }}.Image{{ '}}' }}
+        {{ _model_sync_plan_container.stdout | trim }}
+      register: _model_sync_plan_image
+      changed_when: false
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Require current cpa-model-sync image identity
+      ansible.builtin.assert:
+        that:
+          - _model_sync_plan_image.stdout | trim != ""
+        fail_msg: cpa-model-sync image identity is unavailable; preview approval cannot be bound.
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Read candidate policy locally
+      ansible.builtin.slurp:
+        src: "{{ ai_ops_config_dir }}/services/cpa/cpa-model-sync/config.json"
+      delegate_to: localhost
+      register: _model_sync_candidate
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Preview candidate against live CPA without PATCH
+      ansible.builtin.shell: >-
+        {{ _compose }} exec -T cpa-model-sync env
+        CPA_MODEL_SYNC_IMAGE_IDENTITY={{ _model_sync_plan_image.stdout | trim | quote }}
+        /usr/local/bin/cpa-model-sync --preview -
+      args:
+        stdin: "{{ _model_sync_candidate.content | b64decode }}"
+        stdin_add_newline: false
+        executable: /bin/sh
+      register: _model_sync_preview_raw
+      changed_when: false
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Parse model-sync preview
+      ansible.builtin.set_fact:
+        _model_sync_preview: "{{ _model_sync_preview_raw.stdout | from_json }}"
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Show model-sync approval identity
+      ansible.builtin.debug:
+        msg:
+          approval_digest: "{{ _model_sync_preview.approval_digest }}"
+          policy_digest: "{{ _model_sync_preview.policy_digest }}"
+          image_identity: "{{ _model_sync_preview.image_identity }}"
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Show model-sync channel additions and removals
+      ansible.builtin.debug:
+        msg:
+          kind: "{{ item.kind }}"
+          prefix: "{{ item.prefix }}"
+          skipped: "{{ item.skipped }}"
+          current_count: "{{ item.current_count }}"
+          desired_count: "{{ item.desired_count }}"
+          additions: "{{ item.additions }}"
+          removals: "{{ item.removals }}"
+      loop: "{{ _model_sync_preview.channels }}"
+      loop_control:
+        label: "{{ item.kind }}/{{ item.prefix }}"
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    - name: Require fresh approved model-sync preview for apply
+      ansible.builtin.assert:
+        that:
+          - ai_ops_model_sync_approved_digest | length > 0
+          - ai_ops_model_sync_approved_digest == _model_sync_preview.approval_digest
+        fail_msg: >-
+          Model-sync preview is not approved or became stale. Run plan mode, review every
+          addition/removal, then apply with
+          -e ai_ops_model_sync_approved_digest={{ _model_sync_preview.approval_digest }}
+      when:
+        - ai_ops_mode != "plan"
+        - _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-sync]
+
+    # ---- deploy-model-catalog-config preflight: drift gate + static validation ----
+    - name: Prepare model-catalog config
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: prepare-file
+        apply:
+          tags: [deploy-model-catalog-config]
+      vars:
+        ai_file_label: model-catalog/config.yaml
+        ai_file_local: "{{ ai_ops_config_dir }}/services/routing/model-catalog/config.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+      tags: [deploy-model-catalog-config]
+
+    - name: Read current model-catalog container ID
+      ansible.builtin.command: "{{ _compose }} ps -q model-catalog"
+      register: _me_plan_container
+      changed_when: false
+      failed_when: _me_plan_container.rc != 0 or _me_plan_container.stdout | trim == ""
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+    - name: Read current model-catalog image identity
+      ansible.builtin.command: >-
+        {{ _runtime }} inspect --format={{ '{{' }}.Image{{ '}}' }}
+        {{ _me_plan_container.stdout | trim }}
+      register: _me_plan_image
+      changed_when: false
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+    - name: Require current model-catalog image identity
+      ansible.builtin.assert:
+        that:
+          - _me_plan_image.stdout | trim != ""
+        fail_msg: model-catalog image identity is unavailable; deploy cannot be bound.
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+    - name: Capture protected adjacent container identities
+      ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
+      register: _me_protected
+      changed_when: false
+      loop:
+        - model-catalog-netns
+        - catalog-cpa-relay
+        - apisix-models-catalog-relay
+        - apisix-models
+      loop_control:
+        label: "{{ item }}"
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+    - name: Build protected container map
+      ansible.builtin.set_fact:
+        _me_protected_map: "{{ dict(_me_protected.results | map(attribute='item') | zip(_me_protected.results | map(attribute='stdout') | map('trim'))) }}"
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+    - name: Read candidate config locally
+      ansible.builtin.slurp:
+        src: "{{ ai_ops_config_dir }}/services/routing/model-catalog/config.yaml"
+      delegate_to: localhost
+      register: _me_candidate
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+    - name: Validate candidate with deployed model-catalog binary
+      ansible.builtin.shell: >-
+        {{ _compose }} exec -T model-catalog
+        /model-catalog validate-config -
+      args:
+        stdin: "{{ _me_candidate.content | b64decode }}"
+        stdin_add_newline: false
+        executable: /bin/sh
+      register: _me_validate_raw
+      changed_when: false
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+    - name: Parse candidate validation
+      ansible.builtin.set_fact:
+        _me_candidate_validation: "{{ _me_validate_raw.stdout | from_json }}"
+      no_log: true
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+    - name: Show candidate validation digest
+      ansible.builtin.debug:
+        msg:
+          config_digest: "{{ _me_candidate_validation.config_digest }}"
+          image_identity: "{{ _me_plan_image.stdout | trim }}"
+          recreation: model-catalog
+      when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
+      tags: [deploy-model-catalog-config]
+
+  tasks:
+    - name: Deploy bounded host recovery
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-recovery
+        apply:
+          tags: [deploy-recovery]
+      tags: [deploy-recovery]
+
+    - name: Recover only an explicitly selected stale component lock
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: recover-stale-lock
+        apply:
+          tags: [recover-stale-lock]
+      tags: [recover-stale-lock]
+
+    # All profiles share the grouped CAS, image proof, readiness and receipt path.
+    - name: Run guarded component operation selected by profile
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: front-component
+        apply:
+          tags: [deploy, rollback]
+      vars:
+        _front_operation: "{{ 'rollback' if 'rollback' in ansible_run_tags else 'deploy' }}"
+      when: service | default('') in ai_ops_profiles
+      tags: [deploy, rollback]
+
+    - name: Finish component operation before unrelated scoped tasks
+      ansible.builtin.meta: end_host
+      when: service | default('') in ai_ops_profiles
+      tags: [deploy, rollback]
+
+    # ======================= deploy-squid =======================
+    # Tarball + manifest mechanism: one upload, one remote extract, drift gate
+    # checks the manifest over ALL generated files (~2 SSH round trips instead
+    # of ~900 for per-file checks at 177 files).
+    - name: Deploy rendered squid policy tree (squid.conf + policy-* files)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-squid-tree
+        apply:
+          tags: [deploy-squid]
+      vars:
+        ai_squid_staging: "{{ _squid_staging }}"
+        ai_squid_remote_dir: "{{ ai_ops_deploy_root }}/data/egress-proxy/generated"
+        ai_activate_cmd: "{{ _compose }} restart egress-proxy"
+        _squid_staging: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/ai-gateway-ops/squid-staging"
+      tags: [deploy-squid, sync-squid-source]
+
+    # ======================= deploy-aisix =======================
+    - name: Deploy resources.yaml
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-aisix]
+      vars:
+        ai_file_label: aisix/resources.yaml
+        ai_file_mode: "0444"  # AISIX runs as uid 10001; private source files may be 0600.
+        ai_file_local: "{{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/aisix/resources.yaml"
+        # --force-recreate: resources.yaml is a bind mount, so a file-only change does not
+        # alter the container config hash and plain `up -d` would silently keep the old
+        # routing. AISIX loads resources.yaml only at startup; recreation is required.
+        ai_activate_cmd: "{{ _compose }} up -d --force-recreate --no-deps --no-build aisix"
+      tags: [deploy-aisix]
+
+    - name: Verify effective routes via Admin API (read-only, internal peer)
+      ansible.builtin.command: >
+        {{ _compose }} exec -T aisix-status-relay sh -c
+        'wget -qO- --header="Authorization: Bearer $AISIX_ADMIN_KEY" http://172.30.68.2:3002/admin/v1/models'
+      register: _aisix_models
+      changed_when: false
+      failed_when: false
+      when: ai_ops_mode != "plan"
+      no_log: true  # response may embed provider model names; keep receipt sanitized
+      tags: [deploy-aisix]
+
+    - name: Admin API check is optional until the pinned fixture proves it
+      ansible.builtin.debug:
+        msg: "admin API read skipped/failed (rc={{ _aisix_models.rc | default('n/a') }}); profile pending fixture proof"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-aisix]
+
+    - name: Receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-aisix-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=aisix-deploy mode={{ ai_ops_mode }}
+          orphan_candidates={{ (_orphans.stdout | from_json).orphan_candidates }}
+          admin_api_checked={{ _aisix_models.rc | default(1) == 0 }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-aisix]
+
+    # ======================= deploy-ws-keepalive =======================
+    # Scoped, digest-pinned rollout for the WS-keepalive proxy. Plan shows the
+    # effective diff + digest + protected map; apply pulls the exact digest
+    # BEFORE mutating files, then reuses deploy-file's drift/snapshot/rescue
+    # flow and verify-ws-keepalive for image identity + OCI revision +
+    # healthcheck + protected-container checks.
+    - name: Read current ai-sse-keepalive-proxy container ID
+      ansible.builtin.command: "{{ _compose }} ps -q ai-sse-keepalive-proxy"
+      register: _wsk_plan_container
+      changed_when: false
+      failed_when: false
+      tags: [deploy-ws-keepalive]
+
+    - name: Read current ai-sse-keepalive-proxy image identity
+      ansible.builtin.command:
+        argv:
+          - "{{ _runtime }}"
+          - inspect
+          - '--format={{ "{{.Image}}" }}'
+          - "{{ _wsk_plan_container.stdout | trim }}"
+      register: _wsk_plan_image
+      changed_when: false
+      failed_when: false
+      when: _wsk_plan_container.stdout | trim != ""
+      tags: [deploy-ws-keepalive]
+
+    - name: Resolve desired image selector from private .env
+      # Parse the env file directly: podman-compose --env-file interpolation
+      # of ${VAR} differs from docker compose's, and the digest gate must bind
+      # the exact selector regardless of compose-provider version.
+      ansible.builtin.set_fact:
+        _wsk_desired_image: "{{ lookup('ansible.builtin.file', ai_ops_config_dir + '/.env') | regex_search('(?m)^AI_SSE_KEEPALIVE_PROXY_IMAGE=(.+)$', '\\1') | first }}"
+        _wsk_desired_pull: "{{ lookup('ansible.builtin.file', ai_ops_config_dir + '/.env') | regex_search('(?m)^AI_SSE_KEEPALIVE_PROXY_PULL_POLICY=(.+)$', '\\1') | first | default('never', true) }}"
+      no_log: true  # reading .env; expose only the parsed fields, never the file
+      tags: [deploy-ws-keepalive]
+
+    - name: Capture protected adjacent container identities
+      ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
+      register: _wsk_protected
+      changed_when: false
+      failed_when: false
+      loop:
+        - ai-sse-keepalive-proxy-netns
+        - apisix-ai-sse-relay
+        - ai-sse-sub2api-relay
+        - sub2api
+      loop_control:
+        label: "{{ item }}"
+      tags: [deploy-ws-keepalive]
+
+    - name: Build protected container map
+      ansible.builtin.set_fact:
+        _wsk_protected_map: "{{ dict(_wsk_protected.results | map(attribute='item') | zip(_wsk_protected.results | map(attribute='stdout') | map('trim'))) }}"
+      tags: [deploy-ws-keepalive]
+
+    - name: Show ws-keepalive plan
+      ansible.builtin.debug:
+        msg:
+          desired_image: "{{ _wsk_desired_image }}"
+          pull_policy: "{{ _wsk_desired_pull }}"
+          current_image: "{{ _wsk_plan_image.stdout | default('') | trim }}"
+          recreation: ai-sse-keepalive-proxy
+          protected: "{{ _wsk_protected_map }}"
+      tags: [deploy-ws-keepalive]
+
+    - name: Require approved digest for apply
+      ansible.builtin.assert:
+        that:
+          - ai_ops_ws_keepalive_approved_digest | length > 0
+          - ai_ops_ws_keepalive_approved_digest == _wsk_desired_image.split('@')[-1]
+        fail_msg: >-
+          ws-keepalive digest is not approved or became stale. Run plan mode, review the
+          desired image selector, then apply with
+          -e ai_ops_ws_keepalive_approved_digest={{ _wsk_desired_image.split('@')[-1] }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Pull the approved image digest before any mutation
+      ansible.builtin.command: >-
+        {{ _runtime }} pull
+        {{ _wsk_desired_image }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Resolve pulled image ID for identity binding
+      ansible.builtin.command:
+        argv:
+          - "{{ _runtime }}"
+          - image
+          - inspect
+          - '--format={{ "{{.Id}}" }}'
+          - "{{ _wsk_desired_image }}"
+      register: _wsk_pulled_id
+      changed_when: false
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Bind expected image identity to the pulled image ID
+      ansible.builtin.set_fact:
+        _wsk_expected_image_id: "{{ _wsk_pulled_id.stdout | trim }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Deploy compose.yaml (ws-keepalive scoped)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-ws-keepalive]
+      vars:
+        ai_defer_baseline: true
+        ai_file_label: compose.yaml
+        ai_file_local: "{{ ai_ops_config_dir }}/compose.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.yaml"
+      tags: [deploy-ws-keepalive]
+
+    - name: Remember whether the ws-keepalive compose.yaml upload changed
+      ansible.builtin.set_fact:
+        _wsk_compose_changed: "{{ _ai_upload is defined and _ai_upload is changed }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Deploy .env (ws-keepalive scoped)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-ws-keepalive]
+      vars:
+        ai_defer_baseline: true
+        ai_file_label: .env
+        ai_file_local: "{{ ai_ops_config_dir }}/.env"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/.env"
+        ai_activate_cmd: >-
+          {{ _compose }} up -d --no-deps --no-build --pull never ai-sse-keepalive-proxy
+        ai_verify_tasks: verify-ws-keepalive.yml
+        ai_verify_expected_image_identity: "{{ _wsk_expected_image_id }}"
+        ai_verify_expected_revision: "{{ ai_ops_ws_keepalive_expected_revision }}"
+        ai_recovery_expected_image_identity: "{{ _wsk_plan_image.stdout | trim }}"
+        ai_recovery_expected_revision: ""
+        ai_failure_receipt_path: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-ws-keepalive-failed-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        ai_failure_receipt_content: |
+          operation=ws-keepalive-deploy mode={{ ai_ops_mode }}
+          desired_image={{ _wsk_desired_image }}
+          recovery_verification={{ 'failed' if _ai_recovery_verify_failed | default(false) else 'passed' }}
+          outcome={{ 'recovery-required' if _ai_recovery_verify_failed | default(false) else 'candidate-failed-recovered' }}
+        ai_verify_old_container: "{{ _wsk_plan_container.stdout | trim }}"
+        ai_protected_containers: "{{ _wsk_protected_map }}"
+      no_log: true  # .env may contain credentials; never log its content/diff
+      tags: [deploy-ws-keepalive]
+
+    # Runtime convergence gate: deploy-file only activates on upload-changed,
+    # so a stale running container with matching files would be a silent
+    # no-op. Detect runtime image-identity drift and force the same scoped
+    # recreate + verification as an upload-triggered activation.
+    - name: Detect ws-keepalive runtime drift under matching files
+      ansible.builtin.set_fact:
+        _wsk_runtime_drifted: >-
+          {{ _wsk_plan_container.stdout | trim == ""
+             or (_wsk_plan_image.stdout | default('') | trim) != (_wsk_expected_image_id | default('')) }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Report ws-keepalive runtime drift
+      ansible.builtin.debug:
+        msg: >-
+          ai-sse-keepalive-proxy pre-deploy runtime drifted or absent from approved image
+          (running={{ _wsk_plan_image.stdout | default('') | trim }},
+          approved={{ _wsk_expected_image_id }});
+          forcing scoped recreate.
+      when:
+        - ai_ops_mode != "plan"
+        - _wsk_runtime_drifted | bool
+      tags: [deploy-ws-keepalive]
+
+    - name: Force scoped recreate on runtime drift
+      block:
+        - name: Recreate ai-sse-keepalive-proxy for runtime drift
+          ansible.builtin.command: >-
+            {{ _compose }} up -d --no-deps --no-build --pull never ai-sse-keepalive-proxy
+        - name: Verify runtime-drifted ai-sse-keepalive-proxy
+          ansible.builtin.include_role:
+            name: ai_ops
+            tasks_from: verify-ws-keepalive
+          vars:
+            _ai_verify_expected_image_identity: "{{ _wsk_expected_image_id }}"
+            _ai_verify_expected_revision: "{{ ai_ops_ws_keepalive_expected_revision }}"
+            ai_verify_old_container: "{{ _wsk_plan_container.stdout | trim }}"
+            ai_protected_containers: "{{ _wsk_protected_map }}"
+      when:
+        - ai_ops_mode != "plan"
+        - _wsk_runtime_drifted | bool
+        - not (_ai_upload is defined and _ai_upload is changed)
+      tags: [deploy-ws-keepalive]
+
+    - name: Verify ws-keepalive before committing the grouped baselines
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: verify-ws-keepalive
+        apply:
+          tags: [deploy-ws-keepalive]
+      vars:
+        _ai_verify_expected_image_identity: "{{ _wsk_expected_image_id }}"
+        _ai_verify_expected_revision: "{{ ai_ops_ws_keepalive_expected_revision }}"
+        # Freshness is required only when this run changed a file or recreated for
+        # drift; a matching no-op still verifies identity, health and neighbours.
+        ai_verify_old_container: >-
+          {{ _wsk_plan_container.stdout | trim
+             if (_wsk_compose_changed | default(false) | bool
+                 or (_ai_upload is defined and _ai_upload is changed)
+                 or _wsk_runtime_drifted | default(false) | bool)
+             else '' }}
+        ai_protected_containers: "{{ _wsk_protected_map }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    - name: Commit ws-keepalive grouped baselines after verification
+      ansible.builtin.copy:
+        src: "{{ ai_ops_deploy_root }}/{{ item }}"
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ item }}.baseline"
+        remote_src: true
+        mode: '0600'
+      loop: [compose.yaml, .env]
+      when: ai_ops_mode != "plan"
+      no_log: true
+      tags: [deploy-ws-keepalive]
+
+    - name: Write sanitized ws-keepalive receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-ws-keepalive-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=ws-keepalive-deploy mode={{ ai_ops_mode }}
+          desired_image={{ _wsk_desired_image }}
+          verified_container={{ ai_ws_keepalive_verified_container | default('') }}
+          verified_image={{ ai_ws_keepalive_verified_image | default('') }}
+          verified_revision={{ ai_ws_keepalive_verified_revision | default('') }}
+          ready_attempts={{ ai_ws_keepalive_ready_attempts | default('') }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
+    # ======================= deploy-response-keeper =======================
+    # Adds the loopback response-keeper sidecar and the apisix-models /rk route.
+    # Accounts opt in per base_url (.../rk/v1); existing paths are unchanged.
+    # Order: pull approved digest -> compose/.env -> start keeper -> apisix.yaml
+    # (recreate apisix-models) -> recreate sub2api for the WS recovery env.
+    - name: Resolve desired response-keeper image from private .env
+      ansible.builtin.set_fact:
+        _rk_desired_image: "{{ lookup('ansible.builtin.file', ai_ops_config_dir + '/.env') | regex_search('(?m)^RESPONSE_KEEPER_IMAGE=(.+)$', '\\1') | first }}"
+      no_log: true  # reading .env; expose only the parsed field
+      tags: [deploy-response-keeper]
+
+    - name: Read current response-keeper / apisix-models / sub2api containers
+      ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
+      register: _rk_plan_containers
+      changed_when: false
+      failed_when: false
+      loop: [response-keeper, apisix-models, sub2api]
+      tags: [deploy-response-keeper]
+
+    - name: Show response-keeper plan
+      ansible.builtin.debug:
+        msg:
+          desired_image: "{{ _rk_desired_image }}"
+          current: "{{ dict(_rk_plan_containers.results | map(attribute='item') | zip(_rk_plan_containers.results | map(attribute='stdout') | map('trim'))) }}"
+          recreation: [response-keeper, apisix-models, sub2api]
+      tags: [deploy-response-keeper]
+
+    - name: Show apisix-models/apisix.yaml diff (plan)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: prepare-file
+        apply:
+          tags: [deploy-response-keeper]
+      vars:
+        ai_file_label: apisix-models/apisix.yaml
+        ai_file_local: "{{ playbook_dir }}/../../services/routing/apisix-models/apisix.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/apisix-models/apisix.yaml"
+      when: ai_ops_mode == "plan"
+      tags: [deploy-response-keeper]
+
+    - name: Require approved response-keeper digest for apply
+      ansible.builtin.assert:
+        that:
+          - ai_ops_response_keeper_approved_digest | length > 0
+          - ai_ops_response_keeper_approved_digest == _rk_desired_image.split('@')[-1]
+        fail_msg: >-
+          response-keeper digest is not approved or became stale. Run plan mode, then apply with
+          -e ai_ops_response_keeper_approved_digest={{ _rk_desired_image.split('@')[-1] }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    - name: Pull the approved response-keeper digest before any mutation
+      ansible.builtin.command: "{{ _runtime }} pull {{ _rk_desired_image }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    - name: Resolve pulled response-keeper image ID
+      ansible.builtin.command:
+        argv: ["{{ _runtime }}", image, inspect, '--format={{ "{{.Id}}" }}', "{{ _rk_desired_image }}"]
+      register: _rk_pulled_id
+      changed_when: false
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    - name: Deploy compose.yaml (response-keeper scoped)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-response-keeper]
+      vars:
+        ai_file_label: compose.yaml
+        ai_file_local: "{{ ai_ops_config_dir }}/compose.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/compose.yaml"
+      tags: [deploy-response-keeper]
+
+    - name: Deploy .env (response-keeper scoped)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-response-keeper]
+      vars:
+        ai_file_label: .env
+        ai_file_local: "{{ ai_ops_config_dir }}/.env"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/.env"
+      no_log: true  # .env may contain credentials; never log its content/diff
+      tags: [deploy-response-keeper]
+
+    - name: Start response-keeper
+      ansible.builtin.command: "{{ _compose }} up -d --no-deps --no-build --pull never response-keeper"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    - name: Deploy apisix-models/apisix.yaml (adds /rk routes)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-response-keeper]
+      vars:
+        ai_file_label: apisix-models/apisix.yaml
+        ai_file_local: "{{ playbook_dir }}/../../services/routing/apisix-models/apisix.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/apisix-models/apisix.yaml"
+        # bind-mounted template rendered at start; recreate to load the new routes
+        ai_activate_cmd: "{{ _compose }} up -d --force-recreate --no-deps --no-build apisix-models"
+        ai_verify_tasks: verify-response-keeper.yml
+        ai_verify_expected_image_identity: "{{ _rk_pulled_id.stdout | default('') | trim }}"
+        ai_verify_expected_revision: "{{ ai_ops_response_keeper_expected_revision }}"
+        ai_recovery_expected_image_identity: ""
+        ai_recovery_expected_revision: ""
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    # Always re-verify (idempotent); _ai_upload leaks across deploy-file includes.
+    - name: Verify response-keeper and /rk route
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: verify-response-keeper
+      vars:
+        _ai_verify_expected_image_identity: "{{ _rk_pulled_id.stdout | trim }}"
+        _ai_verify_expected_revision: "{{ ai_ops_response_keeper_expected_revision }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    # Sub2API reads GATEWAY_OPENAI_WS_INGRESS_PREVIOUS_RESPONSE_RECOVERY_ENABLED only
+    # at start; recreate drops live WS sessions once (clients reconnect).
+    - name: Recreate sub2api to apply WS recovery env
+      ansible.builtin.command: "{{ _compose }} up -d --no-deps --no-build sub2api"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    - name: Wait for sub2api health
+      ansible.builtin.command: "{{ _compose }} ps --format json sub2api"
+      register: _rk_sub2api_ps
+      changed_when: false
+      retries: 30
+      delay: 3
+      until: "'healthy' in _rk_sub2api_ps.stdout and 'unhealthy' not in _rk_sub2api_ps.stdout"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    - name: Write sanitized response-keeper receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-response-keeper-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=response-keeper-deploy mode={{ ai_ops_mode }}
+          desired_image={{ _rk_desired_image }}
+          verified_container={{ ai_response_keeper_verified_container | default('') }}
+          verified_image={{ ai_response_keeper_verified_image | default('') }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-response-keeper]
+
+    # ======================= deploy-responses-path =======================
+    # Single-traversal Responses topology: apisix routes /v1/responses and
+    # /rk/v1/responses straight to keeper; keeper routes to CPA/AISIX. Recreates
+    # ONLY response-keeper and apisix-models (never sub2api). Plan shows the four
+    # file diffs, digest and protected map. Apply: digest gate -> pull -> snapshot
+    # -> upload -> one scoped recreate -> verify -> restore snapshot on failure.
+    - name: Resolve desired keeper image (responses-path)
+      ansible.builtin.set_fact:
+        _rp_desired_image: "{{ lookup('ansible.builtin.file', ai_ops_config_dir + '/.env') | regex_search('(?m)^RESPONSE_KEEPER_IMAGE=(.+)$', '\\1') | first }}"
+      no_log: true  # reading .env; expose only the parsed field
+      tags: [deploy-responses-path]
+
+    - name: Define responses-path managed files
+      ansible.builtin.set_fact:
+        _rp_files:
+          - {label: compose.yaml, local: "{{ ai_ops_config_dir }}/compose.yaml", remote: "{{ ai_ops_deploy_root }}/compose.yaml"}
+          - {label: apisix-models/apisix.yaml, local: "{{ playbook_dir }}/../../services/routing/apisix-models/apisix.yaml", remote: "{{ ai_ops_deploy_root }}/services/routing/apisix-models/apisix.yaml"}
+          - {label: apisix-models/config.yaml, local: "{{ playbook_dir }}/../../services/routing/apisix-models/config.yaml", remote: "{{ ai_ops_deploy_root }}/services/routing/apisix-models/config.yaml"}
+          - {label: apisix-models/routing_selector.lua, local: "{{ playbook_dir }}/../../services/routing/apisix-models/routing_selector.lua", remote: "{{ ai_ops_deploy_root }}/services/routing/apisix-models/routing_selector.lua"}
+        _rp_targets: [response-keeper, apisix-models]
+      tags: [deploy-responses-path]
+
+    - name: Read current target container IDs
+      ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
+      register: _rp_before
+      changed_when: false
+      failed_when: false
+      loop: "{{ _rp_targets }}"
+      tags: [deploy-responses-path]
+
+    - name: Read current keeper image identity
+      ansible.builtin.command:
+        argv: ["{{ _runtime }}", inspect, '--format={{ "{{.Image}}" }}', "{{ _rp_before.results[0].stdout | trim }}"]
+      register: _rp_before_image
+      changed_when: false
+      failed_when: false
+      when: _rp_before.results[0].stdout | trim != ""
+      tags: [deploy-responses-path]
+
+    - name: Capture every other running service as protected
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ _compose }} ps --services --status running | grep -vxE 'response-keeper|apisix-models' || true
+      args:
+        executable: /bin/bash
+      register: _rp_other_services
+      changed_when: false
+      tags: [deploy-responses-path]
+
+    - name: Read protected container IDs
+      ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
+      register: _rp_protected
+      changed_when: false
+      loop: "{{ _rp_other_services.stdout_lines }}"
+      tags: [deploy-responses-path]
+
+    - name: Build responses-path maps
+      ansible.builtin.set_fact:
+        _rp_old_containers: "{{ dict(_rp_before.results | map(attribute='item') | zip(_rp_before.results | map(attribute='stdout') | map('trim'))) }}"
+        _rp_protected_map: "{{ dict(_rp_protected.results | map(attribute='item') | zip(_rp_protected.results | map(attribute='stdout') | map('trim'))) }}"
+      tags: [deploy-responses-path]
+
+    - name: Show responses-path file diffs (drift-gated)
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: prepare-file
+        apply:
+          tags: [deploy-responses-path]
+      vars:
+        ai_file_label: "{{ item.label }}"
+        ai_file_local: "{{ item.local }}"
+        ai_file_remote: "{{ item.remote }}"
+      loop: "{{ _rp_files }}"
+      loop_control:
+        label: "{{ item.label }}"
+      tags: [deploy-responses-path]
+
+    - name: Show responses-path plan
+      ansible.builtin.debug:
+        msg:
+          desired_keeper_image: "{{ _rp_desired_image }}"
+          current_keeper_image: "{{ _rp_before_image.stdout | default('') | trim }}"
+          recreation: "{{ _rp_targets }}"
+          current: "{{ _rp_old_containers }}"
+          protected_count: "{{ _rp_protected_map | length }}"
+          protected: "{{ _rp_protected_map }}"
+      tags: [deploy-responses-path]
+
+    - name: Require approved keeper digest for apply
+      ansible.builtin.assert:
+        that:
+          - ai_ops_response_keeper_approved_digest | length > 0
+          - ai_ops_response_keeper_approved_digest == _rp_desired_image.split('@')[-1]
+        fail_msg: >-
+          response-keeper digest is not approved or became stale. Run plan mode, then apply with
+          -e ai_ops_response_keeper_approved_digest={{ _rp_desired_image.split('@')[-1] }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-responses-path]
+
+    - name: Pull the approved keeper digest before any mutation
+      ansible.builtin.command: "{{ _runtime }} pull {{ _rp_desired_image }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-responses-path]
+
+    - name: Resolve pulled keeper image ID
+      ansible.builtin.command:
+        argv: ["{{ _runtime }}", image, inspect, '--format={{ "{{.Id}}" }}', "{{ _rp_desired_image }}"]
+      register: _rp_pulled_id
+      changed_when: false
+      when: ai_ops_mode != "plan"
+      tags: [deploy-responses-path]
+
+    - name: Snapshot rollback set (four files, .env selector, image and container IDs)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        dir={{ ai_ops_deploy_root }}/.rollback/responses-path-$(date -u +%Y%m%dT%H%M%SZ)
+        mkdir -p "$dir/apisix-models"
+        cp -p compose.yaml "$dir/compose.yaml"
+        cp -p services/routing/apisix-models/apisix.yaml services/routing/apisix-models/config.yaml services/routing/apisix-models/routing_selector.lua "$dir/apisix-models/"
+        grep -E '^RESPONSE_KEEPER_IMAGE=' .env > "$dir/keeper-image.env"
+        chmod -R go-rwx "$dir"
+        echo "$dir"
+      args:
+        chdir: "{{ ai_ops_deploy_root }}"
+        executable: /bin/bash
+      register: _rp_snapshot
+      when: ai_ops_mode != "plan"
+      tags: [deploy-responses-path]
+
+    - name: Record pre-deploy identities in snapshot
+      ansible.builtin.copy:
+        dest: "{{ _rp_snapshot.stdout | trim }}/identities.yml"
+        mode: "0600"
+        content: |
+          {{ {'keeper_image_id': _rp_before_image.stdout | default('') | trim,
+              'targets': _rp_old_containers,
+              'protected': _rp_protected_map} | to_nice_yaml }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-responses-path]
+
+    - name: Apply responses-path
+      block:
+        - name: Upload .env (no activation)
+          ansible.builtin.copy:
+            src: "{{ ai_ops_config_dir }}/.env"
+            dest: "{{ ai_ops_deploy_root }}/.env"
+            mode: preserve
+          no_log: true
+        - name: Upload managed files
+          ansible.builtin.copy:
+            src: "{{ item.local }}"
+            dest: "{{ item.remote }}"
+            mode: preserve
+          loop: "{{ _rp_files }}"
+          loop_control:
+            label: "{{ item.label }}"
+        - name: Recreate only response-keeper and apisix-models
+          ansible.builtin.command: >-
+            {{ _compose }} up -d --force-recreate --no-deps --no-build --pull never
+            response-keeper apisix-models
+        - name: Verify responses-path
+          ansible.builtin.include_role:
+            name: ai_ops
+            tasks_from: verify-responses-path
+          vars:
+            _ai_verify_expected_image_identity: "{{ _rp_pulled_id.stdout | trim }}"
+            _ai_verify_expected_revision: "{{ ai_ops_response_keeper_expected_revision }}"
+            ai_verify_old_containers: "{{ _rp_old_containers }}"
+            ai_protected_containers: "{{ _rp_protected_map }}"
+      rescue:
+        - name: Restore snapshot files
+          ansible.builtin.shell: |
+            set -euo pipefail
+            dir={{ _rp_snapshot.stdout | trim | quote }}
+            cp -p "$dir/compose.yaml" compose.yaml
+            cp -p "$dir/apisix-models/"* services/routing/apisix-models/
+            sed -i "s|^RESPONSE_KEEPER_IMAGE=.*|$(cat "$dir/keeper-image.env")|" .env
+          args:
+            chdir: "{{ ai_ops_deploy_root }}"
+            executable: /bin/bash
+          no_log: true
+        - name: Recreate restored response-keeper and apisix-models
+          ansible.builtin.command: >-
+            {{ _compose }} up -d --force-recreate --no-deps --no-build --pull never
+            response-keeper apisix-models
+          register: _rp_recovery
+          failed_when: false
+        - name: Record failed responses-path receipt
+          ansible.builtin.copy:
+            dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-responses-path-failed-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+            mode: "0600"
+            content: |
+              operation=responses-path-deploy outcome=candidate-failed-restored
+              desired_image={{ _rp_desired_image }}
+              snapshot={{ _rp_snapshot.stdout | trim }}
+              recovery_rc={{ _rp_recovery.rc | default('n/a') }}
+        - name: Fail after restore
+          ansible.builtin.fail:
+            msg: >-
+              responses-path activation/verification failed; snapshot {{ _rp_snapshot.stdout | trim }}
+              restored and services recreated (rc={{ _rp_recovery.rc | default('n/a') }}). Investigate before retrying.
+      when: ai_ops_mode != "plan"
+      tags: [deploy-responses-path]
+
+    - name: Record new baselines for responses-path files
+      ansible.builtin.copy:
+        src: "{{ item.local }}"
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ item.label | replace('/', '__') }}.baseline"
+        mode: "0600"
+      loop: "{{ _rp_files }}"
+      loop_control:
+        label: "{{ item.label }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-responses-path]
+
+    - name: Write sanitized responses-path receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-responses-path-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=responses-path-deploy mode={{ ai_ops_mode }}
+          desired_image={{ _rp_desired_image }}
+          snapshot={{ _rp_snapshot.stdout | trim }}
+          previous={{ _rp_old_containers }}
+          verified={{ ai_responses_path_verified | default({}) }}
+          verified_keeper={{ ai_response_keeper_verified_image | default('') }}
+          protected_count={{ _rp_protected_map | length }}
+      when: ai_ops_mode != "plan"
+      tags: [deploy-responses-path]
+
+    # ======================= restart-response-keeper =======================
+    # Restart only the keeper container: clears its in-memory response state
+    # (TTL store, no persistence). Image, .env, apisix-models and sub2api are
+    # untouched; clients recover lost references with one full-history repair.
+    - name: Read current response-keeper container (restart plan)
+      ansible.builtin.command: "{{ _compose }} ps -q response-keeper"
+      register: _rk_restart_before
+      changed_when: false
+      failed_when: _rk_restart_before.rc != 0 or _rk_restart_before.stdout | trim == ""
+      tags: [restart-response-keeper]
+
+    - name: Show response-keeper restart plan
+      ansible.builtin.debug:
+        msg:
+          container: "{{ _rk_restart_before.stdout | trim }}"
+          action: "restart response-keeper only (in-memory state cleared)"
+      tags: [restart-response-keeper]
+
+    - name: Restart response-keeper
+      ansible.builtin.command: "{{ _compose }} restart response-keeper"
+      when: ai_ops_mode != "plan"
+      tags: [restart-response-keeper]
+
+    - name: Verify restarted response-keeper and /rk route
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: verify-response-keeper
+        apply:
+          tags: [restart-response-keeper]
+      when: ai_ops_mode != "plan"
+      tags: [restart-response-keeper]
+
+    - name: Write sanitized response-keeper restart receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-response-keeper-restart-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=response-keeper-restart mode={{ ai_ops_mode }}
+          container={{ ai_response_keeper_verified_container | default('') }}
+          image={{ ai_response_keeper_verified_image | default('') }}
+      when: ai_ops_mode != "plan"
+      tags: [restart-response-keeper]
+
+    # ======================= deploy-model-sync =======================
+    - name: Deploy approved model-sync policy
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-model-sync]
+      vars:
+        ai_file_label: cpa-model-sync/config.json
+        ai_file_local: "{{ ai_ops_config_dir }}/services/cpa/cpa-model-sync/config.json"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/cpa/cpa-model-sync/config.json"
+        # The sidecar runs as 65534:65534 and reads the bind-mounted policy at
+        # startup; a restrictive local mode must never propagate to production.
+        ai_file_mode: "0644"
+        ai_activate_cmd: >-
+          {{ _compose }} up -d --force-recreate --no-deps --no-build cpa-model-sync
+        ai_verify_tasks: verify-model-sync.yml
+        ai_verify_expected_policy_digest: "{{ _model_sync_preview.policy_digest | default('') }}"
+        ai_verify_expected_state_digest: "{{ _model_sync_preview.desired_state_digest | default('') }}"
+        ai_verify_expected_image_identity: "{{ _model_sync_preview.image_identity | default('') }}"
+        ai_recovery_expected_policy_digest: "{{ _ai_remote_stat.stat.checksum | default('') }}"
+        ai_recovery_expected_state_digest: "{{ _model_sync_preview.current_state_digest | default('') }}"
+        ai_recovery_expected_image_identity: "{{ _model_sync_preview.image_identity | default('') }}"
+        ai_failure_receipt_path: >-
+          {{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-failed-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt
+        ai_failure_receipt_content: |
+          operation=model-sync-deploy mode={{ ai_ops_mode }}
+          approval_digest={{ _model_sync_preview.approval_digest | default('unknown') }}
+          candidate_policy_digest={{ _model_sync_preview.policy_digest | default('unknown') }}
+          recovery_policy_digest={{ ai_model_sync_verified_policy_digest | default('unknown') }}
+          recovery_state_digest={{ ai_model_sync_verified_state_digest | default('unknown') }}
+          recovery_verification={{ 'failed' if _ai_recovery_verify_failed | default(false) else 'passed' }}
+          outcome={{ 'recovery-required' if _ai_recovery_verify_failed | default(false) else 'candidate-failed-recovered' }}
+      tags: [deploy-model-sync]
+
+    - name: Preserve protected model-sync transition evidence
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-sync-transition.json"
+        mode: "0600"
+        content: >-
+          {{ {
+            'approval_digest': _model_sync_preview.approval_digest,
+            'policy_digest': _model_sync_preview.policy_digest,
+            'image_identity': _model_sync_preview.image_identity,
+            'current_state_digest': _model_sync_preview.current_state_digest,
+            'desired_state_digest': _model_sync_preview.desired_state_digest,
+            'channels': _model_sync_preview.channels
+          } | to_nice_json }}
+      no_log: true
+      when:
+        - ai_ops_mode != "plan"
+        - _ai_upload is changed
+      tags: [deploy-model-sync]
+
+    - name: Write sanitized model-sync receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=model-sync-deploy mode={{ ai_ops_mode }}
+          approval_digest={{ _model_sync_preview.approval_digest }}
+          policy_digest={{ ai_model_sync_verified_policy_digest }}
+          image_identity={{ ai_model_sync_verified_image }}
+          container_id={{ ai_model_sync_verified_container }}
+          state_digest={{ ai_model_sync_verified_state_digest }}
+          updated={{ ai_model_sync_summary.updated }}
+          unchanged={{ ai_model_sync_summary.unchanged }}
+          failed={{ ai_model_sync_summary.failed }}
+          unconfirmed={{ ai_model_sync_summary.unconfirmed }}
+          skipped={{ ai_model_sync_summary.skipped }}
+          {% for channel in _model_sync_preview.channels %}
+          channel={{ channel.kind }}/{{ channel.prefix }} current_count={{ channel.current_count }} desired_count={{ channel.desired_count }} current_digest={{ channel.current_digest }} desired_digest={{ channel.desired_digest }}
+          {% endfor %}
+          outcome=success
+      when:
+        - ai_ops_mode != "plan"
+        - _ai_upload is changed
+      tags: [deploy-model-sync]
+
+    # ======================= deploy-model-catalog-config =======================
+    - name: Deploy model-catalog config
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: deploy-file
+        apply:
+          tags: [deploy-model-catalog-config]
+      vars:
+        ai_file_label: model-catalog/config.yaml
+        ai_file_local: "{{ ai_ops_config_dir }}/services/routing/model-catalog/config.yaml"
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+        # model-catalog runs as 65532:65532 and reads the bind-mounted YAML at
+        # startup; a restrictive local mode must never propagate to production.
+        ai_file_mode: "0644"
+        ai_activate_cmd: >-
+          {{ _compose }} up -d --force-recreate --no-deps --no-build model-catalog
+        ai_verify_tasks: verify-model-catalog-config.yml
+        ai_verify_expected_policy_digest: "{{ _ai_local_stat.stat.checksum | default('') }}"
+        ai_verify_expected_image_identity: "{{ _me_plan_image.stdout | trim | default('') }}"
+        ai_verify_old_container: "{{ _me_plan_container.stdout | trim | default('') }}"
+        ai_recovery_expected_policy_digest: "{{ _ai_remote_stat.stat.checksum | default('') }}"
+        ai_recovery_expected_image_identity: "{{ _me_plan_image.stdout | trim | default('') }}"
+        ai_protected_containers: "{{ _me_protected_map | default({}) }}"
+        ai_failure_receipt_path: >-
+          {{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-failed-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt
+        ai_failure_receipt_content: |
+          operation=model-catalog-config-deploy mode={{ ai_ops_mode }}
+          candidate_config_digest={{ _me_candidate_validation.config_digest | default('unknown') }}
+          recovery_config_digest={{ ai_model_catalog_verified_policy_digest | default('unknown') }}
+          recovery_verification={{ 'failed' if _ai_recovery_verify_failed | default(false) else 'passed' }}
+          outcome={{ 'recovery-required' if _ai_recovery_verify_failed | default(false) else 'candidate-failed-recovered' }}
+      tags: [deploy-model-catalog-config]
+
+    - name: Write sanitized model-catalog deploy receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=model-catalog-config-deploy mode={{ ai_ops_mode }}
+          config_digest={{ ai_model_catalog_verified_policy_digest }}
+          image_identity={{ ai_model_catalog_verified_image }}
+          container_id={{ ai_model_catalog_verified_container }}
+          readiness_attempts={{ ai_model_catalog_ready_attempts }}
+          protected_containers_unchanged=true
+          outcome=success
+      when:
+        - ai_ops_mode != "plan"
+        - _ai_upload is changed
+      tags: [deploy-model-catalog-config]
+
+    # ======================= rollback-model-catalog-config =======================
+    - name: Capture pre-rollback model-catalog identity
+      ansible.builtin.command: "{{ _compose }} ps -q model-catalog"
+      register: _me_rb_container
+      changed_when: false
+      failed_when: _me_rb_container.rc != 0 or _me_rb_container.stdout | trim == ""
+      tags: [rollback-model-catalog-config]
+
+    - name: Read pre-rollback model-catalog image identity
+      ansible.builtin.command: >-
+        {{ _runtime }} inspect --format={{ '{{' }}.Image{{ '}}' }}
+        {{ _me_rb_container.stdout | trim }}
+      register: _me_rb_image
+      changed_when: false
+      tags: [rollback-model-catalog-config]
+
+    - name: Capture protected adjacent container identities for rollback
+      ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
+      register: _me_rb_protected
+      changed_when: false
+      loop:
+        - model-catalog-netns
+        - catalog-cpa-relay
+        - apisix-models-catalog-relay
+        - apisix-models
+      loop_control:
+        label: "{{ item }}"
+      tags: [rollback-model-catalog-config]
+
+    - name: Build protected container map for rollback
+      ansible.builtin.set_fact:
+        _me_rb_protected_map: "{{ dict(_me_rb_protected.results | map(attribute='item') | zip(_me_rb_protected.results | map(attribute='stdout') | map('trim'))) }}"
+      tags: [rollback-model-catalog-config]
+
+    - name: Roll back model-catalog config and prove readiness
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: rollback-file
+        apply:
+          tags: [rollback-model-catalog-config]
+      vars:
+        ai_file_label: model-catalog/config.yaml
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+        ai_file_mode: "0644"
+        ai_activate_cmd: >-
+          {{ _compose }} up -d --force-recreate --no-deps --no-build model-catalog
+        ai_verify_tasks: verify-model-catalog-config.yml
+        ai_verify_expected_image_identity: "{{ _me_rb_image.stdout | trim }}"
+        ai_verify_old_container: "{{ _me_rb_container.stdout | trim }}"
+        ai_protected_containers: "{{ _me_rb_protected_map | default({}) }}"
+      tags: [rollback-model-catalog-config]
+
+    - name: Write sanitized model-catalog rollback receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-rollback-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=model-catalog-config-rollback
+          config_digest={{ ai_model_catalog_verified_policy_digest }}
+          image_identity={{ ai_model_catalog_verified_image }}
+          container_id={{ ai_model_catalog_verified_container }}
+          readiness_attempts={{ ai_model_catalog_ready_attempts }}
+          protected_containers_unchanged=true
+          outcome=success
+      tags: [rollback-model-catalog-config]
+
+    # ======================= rollback-model-sync =======================
+    - name: Read protected model-sync transition evidence
+      ansible.builtin.slurp:
+        src: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-sync-transition.json"
+      register: _model_sync_transition_raw
+      no_log: true
+      tags: [rollback-model-sync]
+
+    - name: Parse protected model-sync transition evidence
+      ansible.builtin.set_fact:
+        _model_sync_transition: "{{ _model_sync_transition_raw.content | b64decode | from_json }}"
+      no_log: true
+      tags: [rollback-model-sync]
+
+    - name: Roll back model-sync policy and prove CPA recovery
+      ansible.builtin.include_role:
+        name: ai_ops
+        tasks_from: rollback-file
+        apply:
+          tags: [rollback-model-sync]
+      vars:
+        ai_file_label: cpa-model-sync/config.json
+        ai_file_remote: "{{ ai_ops_deploy_root }}/services/cpa/cpa-model-sync/config.json"
+        ai_file_mode: "0644"
+        ai_activate_cmd: >-
+          {{ _compose }} up -d --force-recreate --no-deps --no-build cpa-model-sync
+        ai_verify_tasks: verify-model-sync.yml
+        ai_verify_expected_state_digest: "{{ _model_sync_transition.current_state_digest }}"
+        ai_verify_expected_image_identity: "{{ _model_sync_transition.image_identity }}"
+      tags: [rollback-model-sync]
+
+    - name: Write sanitized model-sync rollback receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-rollback-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=model-sync-rollback
+          policy_digest={{ ai_model_sync_verified_policy_digest }}
+          image_identity={{ ai_model_sync_verified_image }}
+          container_id={{ ai_model_sync_verified_container }}
+          state_digest={{ ai_model_sync_verified_state_digest }}
+          updated={{ ai_model_sync_summary.updated }}
+          unchanged={{ ai_model_sync_summary.unchanged }}
+          failed={{ ai_model_sync_summary.failed }}
+          unconfirmed={{ ai_model_sync_summary.unconfirmed }}
+          skipped={{ ai_model_sync_summary.skipped }}
+          outcome=success
+      tags: [rollback-model-sync]
