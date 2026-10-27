@@ -86,6 +86,6 @@ api_keys:
   - display_name: sub2api
     key_hash: replace-with-sha256-of-sub2api-caller-key
     allowed_models: ["*"]
-  - display_name: enricher-catalog
+  - display_name: model-catalog
     key_hash: replace-with-sha256-of-catalog-caller-key
     allowed_models: ["*"]

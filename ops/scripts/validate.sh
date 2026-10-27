@@ -51,9 +51,9 @@ import json
 from pathlib import Path
 
 keys = json.loads(Path("services/routing/aisix/caller-keys.json").read_text())
-if set(keys) != {"sub2api", "enricher_catalog"} or not all(isinstance(value, str) and value for value in keys.values()):
+if set(keys) != {"sub2api", "model_catalog"} or not all(isinstance(value, str) and value for value in keys.values()):
     raise SystemExit("services/routing/aisix/caller-keys.json has an invalid shape")
-for name in ("sub2api", "enricher_catalog"):
+for name in ("sub2api", "model_catalog"):
     print(hashlib.sha256(keys[name].encode()).hexdigest())
 PY
   )
@@ -731,6 +731,7 @@ PY
 python3 ops/scripts/tests/test-standard-cache-topology.py
 python3 ops/scripts/tests/test-component-deploy.py
 python3 ops/scripts/tests/test-keeper-observe.py
+python3 ops/scripts/tests/test-migrate-services-layout.py
 
 # Build local components and parse their native configuration. These are syntax
 # gates, not snapshots of ports, service counts, or application policy values.

@@ -7,13 +7,13 @@
 **How to use:**
 
 ```bash
-cd ansible
+cd ops/ansible
 ansible-playbook ops.yml --list-tags                                       # operation surface
 ansible-playbook ops.yml --tags deploy -e service=cli-proxy-api -e ai_ops_mode=plan
 ansible-playbook ops.yml --tags deploy -e service=cli-proxy-api \
   -e ai_ops_mode=apply -e ai_ops_front_approved_digest='<reviewed-plan-digest>'
 ansible-playbook ops.yml --tags deploy-squid                               # egress policy
-ansible-playbook ops.yml --tags deploy-models-enricher-config              # enricher config
+ansible-playbook ops.yml --tags deploy-model-catalog-config              # model-catalog config
 ```
 
 Set variables in `inventory/group_vars/gateway.yml` or `inventory/host_vars/<host>.yml`. The template is `examples/vars.yml`.

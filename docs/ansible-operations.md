@@ -14,7 +14,8 @@ Ansible never constructs configuration on the remote.
 - `roles/ai_ops/tasks/` — shared preflight and component file operations.
 - `private-config/` — **gitignored** operator's private config directory
   (`compose.yaml`, `compose.override.yaml`, `.env`, `services/routing/aisix/resources.yaml`,
-  `services/cpa/cpa-model-sync/config.json`, `data/egress-proxy/policy.json`), adopted from
+  `services/cpa/cpa-model-sync/config.json`, `services/routing/model-catalog/config.yaml`,
+  `data/egress-proxy/policy.json`), adopted from
   production at baseline.
 
 ## Usage
@@ -49,13 +50,13 @@ ansible-playbook ops.yml --tags deploy-model-sync \
 # Guarded model-sync rollback re-runs the old policy and proves CPA read-back.
 ansible-playbook ops.yml --tags rollback-model-sync
 
-# Models-enricher config: validate candidate with the deployed binary, then
-# force-recreate only models-enricher and verify digest + readiness.
-ansible-playbook ops.yml --tags deploy-models-enricher-config -e ai_ops_mode=plan
-ansible-playbook ops.yml --tags deploy-models-enricher-config
+# Model-catalog config: validate candidate with the deployed binary, then
+# force-recreate only model-catalog and verify digest + readiness.
+ansible-playbook ops.yml --tags deploy-model-catalog-config -e ai_ops_mode=plan
+ansible-playbook ops.yml --tags deploy-model-catalog-config
 
-# Guarded models-enricher rollback restores the protected YAML and proves readiness.
-ansible-playbook ops.yml --tags rollback-models-enricher-config
+# Guarded model-catalog rollback restores the protected YAML and proves readiness.
+ansible-playbook ops.yml --tags rollback-model-catalog-config
 
 # Bounded host application recovery (Docker only): deploy local APISIX health
 # isolation first. This copies the guard/units, verifies probes, enables the timer;
@@ -97,7 +98,7 @@ defaults. Key ones:
 | `ai_ops_model_sync_approved_digest` | `""` | exact digest printed by the reviewed model-sync plan; required when the policy changes |
 | `ai_ops_model_sync_verify_retries` / `ai_ops_model_sync_verify_delay_seconds` | `30` / `2` | bounded wait for the recreated sidecar's immediate round |
 | `ai_ops_model_sync_log_tail` | `200` | maximum current-container log lines parsed for the round summary |
-| `ai_ops_models_enricher_verify_retries` / `ai_ops_models_enricher_verify_delay_seconds` | `30` / `2` | bounded wait for the recreated models-enricher readiness |
+| `ai_ops_model_catalog_verify_retries` / `ai_ops_model_catalog_verify_delay_seconds` | `30` / `2` | bounded wait for the recreated model-catalog readiness |
 | `ai_ops_adopted_direct_models` / `ai_ops_standalone_retained` | `[]` | AISIX orphan-report approval/exclusion lists |
 
 ## Worker-owned CPA configuration
@@ -242,7 +243,7 @@ readiness, correct namespace owner/inode where shared, and every adjacent
 container's ID/image/StartedAt/state unchanged. Readiness uses Docker
 `health=healthy` when available. Without a HEALTHCHECK it calls existing
 `gateway-recovery.py` `OBSERVE_HTTP`/`namespace_probe` code (cloudflared, AISIX,
-aisix-status, model-catalog-sidecar), or the existing completed-cycle readiness
+aisix-status), or the existing completed-cycle readiness
 check for cpa-model-sync. It never invents a passing probe or starts a worker
 sync; profiles with no known probe fail closed. Only after these checks and a
 fresh group readback are all three baselines committed. The private snapshot contains a sanitized success receipt; the guarded
@@ -290,9 +291,9 @@ umask 077
 mkdir -p /var/tmp/ai-gateway-ops-logs
 set -o pipefail
 timeout --signal=TERM --kill-after=30s 30m \
-  ansible-playbook ops.yml --tags deploy -e service=models-enricher \
+  ansible-playbook ops.yml --tags deploy -e service=model-catalog \
   -e ai_ops_mode=apply -e ai_ops_front_approved_digest='<reviewed-plan-digest>' \
-  2>&1 | tee /var/tmp/ai-gateway-ops-logs/models-enricher-apply.log
+  2>&1 | tee /var/tmp/ai-gateway-ops-logs/model-catalog-apply.log
 ```
 
 The durable progress receipt records locked → preparing-image → image-ready →
@@ -347,17 +348,17 @@ digest equals the approved desired-set digest. Failure restores the old policy,
 recreates the sidecar, and proves recovery against the pre-apply current-set
 digest; an unproven recovery is reported as failure, never success.
 
-## Models-enricher config safety
+## Model-catalog config safety
 
-`deploy-models-enricher-config` requires a running validation-capable
-models-enricher image (one that provides `validate-config`) before the first
+`deploy-model-catalog-config` requires a running validation-capable
+model-catalog image (one that provides `validate-config`) before the first
 managed config change. First adopt the reviewed live
 `services/routing/model-catalog/config.yaml` into the ignored private path
 `ops/ansible/private-config/services/routing/model-catalog/config.yaml`; when local and remote
 bytes match, readback establishes the reviewed baseline without recreation.
 
 For a changed config, plan mode streams local YAML to
-`/models-enricher validate-config -` inside the running container — the same
+`/model-catalog validate-config -` inside the running container — the same
 config parser used at startup (YAML, required fields, the shared `metadata` chain
 schema, globs, rejected Go-era legacy fields) — and shows the effective file diff.
 The TypeScript image prints `{"version":1,"config_digest":"<sha256>"}` on success;
@@ -365,12 +366,12 @@ the digest is what the post-recreate check compares. Since the TypeScript rewrit
 the config uses the openai-api-pi-extension chain schema (`metadata.chain`,
 `metadata.models`, `metadata.include_models`); a Go-era file fails validation with a
 migration hint. Apply revalidates,
-uploads, and force-recreates only `models-enricher` (`--no-deps --no-build`),
+uploads, and force-recreates only `model-catalog` (`--no-deps --no-build`),
 then requires a fresh container on the same image whose mounted `/app/config.yaml`
 digest matches the candidate, whose `healthcheck` becomes ready within bounded
 retries, and whose namespace owner and adjacent relay container IDs stayed
-unchanged. Failure restores the protected pre-deploy YAML, recreates the
-sidecar, and proves the restored digest plus readiness; an unproven recovery is
+unchanged. Failure restores the protected pre-deploy YAML, recreates
+model-catalog, and proves the restored digest plus readiness; an unproven recovery is
 reported as recovery-required, never success.
 
 ## Operational notes
@@ -380,7 +381,7 @@ reported as recovery-required, never success.
   `up -d` no-ops. `deploy-aisix` therefore activates with `--force-recreate`.
   Fixture tests miss this (fixture containers are freshly created); caught live
   on rainyun-la 2026-09-19.
-- **models-enricher loads `config.yaml` only at startup**, so config deploys
+- **model-catalog loads `config.yaml` only at startup**, so config deploys
   use the same `--force-recreate` activation; the tracked
   `services/routing/model-catalog/config.yaml` is an image/build default — production desired
   state lives only in the gitignored private config dir.

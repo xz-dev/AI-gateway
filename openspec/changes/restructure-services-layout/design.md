@@ -95,7 +95,7 @@ The sidecar's AISIX caller key keeps its value; only its env name is renamed in 
 
 ### D4 Deploy-root and private-config migration
 
-- The host tree is moved with the same `git mv` mapping, applied by an idempotent script, `ops/scripts/host/migrate-services-layout.py`. It runs `--plan` before `--apply`, writes a receipt, and keeps the old paths in a timestamped backup.
+- The host tree is moved with the same `git mv` mapping, applied by an idempotent script, `ops/scripts/host/migrate-services-layout.py`. It runs `--plan` before `--apply`, writes a receipt, and keeps the old paths in a timestamped backup. `--apply` leaves a compatibility symlink at each old path, so a container that Docker restarts before it is recreated still finds its bind-mount source. `--finalize` removes the symlinks and the retired `model-catalog-sidecar/` (backed up first) after every affected container runs from the new paths.
 - `ansible/private-config/` moves the same way, to `ops/ansible/private-config/`. On the host, the installed recovery unit is rewritten to the new script path and `systemctl daemon-reload` runs.
 - Ansible drift baselines for moved files are re-adopted through the existing "first adoption matches production" path. Local and remote bytes match after the move, so no service is recreated by baseline adoption.
 - `model-catalog-cache` is filled by copying `models-enricher-cache` (`v2/`; `out/` is rebuilt). The old volume is removed only after observation.

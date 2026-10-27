@@ -153,11 +153,11 @@ Each row is one upstream inventory evaluated under one filter.
 
 ## Common mistakes
 
-- **Putting `include`/`exclude` in `models-enricher`.** The TypeScript enricher has no
+- **Putting `include`/`exclude` in `model-catalog`.** model-catalog has no
   channel `include`/`exclude`; `validate-config` and startup reject them as legacy
-  fields. Membership filtering belongs here. The enricher only enriches members Rust
+  fields. Membership filtering belongs here. model-catalog only enriches members Rust
   has already configured.
-- **Confusing `models-enricher`'s `metadata.include_models` with this policy.** Its `!`
+- **Confusing `model-catalog`'s `metadata.include_models` with this policy.** Its `!`
   entries hide *public* IDs from the catalog after admission. They do not change
   membership, do not stop a model from being configured, and do not affect
   routing.

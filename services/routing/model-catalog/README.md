@@ -8,8 +8,8 @@
 
 - Configuration: start from [`config.yaml`](config.yaml) and keep production policy in the private config (`ops/ansible/private-config/services/routing/model-catalog/config.yaml`).
 - Check a config: `/model-catalog validate-config -`.
-- Deploy: `ansible-playbook ops.yml --tags deploy-models-enricher-config`.
+- Deploy: `ansible-playbook ops.yml --tags deploy-model-catalog-config`.
 - Diagnose: `http://127.0.0.1:9083/models-table`, and use its refresh button for a full-chain rebuild.
 - Develop: `npm ci && npm run typecheck && npm test && npm run build`.
 
-Reference (endpoints, environment, config keys, chain entries, caches, memory limits): [docs/models-enricher.md](../../../docs/models-enricher.md).
+Reference (endpoints, environment, config keys, chain entries, caches, memory limits): [docs/model-catalog.md](../../../docs/model-catalog.md).

@@ -1,7 +1,7 @@
 # models-enricher-runtime Specification
 
 ## Purpose
-Define the resource, isolation, data-provenance and operational-interface contract of the TypeScript models-enricher sidecar, so that it can replace the Go implementation within the same container limits.
+Define the resource, isolation, data-provenance and operational-interface contract of the TypeScript `model-catalog` service (formerly `models-enricher`; this capability ID is kept as a history key), within its fixed container limits.
 
 ## Requirements
 

@@ -76,7 +76,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     *) printf '%s\n' "$line" ;;
   esac
 done <services/routing/aisix/resources.example.yaml >"$aisix_resources_tmp"
-printf '{"sub2api":"%s","enricher_catalog":"%s"}\n' "$aisix_sub2api_key" "$aisix_catalog_key" >"$aisix_callers_tmp"
+printf '{"sub2api":"%s","model_catalog":"%s"}\n' "$aisix_sub2api_key" "$aisix_catalog_key" >"$aisix_callers_tmp"
 
 install -d -m 700 services/routing/aisix data data/cpa data/cpa/conf data/cpa/auths data/cpa/logs \
   data/cpa/plugins data/cpa/runtime data/sub2api data/sub2api/app \

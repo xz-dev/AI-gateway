@@ -265,63 +265,63 @@
         - _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
       tags: [deploy-model-sync]
 
-    # ---- deploy-models-enricher-config preflight: drift gate + static validation ----
-    - name: Prepare models-enricher config
+    # ---- deploy-model-catalog-config preflight: drift gate + static validation ----
+    - name: Prepare model-catalog config
       ansible.builtin.include_role:
         name: ai_ops
         tasks_from: prepare-file
         apply:
-          tags: [deploy-models-enricher-config]
+          tags: [deploy-model-catalog-config]
       vars:
-        ai_file_label: models-enricher/config.yaml
+        ai_file_label: model-catalog/config.yaml
         ai_file_local: "{{ ai_ops_config_dir }}/services/routing/model-catalog/config.yaml"
         ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
-    - name: Read current models-enricher container ID
-      ansible.builtin.command: "{{ _compose }} ps -q models-enricher"
+    - name: Read current model-catalog container ID
+      ansible.builtin.command: "{{ _compose }} ps -q model-catalog"
       register: _me_plan_container
       changed_when: false
       failed_when: _me_plan_container.rc != 0 or _me_plan_container.stdout | trim == ""
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
-    - name: Read current models-enricher image identity
+    - name: Read current model-catalog image identity
       ansible.builtin.command: >-
         {{ _runtime }} inspect --format={{ '{{' }}.Image{{ '}}' }}
         {{ _me_plan_container.stdout | trim }}
       register: _me_plan_image
       changed_when: false
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
-    - name: Require current models-enricher image identity
+    - name: Require current model-catalog image identity
       ansible.builtin.assert:
         that:
           - _me_plan_image.stdout | trim != ""
-        fail_msg: models-enricher image identity is unavailable; deploy cannot be bound.
+        fail_msg: model-catalog image identity is unavailable; deploy cannot be bound.
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
     - name: Capture protected adjacent container identities
       ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
       register: _me_protected
       changed_when: false
       loop:
-        - models-enricher-netns
-        - enricher-cpa-relay
-        - apisix-models-enricher-relay
+        - model-catalog-netns
+        - catalog-cpa-relay
+        - apisix-models-catalog-relay
         - apisix-models
       loop_control:
         label: "{{ item }}"
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
     - name: Build protected container map
       ansible.builtin.set_fact:
         _me_protected_map: "{{ dict(_me_protected.results | map(attribute='item') | zip(_me_protected.results | map(attribute='stdout') | map('trim'))) }}"
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
     - name: Read candidate config locally
       ansible.builtin.slurp:
@@ -330,12 +330,12 @@
       register: _me_candidate
       no_log: true
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
-    - name: Validate candidate with deployed models-enricher binary
+    - name: Validate candidate with deployed model-catalog binary
       ansible.builtin.shell: >-
-        {{ _compose }} exec -T models-enricher
-        /models-enricher validate-config -
+        {{ _compose }} exec -T model-catalog
+        /model-catalog validate-config -
       args:
         stdin: "{{ _me_candidate.content | b64decode }}"
         stdin_add_newline: false
@@ -344,23 +344,23 @@
       changed_when: false
       no_log: true
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
     - name: Parse candidate validation
       ansible.builtin.set_fact:
         _me_candidate_validation: "{{ _me_validate_raw.stdout | from_json }}"
       no_log: true
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
     - name: Show candidate validation digest
       ansible.builtin.debug:
         msg:
           config_digest: "{{ _me_candidate_validation.config_digest }}"
           image_identity: "{{ _me_plan_image.stdout | trim }}"
-          recreation: models-enricher
+          recreation: model-catalog
       when: _ai_remote_stat.stat.checksum | default('') != _ai_local_stat.stat.checksum
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
   tasks:
     - name: Deploy bounded host recovery
@@ -574,6 +574,12 @@
         ai_file_remote: "{{ ai_ops_deploy_root }}/compose.yaml"
       tags: [deploy-ws-keepalive]
 
+    - name: Remember whether the ws-keepalive compose.yaml upload changed
+      ansible.builtin.set_fact:
+        _wsk_compose_changed: "{{ _ai_upload is defined and _ai_upload is changed }}"
+      when: ai_ops_mode != "plan"
+      tags: [deploy-ws-keepalive]
+
     - name: Deploy .env (ws-keepalive scoped)
       ansible.builtin.include_role:
         name: ai_ops
@@ -656,7 +662,14 @@
       vars:
         _ai_verify_expected_image_identity: "{{ _wsk_expected_image_id }}"
         _ai_verify_expected_revision: "{{ ai_ops_ws_keepalive_expected_revision }}"
-        ai_verify_old_container: "{{ _wsk_plan_container.stdout | trim }}"
+        # Freshness is required only when this run changed a file or recreated for
+        # drift; a matching no-op still verifies identity, health and neighbours.
+        ai_verify_old_container: >-
+          {{ _wsk_plan_container.stdout | trim
+             if (_wsk_compose_changed | default(false) | bool
+                 or (_ai_upload is defined and _ai_upload is changed)
+                 or _wsk_runtime_drifted | default(false) | bool)
+             else '' }}
         ai_protected_containers: "{{ _wsk_protected_map }}"
       when: ai_ops_mode != "plan"
       tags: [deploy-ws-keepalive]
@@ -1192,23 +1205,23 @@
         - _ai_upload is changed
       tags: [deploy-model-sync]
 
-    # ======================= deploy-models-enricher-config =======================
-    - name: Deploy models-enricher config
+    # ======================= deploy-model-catalog-config =======================
+    - name: Deploy model-catalog config
       ansible.builtin.include_role:
         name: ai_ops
         tasks_from: deploy-file
         apply:
-          tags: [deploy-models-enricher-config]
+          tags: [deploy-model-catalog-config]
       vars:
-        ai_file_label: models-enricher/config.yaml
+        ai_file_label: model-catalog/config.yaml
         ai_file_local: "{{ ai_ops_config_dir }}/services/routing/model-catalog/config.yaml"
         ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
-        # models-enricher runs as 65532:65532 and reads the bind-mounted YAML at
+        # model-catalog runs as 65532:65532 and reads the bind-mounted YAML at
         # startup; a restrictive local mode must never propagate to production.
         ai_file_mode: "0644"
         ai_activate_cmd: >-
-          {{ _compose }} up -d --force-recreate --no-deps --no-build models-enricher
-        ai_verify_tasks: verify-models-enricher-config.yml
+          {{ _compose }} up -d --force-recreate --no-deps --no-build model-catalog
+        ai_verify_tasks: verify-model-catalog-config.yml
         ai_verify_expected_policy_digest: "{{ _ai_local_stat.stat.checksum | default('') }}"
         ai_verify_expected_image_identity: "{{ _me_plan_image.stdout | trim | default('') }}"
         ai_verify_old_container: "{{ _me_plan_container.stdout | trim | default('') }}"
@@ -1216,97 +1229,97 @@
         ai_recovery_expected_image_identity: "{{ _me_plan_image.stdout | trim | default('') }}"
         ai_protected_containers: "{{ _me_protected_map | default({}) }}"
         ai_failure_receipt_path: >-
-          {{ ai_ops_deploy_root }}/.ai-ops-state/receipt-models-enricher-failed-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt
+          {{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-failed-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt
         ai_failure_receipt_content: |
-          operation=models-enricher-config-deploy mode={{ ai_ops_mode }}
+          operation=model-catalog-config-deploy mode={{ ai_ops_mode }}
           candidate_config_digest={{ _me_candidate_validation.config_digest | default('unknown') }}
-          recovery_config_digest={{ ai_models_enricher_verified_policy_digest | default('unknown') }}
+          recovery_config_digest={{ ai_model_catalog_verified_policy_digest | default('unknown') }}
           recovery_verification={{ 'failed' if _ai_recovery_verify_failed | default(false) else 'passed' }}
           outcome={{ 'recovery-required' if _ai_recovery_verify_failed | default(false) else 'candidate-failed-recovered' }}
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
-    - name: Write sanitized models-enricher deploy receipt
+    - name: Write sanitized model-catalog deploy receipt
       ansible.builtin.copy:
-        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-models-enricher-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
         mode: "0600"
         content: |
-          operation=models-enricher-config-deploy mode={{ ai_ops_mode }}
-          config_digest={{ ai_models_enricher_verified_policy_digest }}
-          image_identity={{ ai_models_enricher_verified_image }}
-          container_id={{ ai_models_enricher_verified_container }}
-          readiness_attempts={{ ai_models_enricher_ready_attempts }}
+          operation=model-catalog-config-deploy mode={{ ai_ops_mode }}
+          config_digest={{ ai_model_catalog_verified_policy_digest }}
+          image_identity={{ ai_model_catalog_verified_image }}
+          container_id={{ ai_model_catalog_verified_container }}
+          readiness_attempts={{ ai_model_catalog_ready_attempts }}
           protected_containers_unchanged=true
           outcome=success
       when:
         - ai_ops_mode != "plan"
         - _ai_upload is changed
-      tags: [deploy-models-enricher-config]
+      tags: [deploy-model-catalog-config]
 
-    # ======================= rollback-models-enricher-config =======================
-    - name: Capture pre-rollback models-enricher identity
-      ansible.builtin.command: "{{ _compose }} ps -q models-enricher"
+    # ======================= rollback-model-catalog-config =======================
+    - name: Capture pre-rollback model-catalog identity
+      ansible.builtin.command: "{{ _compose }} ps -q model-catalog"
       register: _me_rb_container
       changed_when: false
       failed_when: _me_rb_container.rc != 0 or _me_rb_container.stdout | trim == ""
-      tags: [rollback-models-enricher-config]
+      tags: [rollback-model-catalog-config]
 
-    - name: Read pre-rollback models-enricher image identity
+    - name: Read pre-rollback model-catalog image identity
       ansible.builtin.command: >-
         {{ _runtime }} inspect --format={{ '{{' }}.Image{{ '}}' }}
         {{ _me_rb_container.stdout | trim }}
       register: _me_rb_image
       changed_when: false
-      tags: [rollback-models-enricher-config]
+      tags: [rollback-model-catalog-config]
 
     - name: Capture protected adjacent container identities for rollback
       ansible.builtin.command: "{{ _compose }} ps -q {{ item }}"
       register: _me_rb_protected
       changed_when: false
       loop:
-        - models-enricher-netns
-        - enricher-cpa-relay
-        - apisix-models-enricher-relay
+        - model-catalog-netns
+        - catalog-cpa-relay
+        - apisix-models-catalog-relay
         - apisix-models
       loop_control:
         label: "{{ item }}"
-      tags: [rollback-models-enricher-config]
+      tags: [rollback-model-catalog-config]
 
     - name: Build protected container map for rollback
       ansible.builtin.set_fact:
         _me_rb_protected_map: "{{ dict(_me_rb_protected.results | map(attribute='item') | zip(_me_rb_protected.results | map(attribute='stdout') | map('trim'))) }}"
-      tags: [rollback-models-enricher-config]
+      tags: [rollback-model-catalog-config]
 
-    - name: Roll back models-enricher config and prove readiness
+    - name: Roll back model-catalog config and prove readiness
       ansible.builtin.include_role:
         name: ai_ops
         tasks_from: rollback-file
         apply:
-          tags: [rollback-models-enricher-config]
+          tags: [rollback-model-catalog-config]
       vars:
-        ai_file_label: models-enricher/config.yaml
+        ai_file_label: model-catalog/config.yaml
         ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
         ai_file_mode: "0644"
         ai_activate_cmd: >-
-          {{ _compose }} up -d --force-recreate --no-deps --no-build models-enricher
-        ai_verify_tasks: verify-models-enricher-config.yml
+          {{ _compose }} up -d --force-recreate --no-deps --no-build model-catalog
+        ai_verify_tasks: verify-model-catalog-config.yml
         ai_verify_expected_image_identity: "{{ _me_rb_image.stdout | trim }}"
         ai_verify_old_container: "{{ _me_rb_container.stdout | trim }}"
         ai_protected_containers: "{{ _me_rb_protected_map | default({}) }}"
-      tags: [rollback-models-enricher-config]
+      tags: [rollback-model-catalog-config]
 
-    - name: Write sanitized models-enricher rollback receipt
+    - name: Write sanitized model-catalog rollback receipt
       ansible.builtin.copy:
-        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-models-enricher-rollback-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-rollback-{{ lookup('ansible.builtin.pipe', 'date +%s') }}.txt"
         mode: "0600"
         content: |
-          operation=models-enricher-config-rollback
-          config_digest={{ ai_models_enricher_verified_policy_digest }}
-          image_identity={{ ai_models_enricher_verified_image }}
-          container_id={{ ai_models_enricher_verified_container }}
-          readiness_attempts={{ ai_models_enricher_ready_attempts }}
+          operation=model-catalog-config-rollback
+          config_digest={{ ai_model_catalog_verified_policy_digest }}
+          image_identity={{ ai_model_catalog_verified_image }}
+          container_id={{ ai_model_catalog_verified_container }}
+          readiness_attempts={{ ai_model_catalog_ready_attempts }}
           protected_containers_unchanged=true
           outcome=success
-      tags: [rollback-models-enricher-config]
+      tags: [rollback-model-catalog-config]
 
     # ======================= rollback-model-sync =======================
     - name: Read protected model-sync transition evidence

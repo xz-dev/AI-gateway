@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A TypeScript sidecar that answers Codex models-manifest requests (`GET /v1/models` with `client_version`) from CPA-admitted catalog members, selecting each model's metadata through the shared openai-api-pi-extension source chain (bundled models.dev/modelparams.dev snapshots, the CPA native row `@self` and the channel upstream row `@cpa-upstream` read through CPA's authenticated api-call proxy), and applying operator overrides, `include_models` filtering and gateway-only post-processing.
+The `model-catalog` service (formerly `models-enricher`; this capability ID is kept as a history key), a TypeScript service that answers Codex models-manifest requests (`GET /v1/models` with `client_version`) from CPA-admitted catalog members, selecting each model's metadata through the shared openai-api-pi-extension source chain (bundled models.dev/modelparams.dev snapshots, the CPA native row `@self` and the channel upstream row `@cpa-upstream` read through CPA's authenticated api-call proxy), and applying operator overrides, `include_models` filtering and gateway-only post-processing.
 
 ## Requirements
 

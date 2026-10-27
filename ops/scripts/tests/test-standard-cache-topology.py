@@ -134,20 +134,20 @@ class StandardCacheTopology(unittest.TestCase):
         program = script.split('services = compose.get("services") or {}\n', 1)[1].split("def service_networks", 1)[0]
         program = 'services = compose.get("services") or {}\n' + program
         keeper = "openai-api-cache-keeper"
-        enricher = "model-catalog"
+        catalog = "model-catalog"
         bridge = "responses-ws-sse-bridge"
         cache = {
             "services": {
                 keeper: {"volumes": [keeper + "-cache:/var/tmp/" + keeper]},
                 bridge: {"volumes": [bridge + "-spool:/spool"]},
-                enricher: {"volumes": [enricher + "-cache:/var/cache/" + enricher], "environment": {"CACHE_DIR": "/var/cache/" + enricher}},
+                catalog: {"volumes": [catalog + "-cache:/var/cache/" + catalog], "environment": {"CACHE_DIR": "/var/cache/" + catalog}},
             },
-            "volumes": {keeper + "-cache": {}, enricher + "-cache": {}, bridge + "-spool": {}},
+            "volumes": {keeper + "-cache": {}, catalog + "-cache": {}, bridge + "-spool": {}},
             "networks": {"isolated": {}},
         }
         exec(program, {"compose": cache})
         cases = []
-        for volume, owner, target in ((keeper + "-cache", keeper, "/var/tmp/" + keeper), (enricher + "-cache", enricher, "/var/cache/" + enricher), (bridge + "-spool", bridge, "/spool")):
+        for volume, owner, target in ((keeper + "-cache", keeper, "/var/tmp/" + keeper), (catalog + "-cache", catalog, "/var/cache/" + catalog), (bridge + "-spool", bridge, "/spool")):
             for name in ("foreign-owner", "wrong-target", "missing-mount", "missing-volume"):
                 bad = copy.deepcopy(cache)
                 if name == "foreign-owner":
@@ -160,7 +160,7 @@ class StandardCacheTopology(unittest.TestCase):
                     del bad["volumes"][volume]
                 cases.append((name + ":" + owner, bad))
         bad = copy.deepcopy(cache)
-        bad["services"][enricher]["environment"]["CACHE_DIR"] = "/tmp/cache"
+        bad["services"][catalog]["environment"]["CACHE_DIR"] = "/tmp/cache"
         cases.append(("wrong-cache-dir", bad))
         bad = copy.deepcopy(cache)
         bad["volumes"]["unreviewed"] = {}

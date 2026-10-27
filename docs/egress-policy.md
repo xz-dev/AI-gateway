@@ -42,7 +42,7 @@ Example TLS-preserving destination:
 }
 ```
 
-The tracked default does not authorize provider inference. `models-enricher` has no internet egress: models.dev and modelparams.dev data come from exactly pinned npm snapshots (`@opencode-ai/models`, `modelparams`) converted at image build time and bumped by an hourly Dependabot entry, and channel upstream data comes through CPA `api-call`. Optional components need separate exact rules:
+The tracked default does not authorize provider inference. `model-catalog` has no internet egress: models.dev and modelparams.dev data come from exactly pinned npm snapshots (`@opencode-ai/models`, `modelparams`) converted at image build time and bumped by an hourly Dependabot entry, and channel upstream data comes through CPA `api-call`. Optional components need separate exact rules:
 
 | Component | Exact domain | Anchored path |
 |---|---|---|

@@ -1,44 +1,44 @@
 ---
-# Verify one freshly recreated models-enricher container after a config deploy/rollback.
+# Verify one freshly recreated model-catalog container after a config deploy/rollback.
 # Inputs: _ai_verify_expected_policy_digest (sha256 of expected config.yaml bytes),
 #         _ai_verify_expected_image_identity,
 #         ai_verify_old_container (pre-activation container ID; new one must differ),
 #         ai_protected_containers (map service -> captured container ID, must be unchanged).
 
-- name: Read models-enricher container ID
-  ansible.builtin.command: "{{ _compose }} ps -q models-enricher"
+- name: Read model-catalog container ID
+  ansible.builtin.command: "{{ _compose }} ps -q model-catalog"
   register: _me_container
   changed_when: false
   failed_when: _me_container.rc != 0 or _me_container.stdout | trim == ""
 
-- name: Require a fresh models-enricher container
+- name: Require a fresh model-catalog container
   ansible.builtin.assert:
     that:
       - _me_container.stdout | trim != ai_verify_old_container
     fail_msg: >-
-      models-enricher was not recreated
+      model-catalog was not recreated
       (container={{ _me_container.stdout | trim }} still matches pre-activation ID {{ ai_verify_old_container }}).
 
-- name: Read models-enricher image identity
+- name: Read model-catalog image identity
   ansible.builtin.command: >-
     {{ _runtime }} inspect --format={{ '{{' }}.Image{{ '}}' }}
     {{ _me_container.stdout | trim }}
   register: _me_image
   changed_when: false
 
-- name: Require expected models-enricher image identity
+- name: Require expected model-catalog image identity
   ansible.builtin.assert:
     that:
       - _me_image.stdout | trim == _ai_verify_expected_image_identity
     fail_msg: >-
-      models-enricher image changed during the operation
+      model-catalog image changed during the operation
       (expected={{ _ai_verify_expected_image_identity }},
       observed={{ _me_image.stdout | trim }}).
 
 - name: Validate mounted config inside the replacement container
   ansible.builtin.command: >-
-    {{ _compose }} exec -T models-enricher
-    /models-enricher validate-config /app/config.yaml
+    {{ _compose }} exec -T model-catalog
+    /model-catalog validate-config /app/config.yaml
   register: _me_validate_raw
   changed_when: false
   no_log: true
@@ -54,7 +54,7 @@
       - _me_validate.version | int == 1
       - _me_validate.config_digest == _ai_verify_expected_policy_digest
     fail_msg: >-
-      models-enricher loaded unexpected config bytes
+      model-catalog loaded unexpected config bytes
       (expected={{ _ai_verify_expected_policy_digest }},
       observed={{ _me_validate.config_digest | default('missing') }}).
 
@@ -73,14 +73,14 @@
       (expected={{ _ai_verify_expected_policy_digest }},
       observed={{ _me_remote_stat.stat.checksum }}).
 
-- name: Wait for models-enricher readiness
+- name: Wait for model-catalog readiness
   ansible.builtin.command: >-
-    {{ _compose }} exec -T models-enricher
-    /models-enricher healthcheck
+    {{ _compose }} exec -T model-catalog
+    /model-catalog healthcheck
   register: _me_ready
   changed_when: false
-  retries: "{{ ai_ops_models_enricher_verify_retries }}"
-  delay: "{{ ai_ops_models_enricher_verify_delay_seconds }}"
+  retries: "{{ ai_ops_model_catalog_verify_retries }}"
+  delay: "{{ ai_ops_model_catalog_verify_delay_seconds }}"
   until: _me_ready.rc == 0
 
 - name: Verify protected adjacent containers unchanged
@@ -104,7 +104,7 @@
 
 - name: Preserve sanitized verification facts
   ansible.builtin.set_fact:
-    ai_models_enricher_verified_container: "{{ _me_container.stdout | trim }}"
-    ai_models_enricher_verified_image: "{{ _me_image.stdout | trim }}"
-    ai_models_enricher_verified_policy_digest: "{{ _me_validate.config_digest }}"
-    ai_models_enricher_ready_attempts: "{{ _me_ready.attempts | default(1) }}"
+    ai_model_catalog_verified_container: "{{ _me_container.stdout | trim }}"
+    ai_model_catalog_verified_image: "{{ _me_image.stdout | trim }}"
+    ai_model_catalog_verified_policy_digest: "{{ _me_validate.config_digest }}"
+    ai_model_catalog_ready_attempts: "{{ _me_ready.attempts | default(1) }}"

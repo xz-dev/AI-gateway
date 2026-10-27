@@ -1,0 +1,11 @@
+# AISIX
+
+**Where:** Compose service `aisix` in the `aisix-netns` namespace. It has no Internet or Squid edge; it reaches CPA only through `aisix-cpa-relay`. Its callers are Sub2API, apisix-models and model-catalog (read-only), each through its own relay.
+
+**What:** [AISIX](https://github.com/api7/aisix) maps logical model IDs to ordered lists of concrete CPA targets, with fallback and cooldown. Compose runs the official release image pinned by `AISIX_IMAGE`. This directory holds the public examples `config.example.yaml` and `resources.example.yaml`, plus a patched source build ([`Dockerfile`](Dockerfile), [`VERSION`](VERSION), [`patches/`](patches/)) that `publish-aisix-images.yml` can publish when a fix is not yet in a release.
+
+**How:**
+
+- `./ops/scripts/init.sh` creates the private `config.yaml`, `resources.yaml` and `caller-keys.json` here (gitignored).
+- Edit the private `resources.yaml` with concrete targets and logical routes, then deploy it with `ansible-playbook ops.yml --tags deploy-aisix`.
+- Guides: [upstream configuration](../../../docs/upstream-configuration.md), [add an OpenAI-compatible provider](../../../docs/add-openai-compatible-provider.md).

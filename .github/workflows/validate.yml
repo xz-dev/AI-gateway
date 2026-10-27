@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  model-catalog:
+  model-sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
         run: |
           go test -race ./...
           go vet ./...
-  models-enricher:
+  model-catalog:
     runs-on: ubuntu-latest
     defaults:
       run:

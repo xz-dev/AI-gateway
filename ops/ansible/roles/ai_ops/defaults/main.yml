@@ -57,8 +57,7 @@ ai_ops_profiles:
       UPSTREAM_URL: 'http://sub2api-ai-sse-relay:8080'
   provider-sidecar: {}
   aisix-status: {}
-  models-enricher: {}
-  model-catalog-sidecar: {}
+  model-catalog: {}
   apisix: {}
   apisix-models: {}
   # Production uses an archive-preloaded localhost image; component deploy must
@@ -93,10 +92,10 @@ ai_ops_model_sync_verify_delay_seconds: 2
 # Maximum current-container log lines examined for the first round summary.
 ai_ops_model_sync_log_tail: 200
 
-# Models-enricher config deploy: bounded wait for the recreated container's
+# Model-catalog config deploy: bounded wait for the recreated container's
 # readiness (/readyz via its healthcheck subcommand).
-ai_ops_models_enricher_verify_retries: 30
-ai_ops_models_enricher_verify_delay_seconds: 2
+ai_ops_model_catalog_verify_retries: 30
+ai_ops_model_catalog_verify_delay_seconds: 2
 
 # ai-sse-keepalive-proxy deploy: bounded wait for the recreated container's
 # healthcheck subcommand after a digest-pinned recreate.

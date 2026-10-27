@@ -93,7 +93,7 @@ class OwnedLock(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / '.ai-ops-state').mkdir(mode=0o700)
         self.request = {'transaction': 'a' * 32, 'controller_host': socket.gethostname(),
-                        'controller_pid': 99999999, 'service': 'models-enricher',
+                        'controller_pid': 99999999, 'service': 'model-catalog',
                         'operation': 'deploy', 'approval_digest': 'b' * 64}
         self.recovery = {'transaction': self.request['transaction'], 'controller_clear': True}
 
@@ -163,17 +163,17 @@ class RollbackSelection(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.state = self.root / '.ai-ops-state'
         self.state.mkdir(mode=0o700)
-        self.snapshot = self.state / 'front-models-enricher-original'
+        self.snapshot = self.state / 'front-model-catalog-original'
         self.snapshot.mkdir(mode=0o700)
         self.live = {'id': 'container-new', 'image': ID, 'started': '2026-10-25T01:00:00Z',
                      'running': True, 'paused': False, 'restarting': False}
-        self.owner = {'transaction': 'a'*32, 'root': str(self.root), 'service': 'models-enricher',
+        self.owner = {'transaction': 'a'*32, 'root': str(self.root), 'service': 'model-catalog',
                       'operation': 'deploy', 'started': 10}
         self.receipt = {'owner': self.owner, 'snapshot': str(self.snapshot), 'outcome': 'success'}
         LOCK.atomic_json(LOCK.paths(self.root, self.owner['transaction'])[1], self.receipt)
-        self.result = {'service': 'models-enricher', 'snapshot': str(self.snapshot), 'after': self.live}
+        self.result = {'service': 'model-catalog', 'snapshot': str(self.snapshot), 'after': self.live}
         LOCK.atomic_json(self.snapshot/'receipt.json', self.result)
-        self.request = {'service': 'models-enricher', 'snapshot': str(self.snapshot), 'live': self.live}
+        self.request = {'service': 'model-catalog', 'snapshot': str(self.snapshot), 'live': self.live}
 
     def test_exact_success_after_identity_and_unrelated_profile(self):
         other = {**self.receipt, 'owner': {**self.owner, 'service': 'other', 'transaction': 'b'*32, 'started': 20}}
@@ -209,7 +209,7 @@ class RollbackSelection(unittest.TestCase):
     def test_failed_activation_needs_its_own_recorded_after_identity(self):
         self.receipt['outcome'] = 'failed'
         LOCK.atomic_json(LOCK.paths(self.root, 'a'*32)[1], self.receipt)
-        failure = self.state/'front-models-enricher-failure.json'
+        failure = self.state/'front-model-catalog-failure.json'
         for after in (None, {**self.live, 'id': 'other'}, self.live):
             LOCK.atomic_json(failure, {**self.result, 'transaction': 'a'*32, 'after': after})
             if after == self.live:

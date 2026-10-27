@@ -14,7 +14,10 @@ flowchart LR
   APISIX --> Keepalive[SSE keepalive] --> Keeper[cache keeper + WS/SSE bridge] --> Sub2API
   Sub2API --> Models[apisix-models] --> CPA[CLIProxyAPI]
   Models --> AISIX --> CPA
-  APISIX -->|versioned /v1/models| Sidecar[model-catalog-sidecar] --> Models --> Enricher[models-enricher]
+  APISIX -->|versioned /v1/models| Models -->|/v1/models| Catalog[model-catalog]
+  Operator[localhost / Tailscale :9083] -->|/models-table| APISIX -->|/models-table| Catalog
+  Catalog -.->|read-only| CPA
+  Catalog -.->|read-only| AISIX
   Sync[cpa-model-sync] --> CPA
   CPA --> Squid[Squid egress allowlist] --> Providers
 ```
@@ -26,22 +29,25 @@ Full graph: [docs/architecture.md](docs/architecture.md).
 
 ## Components
 
+All components live under [`services/`](services/README.md), grouped by role; operations tooling lives under [`ops/`](ops/).
+
 | Component | Where | What it does | How to use |
 |---|---|---|---|
 | Cloudflare Tunnel | service `cloudflared` | Internet ingress to the front APISIX | Public Hostname origin `http://apisix-ingress:9080` ([installation](docs/installation.md#cloudflare-tunnel)) |
-| APISIX front door | `services/firewall/apisix/`, service `apisix`, `127.0.0.1:9080` | Public AI route allowlist, rate and body limits, opaque `404` | Routes in [`services/firewall/apisix/apisix.yaml`](services/firewall/apisix/apisix.yaml) ([public API](docs/public-api.md)) |
-| AI SSE keepalive proxy | `services/middleware/ai-sse-keepalive-proxy`, operator entrance `127.0.0.1:8087` | Heartbeats for silent AI SSE streams | No configuration ([security](docs/security.md)) |
-| Cache keeper + WS/SSE bridge | `services/middleware/openai-api-cache-keeper`, services `openai-api-cache-keeper`, `responses-ws-sse-bridge` | Responses history, background replay, WebSocket → HTTP/SSE | Pi Codex setup in [responses path](docs/responses-path.md) |
-| Sub2API | services `sub2api`, `postgres`, `redis`; admin `127.0.0.1:8086` | The only client API-key, entitlement and quota authority | Accounts in [upstream configuration](docs/upstream-configuration.md) |
-| apisix-models | `services/routing/apisix-models/`, `127.0.0.1:9081` | Inner selector: IDs with `/` → CPA, others → AISIX; catalog compatibility | [Model routing](docs/model-routing.md) |
-| AISIX + status page | `services/routing/aisix/`, `services/routing/aisix-status/`; `127.0.0.1:3001/status` | Logical model IDs, ordered fallback, cooldown; no-JS status page | Private `services/routing/aisix/resources.yaml` ([upstream configuration](docs/upstream-configuration.md)) |
-| CLIProxyAPI (CPA) | `services/cpa/config/`, service `cli-proxy-api`, `127.0.0.1:8317` | Provider credentials and pool execution | Management UI with `CPA_MANAGEMENT_KEY` ([upstream configuration](docs/upstream-configuration.md)) |
-| cpa-model-sync | `services/cpa/cpa-model-sync/` | Syncs model membership of five CPA API-key channel kinds | [services/cpa/cpa-model-sync/README.md](services/cpa/cpa-model-sync/README.md) |
-| models-enricher | `services/routing/model-catalog/` | Codex model catalog with metadata from a shared source chain | [services/routing/model-catalog/README.md](services/routing/model-catalog/README.md) |
-| model-catalog-sidecar | `model-catalog-sidecar/`, `127.0.0.1:9083` / Tailscale | Catalog bridge; `/models-table` diagnostics and refresh | [Catalog path](docs/catalog.md) |
-| Egress proxy | `services/firewall/egress-proxy/`, service `egress-proxy` | Fail-closed Squid allowlist; the only Internet egress | Edit `data/egress-proxy/policy.json` ([egress policy](docs/egress-policy.md)) |
-| provider-sidecar (optional) | private `compose.override.yaml` | Generic OpenAI-compatible sidecar behind TLS relay and tunnel | [Provider sidecar](docs/provider-sidecar.md) |
-| Ansible ops | `ops/ansible/` | Guarded plan/apply deploys and rollbacks to the host | [ops/ansible/README.md](ops/ansible/README.md) |
+| APISIX front door | [`services/firewall/apisix/`](services/firewall/apisix/README.md), `127.0.0.1:9080`; operator `9083` | Public AI route allowlist, limits, opaque `404`; catalog intersection; models table on `9083` | [Public API](docs/public-api.md), [catalog path](docs/catalog.md) |
+| Egress proxy | [`services/firewall/egress-proxy/`](services/firewall/egress-proxy/README.md) | Fail-closed Squid allowlist; the only Internet egress | Edit `data/egress-proxy/policy.json` ([egress policy](docs/egress-policy.md)) |
+| One-way relays | [`services/firewall/one-way-relay/`](services/firewall/one-way-relay/README.md) | socat relays and namespace owners for every directed edge | [Security model](docs/security.md) |
+| AI SSE keepalive proxy | [`services/middleware/ai-sse-keepalive-proxy/`](services/middleware/README.md), operator `127.0.0.1:8087` | Heartbeats for silent AI SSE streams | No configuration |
+| Cache keeper + WS/SSE bridge | [`services/middleware/`](services/middleware/README.md) | Responses history, background replay, WebSocket → HTTP/SSE | [Responses path](docs/responses-path.md) |
+| Sub2API | [`services/sub2api/`](services/sub2api/README.md), admin `127.0.0.1:8086` | The only client API-key, entitlement and quota authority | [Upstream configuration](docs/upstream-configuration.md) |
+| apisix-models | [`services/routing/apisix-models/`](services/routing/apisix-models/README.md), `127.0.0.1:9081` | Inner selector: IDs with `/` → CPA, others → AISIX; `/v1/models` → model-catalog | [Model routing](docs/model-routing.md) |
+| AISIX + status page | [`services/routing/aisix/`](services/routing/aisix/README.md), [`aisix-status/`](services/routing/aisix-status/README.md); `127.0.0.1:3001/status` | Logical model IDs, ordered fallback, cooldown; no-JS status page | [Upstream configuration](docs/upstream-configuration.md) |
+| model-catalog | [`services/routing/model-catalog/`](services/routing/model-catalog/README.md) | Codex model catalog and `/models-table`; reads CPA and AISIX read-only | [model-catalog reference](docs/model-catalog.md) |
+| CLIProxyAPI (CPA) | [`services/cpa/config/`](services/cpa/config/README.md), `127.0.0.1:8317` | Provider credentials and pool execution | Management UI with `CPA_MANAGEMENT_KEY` |
+| cpa-model-sync | [`services/cpa/cpa-model-sync/`](services/cpa/cpa-model-sync/README.md) | Syncs model membership of five CPA API-key channel kinds | Its README |
+| provider-sidecar (optional) | private `compose.override.yaml` | OpenAI-compatible sidecar behind TLS relay and tunnel | [Provider sidecar](docs/provider-sidecar.md) |
+| Ansible ops | [`ops/ansible/`](ops/ansible/README.md) | Guarded plan/apply deploys and rollbacks to the host | [Ansible operations](docs/ansible-operations.md) |
+| Scripts | [`ops/scripts/`](ops/scripts/README.md) | Init, validate, render, host recovery and tests | [Operations](docs/operations.md) |
 
 ## Quick start
 
@@ -77,13 +83,13 @@ Guides and reference:
 - [Operations and validation](docs/operations.md) — coupled stack, state, `validate.sh`
 - [Gateway health and recovery](docs/gateway-health-and-recovery.md) — readiness and bounded recovery
 - [Ansible operations](docs/ansible-operations.md) — playbook tags, variables, guarded rollouts
-- [models-enricher](docs/models-enricher.md) — catalog enricher reference
+- [model-catalog](docs/model-catalog.md) — catalog service reference
 - [Model catalog path](docs/catalog.md) — front-door intersection and models table
 - [Models table scheduled refresh](docs/models-table-scheduled-refresh.md)
 - [Add an OpenAI-compatible provider](docs/add-openai-compatible-provider.md)
 - [Sub2API error passthrough](docs/sub2api-error-passthrough-configuration.md)
 - [Sub2API Codex manifest defects](docs/sub2api-codex-manifest-implementation-defects.md)
-- [Repository layout](docs/layout.md)
+- [Repository layout](docs/layout.md) — `services/` and `ops/` tree
 
 Verification evidence: [catalog identity](docs/records/catalog-identity-verification.md), [layered metadata](docs/records/layered-metadata-verification.md) ([deployment](docs/records/layered-metadata-deployment.md)), [output-token fields](docs/records/output-token-field-semantics-verification.md), [models-table SSR](docs/records/models-table-ssr-verification.md), [Go enricher read cache (historical)](docs/records/enricher-read-cache-verification.md), [Go provider prefix (historical)](docs/records/enricher-provider-prefix.md), [catalog round closeout](docs/records/catalog-round-closeout.md).
 

@@ -1,7 +1,7 @@
 # Provider 前缀查询
 
 > [!NOTE]
-> 本文描述已删除的 Go 实现，仅作历史记录。TypeScript models-enricher 拒绝 `provider_prefix_map`、`source_priority`、`lookup_ids` 和 `global_fallback`。现在的写法是在 `metadata.models` 规则的 `chain` 中写明确来源：`models.dev/<provider>/<access>` 在该 provider 内查询，`models.dev/<provider>/<access>/<字面模型ID>` 按第四段精确查询（取代 `lookup_ids`），`models.dev/@creator/<access>` 按 models.dev 规范身份查模型厂商记录。见 [README 的 catalog 章节](../models-enricher.md#catalog-compatibility-stack-apisix-models--models-enricher)。
+> 本文描述已删除的 Go 实现，仅作历史记录。TypeScript models-enricher 拒绝 `provider_prefix_map`、`source_priority`、`lookup_ids` 和 `global_fallback`。现在的写法是在 `metadata.models` 规则的 `chain` 中写明确来源：`models.dev/<provider>/<access>` 在该 provider 内查询，`models.dev/<provider>/<access>/<字面模型ID>` 按第四段精确查询（取代 `lookup_ids`），`models.dev/@creator/<access>` 按 models.dev 规范身份查模型厂商记录。见 [README 的 catalog 章节](../model-catalog.md#catalog-compatibility-stack-apisix-models--model-catalog)。
 
 仅影响 Go 边车的 bulk 元数据查找，不修改公开名称、推理路由，也不在运行时写回来源配置。以下是配置片段，不是可直接上线的数据迁移。
 

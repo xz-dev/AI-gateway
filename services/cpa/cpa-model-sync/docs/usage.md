@@ -6,14 +6,14 @@ Ownership boundary, commands, Compose wiring, exit codes and validation.
 
 - **Rust (this project)** owns the configured model membership of the five managed
   kinds. It writes only the `models` array of those kinds.
-- **`models-enricher`** (TypeScript) only enriches metadata of members CPA already
+- **`model-catalog`** (TypeScript) only enriches metadata of members CPA already
   publishes. It never decides the member set, and its config has no channel
   `include`/`exclude`: `validate-config` rejects them as legacy fields.
 - **Gemini and Interactions** (`gemini-api-key`, `interactions-api-key`) keep their
   existing CPA inventory; Rust never contacts them.
 - **OAuth** (`auth-files`, `oauth-model-alias`) is not managed by Rust. This does not
   exclude OAuth models from the downstream catalog.
-- `models-enricher`'s `metadata.include_models` (`!` entries hide matching public IDs)
+- `model-catalog`'s `metadata.include_models` (`!` entries hide matching public IDs)
   is unrelated: it hides public IDs from the catalog after admission and does not
   change synchronization.
 

@@ -2,7 +2,7 @@
 
 ## 行为与配置
 
-`models-enricher` 的启动、定时、进入页面、手动按钮共用一个全链刷新任务。采集覆盖 CPA/AISIX 原始目录、启用的渠道目录和元数据源，并绕过输入缓存新鲜期。已有任务运行时只加入，不再采集一轮。
+`model-catalog` 的启动、定时、进入页面、手动按钮共用一个全链刷新任务。采集覆盖 CPA/AISIX 原始目录、启用的渠道目录和元数据源，并绕过输入缓存新鲜期。已有任务运行时只加入，不再采集一轮。
 
 | 触发 | 行为 |
 |---|---|
@@ -27,57 +27,18 @@ entry_refresh_window: 10m
 
 ## 本地验证
 
-测试位于 `services/routing/model-catalog/scheduled_refresh_test.go`，复用现有 `httptest` 假 CPA/AISIX/元数据源，不访问生产。覆盖：冷页不等上游、窗口内不触发、超窗返回旧数据、进入/手动/并发加入单任务、启动/定时、取消/停机、成功时间与独立时长配置。原 SSR、手动刷新、持久输入缓存测试改为显式预热/等待，不再假设 GET 同步采集。
-
-变更前，`TestModelsTableColdEntryDoesNotWaitForCollection` 因 `cold GET waited for the blocked upstream` 失败；变更后通过。本地同一假元数据源等待 200ms 的单样本如下，非生产延迟或分位数：
-
-| 阶段 | 冷 GET | 紧接的手动 POST | 热 GET |
-|---|---:|---:|---:|
-| 旧实现 | 205.25ms | 3.58ms | 57.34µs |
-| 新实现 | 98.08µs | 202.84ms | 69.13µs |
-
-新实现将等待移到明确提交的 POST，而不是从系统中消除上游耗时。
+测试位于 `services/routing/model-catalog/tests/server.test.ts`（冷页加载、后台刷新、POST 结果与并发合并、无 CPA 权威时的错误页、后台失败保留旧表、启动/定时/停机）和 `tests/config.test.ts`（两个时长的校验），使用 `tests/fake-cpa.ts` 假上游，不访问生产。
 
 复现（工作目录仓库根，临时目录在 `/var/tmp`，不继承真实 CPA key）：
 
 ```sh
-(cd models-enricher && TMPDIR=/var/tmp env -u CPA_API_KEY go test ./...)
-(cd models-enricher && TMPDIR=/var/tmp env -u CPA_API_KEY go test -race ./...)
-(cd models-enricher && TMPDIR=/var/tmp env -u CPA_API_KEY go vet ./...)
-(cd models-enricher && TMPDIR=/var/tmp env -u CPA_API_KEY go test -count=1 -run TestModelsTableFakeUpstreamLatency -v .)
+(cd services/routing/model-catalog && TMPDIR=/var/tmp env -u CPA_API_KEY npm test)
 TMPDIR=/var/tmp env -u CPA_API_KEY ./ops/scripts/validate.sh .env.example
 openspec validate --all --strict
 ```
 
-## 部署交接：未执行
+Go 实现时期的冷 GET / 手动 POST 单样本测量和当时的部署交接属于历史记录，不代表当前 TypeScript 实现。
 
-此改动只提交源码和文档；没有发布 models-enricher 镜像、访问生产或部署。以下步骤交给中控，在明确授权及单一生产写入 lease 下执行；不重启 VM，也不动 keeper、bridge、Sub2API 或整个上游栈。
+## 部署
 
-1. 确认最终源码提交和其 Validate CI 成功。镜像由 `.github/workflows/publish-models-enricher.yml` 手动触发构建，服务名 `models-enricher`，仓库 `ghcr.io/xz-dev/ai-gateway-models-enricher`，构建上下文 `./services/routing/model-catalog`。例如在最终提交位于 `main` 后：
-
-   ```sh
-   version="scheduled-refresh-$(git rev-parse --short=12 HEAD)"
-   gh workflow run publish-models-enricher.yml -R xz-dev/AI-gateway \
-     --ref main -f version="$version"
-   ```
-
-   使用全新不可变版本名；核对运行的完整 `headSha` 等于批准源码提交，等待构建成功并读取镜像 digest。不要用其他 main tip 的构建代替，也不要仅凭标签断言镜像来源。
-
-2. fresh-read 生产配置、容器/镜像/netns/健康状态，与本地 gitignored `ops/ansible/private-config` 核对。远端备份目录 `0700`、文件 `0600`；保留旧镜像 pin、本地回滚收据和 CAS 基线。不需要远端 Git checkout。
-
-3. 把经核验的不可变镜像 pin 写入 private-config 中 `MODELS_ENRICHER_IMAGE` 的实际配置源，不覆盖其他环境项。默认时长无需修改生产 YAML。若需自定义，在镜像升级后使用既有 `deploy-models-enricher-config` 流程，保留渠道、static_models 和私密凭证：
-
-   ```sh
-   cd ansible
-   ansible-playbook ops.yml --tags deploy -e service=models-enricher -e ai_ops_mode=plan
-   # 单独批准 plan 后才 apply：
-   ansible-playbook ops.yml --tags deploy -e service=models-enricher
-   # 可选：经审查的 YAML 配置另行 plan/apply
-   ansible-playbook ops.yml --tags deploy-models-enricher-config -e ai_ops_mode=plan
-   ```
-
-   先按现行 Ansible 文档复核 profile 的 pull/recreate 行为。仅重建 `models-enricher`，不能用通用 up 重建依赖。配置部署要求目标二进制支持 `validate-config`；不要在旧镜像上宣称新键已生效。
-
-4. 读回实际镜像 ID/digest、环境、`/readyz`/容器健康及配置 hash，再同步回 private-config。`/healthz` 只代表进程存活，不能替代目录采集验收。通过 localhost/Tailscale `:9083/models-table` 验证：冷页即时返回、时间戳、超窗异步、手动等待/加入、定时更新；公开标准/Codex 目录仍按原鉴权和准入规则返回。现场应另外量一次公开目录延迟，不能引用本地 µs 数作为生产结果。
-
-5. 错误时按已审查的单服务回滚方案恢复旧 pin/受保护配置并读回。保留命名卷及 bbolt 输入缓存；不做破坏性清理、守护部署或 VM 重启演练。
+镜像由 `.github/workflows/publish-model-catalog.yml` 手动触发构建（`ghcr.io/xz-dev/ai-gateway-model-catalog`，构建上下文 `./services/routing/model-catalog`），按 digest 写入 private-config 的 `MODEL_CATALOG_IMAGE`。镜像升级走通用组件流程（`--tags deploy -e service=model-catalog`），配置改动走 `deploy-model-catalog-config`，两者都先 plan 再 apply，见 [Ansible operations](ansible-operations.md#model-catalog-config-safety)。部署后通过 localhost/Tailscale `:9083/models-table` 验证冷页即时返回、时间戳、超窗异步、手动等待/加入和定时更新；`/healthz` 只代表进程存活，不能替代目录采集验收。

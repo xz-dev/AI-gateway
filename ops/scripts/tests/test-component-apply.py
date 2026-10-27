@@ -82,7 +82,7 @@ class Probe(http.server.BaseHTTPRequestHandler):
 
 
 class Fixture:
-    def __init__(self, evidence, label, service='models-enricher', native=True):
+    def __init__(self, evidence, label, service='model-catalog', native=True):
         self.tmp = tempfile.TemporaryDirectory(prefix='component-apply-', dir='/var/tmp')
         self.home = Path(self.tmp.name)
         self.label, self.evidence, self.service = label, evidence, service
@@ -226,7 +226,7 @@ def main():
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Probe)
     threading.Thread(target=server.serve_forever,daemon=True).start()
     for case in args.case or ['skip','digest','rollback','kill','native','generic','cas','neighbour','front','preload','worker','cpa-config','keeper-config','rollback-stale','rollback-identity']:
-        f=Fixture(args.evidence,case,'aisix-status' if case=='native' else 'responses-ws-sse-bridge' if case=='front' else 'cloudflared' if case=='preload' else 'cpa-model-sync' if case=='worker' else 'cli-proxy-api' if case=='cpa-config' else 'openai-api-cache-keeper' if case=='keeper-config' else 'models-enricher',native=case not in ('native','worker'))
+        f=Fixture(args.evidence,case,'aisix-status' if case=='native' else 'responses-ws-sse-bridge' if case=='front' else 'cloudflared' if case=='preload' else 'cpa-model-sync' if case=='worker' else 'cli-proxy-api' if case=='cpa-config' else 'openai-api-cache-keeper' if case=='keeper-config' else 'model-catalog',native=case not in ('native','worker'))
         try:
             if case in ('worker','cpa-config','keeper-config'):
                 shutil.copyfile(f.live/'compose.yaml',f.source/'compose.yaml')

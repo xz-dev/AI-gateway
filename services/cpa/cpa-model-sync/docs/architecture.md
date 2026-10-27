@@ -304,7 +304,7 @@ upstream data.
   CPA native /v1/models  (current configured membership)
           |
           v
-  models-enricher (TS)   enrich metadata only; include_models `!` globs hide public IDs
+  model-catalog (TS)   enrich metadata only; include_models `!` globs hide public IDs
           |
           v
   APISIX /v1/models  intersection with the Sub2API group entitlement list
@@ -317,7 +317,7 @@ Notes on the diagram:
 
 - The synchronizer's only outbound target is CPA. Upstream calls are made by CPA
   through the same credentials CPA already holds.
-- `models-enricher` never changes membership for the five managed kinds; it reads CPA's
+- `model-catalog` never changes membership for the five managed kinds; it reads CPA's
   current members and enriches them. Its `metadata.include_models` (`!` entries) hides
   public IDs from the public catalog only.
 - The APISIX front intersects the enriched catalog with the caller's Sub2API group

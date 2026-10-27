@@ -4,7 +4,7 @@ Coupled-stack operations, persistent state and the validation script.
 
 ## Operations
 
-Sub2API, AISIX, CLIProxyAPI, models-enricher, AI SSE keepalive proxy, their namespace owners, and adjacent relays are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never restart or recreate a namespace owner alone, or blindly restart dependent applications together. A proven application-only image replacement may use Compose `up -d --no-deps --no-build <service>` while its namespace owner remains unchanged; broader network or CPA changes require the coupled stack. With the production override, include the provider-sidecar tunnel and both provider-sidecar relays in the same full-stack operation.
+Sub2API, AISIX, CLIProxyAPI, model-catalog, AI SSE keepalive proxy, their namespace owners, and adjacent relays are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never restart or recreate a namespace owner alone, or blindly restart dependent applications together. A proven application-only image replacement may use Compose `up -d --no-deps --no-build <service>` while its namespace owner remains unchanged; broader network or CPA changes require the coupled stack. With the production override, include the provider-sidecar tunnel and both provider-sidecar relays in the same full-stack operation.
 
 ```bash
 source ./ops/scripts/container-runtime.sh

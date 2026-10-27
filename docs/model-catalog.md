@@ -1,6 +1,6 @@
-# models-enricher
+# model-catalog
 
-Technical reference for the TypeScript Codex catalog enricher in [`services/routing/model-catalog/`](../services/routing/model-catalog/). Compose service `models-enricher` runs inside the `models-enricher-netns` namespace, listens on `:8090`, and is reached only by `apisix-models` (through `apisix-models-enricher-relay`); it reads CPA and AISIX through `enricher-cpa-relay` and `enricher-aisix-relay` and has no internet egress.
+Technical reference for the TypeScript Codex model catalog service in [`services/routing/model-catalog/`](../services/routing/model-catalog/) (formerly `models-enricher`). Compose service `model-catalog` runs inside the `model-catalog-netns` namespace and listens on `:8090`. Two callers reach it: `apisix-models` for `GET /v1/models` (through `apisix-models-catalog-relay`), and the front door's `9083` operator listener for `/models-table` and `/models-table/refresh` (over the two-member `front-model-table` network). It reads CPA and AISIX through `catalog-cpa-relay` and `catalog-aisix-relay` and has no Internet egress.
 
 ## HTTP interface
 
@@ -14,16 +14,16 @@ Technical reference for the TypeScript Codex catalog enricher in [`services/rout
 
 ## Commands
 
-The image entrypoint is `/models-enricher`:
+The image entrypoint is `/model-catalog`:
 
 ```bash
-/models-enricher                          # serve
-/models-enricher healthcheck              # exit 0 when GET 127.0.0.1:8090/readyz is 200 (Compose healthcheck)
-/models-enricher validate-config <path|-> # prints {"version":1,"config_digest":"<sha256 of the bytes>"}; non-zero on invalid config
-/models-enricher warm-compile-cache       # image build step: fills NODE_COMPILE_CACHE for both bundles
+/model-catalog                          # serve
+/model-catalog healthcheck              # exit 0 when GET 127.0.0.1:8090/readyz is 200 (Compose healthcheck)
+/model-catalog validate-config <path|-> # prints {"version":1,"config_digest":"<sha256 of the bytes>"}; non-zero on invalid config
+/model-catalog warm-compile-cache       # image build step: fills NODE_COMPILE_CACHE for both bundles
 ```
 
-Ansible's `deploy-models-enricher-config` runs `validate-config` inside the running container before activation and compares `config_digest` after recreation ([Ansible operations](ansible-operations.md#models-enricher-config-safety)).
+Ansible's `deploy-model-catalog-config` runs `validate-config` inside the running container before activation and compares `config_digest` after recreation ([Ansible operations](ansible-operations.md#model-catalog-config-safety)).
 
 ## Environment
 
@@ -31,7 +31,7 @@ Ansible's `deploy-models-enricher-config` runs `validate-config` inside the runn
 |---|---|---|
 | `LISTEN_ADDR` | `:8090` | listen address |
 | `CONFIG_PATH` | `/app/config.yaml` | YAML configuration (production: the private config mounted read-only) |
-| `CACHE_DIR` | `/var/cache/models-enricher` | volume holding `v2/` (`@cpa-upstream` cache) and `out/` (published outputs) |
+| `CACHE_DIR` | `/var/cache/model-catalog` | volume holding `v2/` (`@cpa-upstream` cache) and `out/` (published outputs) |
 | `CPA_MANAGEMENT_KEY` | required | CPA Management API key (discovery, identity, `api-call`) |
 | `CPA_CLIENT_KEY` | `CPA_API_KEY` | client key for the CPA native manifest |
 | `AISIX_MODELS_URL` / `AISIX_TOKEN` | `aisix_models_url` from config / none | optional AISIX-only catalog supplement |
@@ -53,7 +53,7 @@ Annotated example: [`services/routing/model-catalog/config.yaml`](../services/ro
 | `scheduled_refresh_interval` / `entry_refresh_window` | duration, `30m` / `10m` | table schedule / staleness window that lets a page view start a background refresh |
 | `metadata.chain` | list | default field-source chain |
 | `metadata.models[]` | `{match, chain?, overrides?}` | ordered glob rules; a later matching `chain` replaces, `overrides` merge in order |
-| `metadata.include_models` | ordered glob list, optional | public membership filter (see [the catalog section](#catalog-compatibility-stack-apisix-models--models-enricher)) |
+| `metadata.include_models` | ordered glob list, optional | public membership filter (see [the catalog section](#catalog-compatibility-stack-apisix-models--model-catalog)) |
 | `channels.<prefix>` | `{path?, ollama_native_base_url?}` | transport settings for `@cpa-upstream` reads only |
 | `custom_channels.<key>.models` | list of names | hidden pools; `<key>/<name>` entries are compiled but only surface through `static_models` `inherit` |
 | `static_models[]` | `{slug, inherit?, overrides?}` | operator models; `inherit` is an ordered list, earlier entries win |
@@ -78,21 +78,21 @@ Chain entries:
 
 ```bash
 git submodule update --init services/routing/model-catalog/vendor/openai-api-pi-extension
-cd models-enricher
+cd services/routing/model-catalog
 npm ci
 npm run typecheck
 npm test
 npm run build            # data/source-tables.json + dist/server.mjs + dist/worker.mjs
-podman build -t models-enricher:dev .
+podman build -t model-catalog:dev .
 ```
 
-The shared compile core comes from the pinned [`openai-api-pi-extension`](https://github.com/xz-dev/openai-api-pi-extension) submodule; Dependabot bumps the pin weekly. `@opencode-ai/models` and `modelparams` are exact npm pins in one `metadata-data` Dependabot group checked hourly; review the `/models-table` difference before merging a data bump. Images are published by the `Publish models-enricher image` workflow (`workflow_dispatch` with an immutable `version`) and deployed by digest.
+The shared compile core comes from the pinned [`openai-api-pi-extension`](https://github.com/xz-dev/openai-api-pi-extension) submodule; Dependabot bumps the pin weekly. `@opencode-ai/models` and `modelparams` are exact npm pins in one `metadata-data` Dependabot group checked hourly; review the `/models-table` difference before merging a data bump. Images are published by the `Publish model-catalog image` workflow (`workflow_dispatch` with an immutable `version`) and deployed by digest.
 
-## Catalog compatibility stack (apisix-models + models-enricher)
+## Catalog compatibility stack (apisix-models + model-catalog)
 
-The dedicated `apisix-models` instance remains for catalog and protocol compatibility, but CPA-backed Sub2API inference accounts no longer traverse it: their path is Sub2API -> AISIX -> CPA. Parameterized `GET /v1/models` requests reach `models-enricher` through the retained catalog sidecars, while missing or empty versions retain the established CPA fallback behavior. Requests sent directly to the enricher still require a nonempty version.
+The dedicated `apisix-models` instance remains for catalog and protocol compatibility, but CPA-backed Sub2API inference accounts no longer traverse it: their path is Sub2API -> AISIX -> CPA. Parameterized `GET /v1/models` requests reach `model-catalog` through the front-door intersection and `apisix-models` (see [Model catalog path](catalog.md)), while a missing or empty version gets model-catalog's standard list (see the HTTP interface above).
 
-`models-enricher` (TypeScript service in `services/routing/model-catalog/`) answers Codex manifest requests. The CPA **native manifest** (`GET /v1/models?client_version=1` with the client key, regardless of the caller's version) is the authoritative baseline for OAuth/native models: if neither a fresh response nor an eligible successful cached response is available, the enricher returns 502 `native_manifest_failed` and synthesizes nothing. It then discovers enabled key-type CPA channels via the management API (`CPA_MANAGEMENT_KEY`), fetches explicitly configured channels' live models through CPA `api-call` (credentials never leave CPA), and enriches from explicitly configured sources. Channel upstream inventories supply metadata only; membership stays CPA-authoritative (CPA identity admission, the AISIX supplement and `static_models`). All outbound HTTP (CPA calls, `@cpa-upstream` reads, Ollama lookups) shares one bounded pool (`http_concurrency`, default 8); channels are read concurrently with deterministic ordering, and a single channel failure degrades with a WARN instead of failing the request.
+`model-catalog` (TypeScript service in `services/routing/model-catalog/`) answers Codex manifest requests. The CPA **native manifest** (`GET /v1/models?client_version=1` with the client key, regardless of the caller's version) is the authoritative baseline for OAuth/native models: if neither a fresh response nor an eligible successful cached response is available, model-catalog returns 502 `native_manifest_failed` and synthesizes nothing. It then discovers enabled key-type CPA channels via the management API (`CPA_MANAGEMENT_KEY`), fetches explicitly configured channels' live models through CPA `api-call` (credentials never leave CPA), and enriches from explicitly configured sources. Channel upstream inventories supply metadata only; membership stays CPA-authoritative (CPA identity admission, the AISIX supplement and `static_models`). All outbound HTTP (CPA calls, `@cpa-upstream` reads, Ollama lookups) shares one bounded pool (`http_concurrency`, default 8); channels are read concurrently with deterministic ordering, and a single channel failure degrades with a WARN instead of failing the request.
 
 **Positive directory admission — local candidate, not deployed:** first remove Management-listed originals/bare aliases, then retain a remaining candidate only when removing one CPA prefix leaves an exact Management model match in the same channel/account. Key-channel responses provide the real `prefix` and effective original ID (`alias`, or `name` when the alias is empty). `hub/nvidia/model` must match `nvidia/model` under `hub`, not a global model or a guessed vendor. An ID also declared as another channel's complete route remains eligible. The enrichment configuration is not an identity whitelist.
 
@@ -100,7 +100,7 @@ For OAuth, the candidate reads Management `auth-files` metadata, account-associa
 
 A lookup miss is different from incomplete discovery or a failed identity read without usable cache. The latter still preserves affected existing CPA records and warns, retaining nulls, empty values, numeric precision and original IDs without enrichment/overrides. Matched OAuth records also remain native passthrough. Explicit static entries materialize separately under their existing rules. Management records do not directly add public models; the five Rust-managed kinds still require CPA public membership. Gemini/Interactions retain their existing candidate source, but enrichment cannot reintroduce a candidate that fails positive admission. Authorization and actual model-call routing are unchanged. See [local identity verification](records/catalog-identity-verification.md) for the behavior contract and the [2026-09-08 deployment record](records/catalog-positive-admission-deployment-2026-09-08.md) for the authorized Go-only rollout, exact artifacts and production acceptance.
 
-Source configuration is fully explicit (`services/routing/model-catalog/config.yaml`). The `metadata` block uses the [`openai-api-pi-extension`](https://github.com/xz-dev/openai-api-pi-extension) chain schema; the sidecar bundles that project's host-neutral compile core from the `services/routing/model-catalog/vendor/openai-api-pi-extension` submodule, so the gateway and Pi resolve metadata with the same code:
+Source configuration is fully explicit (`services/routing/model-catalog/config.yaml`). The `metadata` block uses the [`openai-api-pi-extension`](https://github.com/xz-dev/openai-api-pi-extension) chain schema; the service bundles that project's host-neutral compile core from the `services/routing/model-catalog/vendor/openai-api-pi-extension` submodule, so the gateway and Pi resolve metadata with the same code:
 
 - **Chains.** `metadata.chain` is the default field-source chain; each field takes the first valid value in chain order. `metadata.models` is an ordered list of `match:` rules (standard glob: `*` stays inside one `/` segment, `**` spans segments, case-sensitive); a later matching rule's `chain` replaces the earlier one, and `overrides` merge in rule order (RFC 7396). Chain entries are `models.dev/<provider>/<access>[/<literal model id>]`, `modelparams.dev/<provider>/<access>[/<id>]`, the built-ins `@creator` (the model maker's provider records, via models.dev canonical identity), `@id` and `@default`, and two gateway record sources: `@self` (the CPA native manifest row) and `@cpa-upstream` (the rich row CPA reads from the channel's upstream through Management `api-call`; for Ollama it is `POST /api/show` against `channels.<prefix>.ollama_native_base_url`). Sources ahead of `@self` override CPA's values, including `display_name`; `@self` last only fills what they lack, and `@self` first keeps CPA's values. `@cpa-upstream` is read only for channels whose kept models have it in their effective chain.
 - **`metadata.include_models`** is an optional ordered glob list with the same matcher: the last matching entry decides, a leading `!` hides, and unmatched models are hidden. Omitting it keeps every admitted model; an empty list is a configuration error. Hidden models are not processed (no lookup, no `@cpa-upstream` read) unless a kept model references them through `inherit` or `metadata_from`. Unprefixed CPA models admitted by identity are always members; `["*/**"]` hides them.
@@ -117,7 +117,7 @@ Only `@cpa-upstream` reads can fail at runtime; bundled snapshot data cannot. A 
 
 APISIX does **not** cache the final enriched catalog. Each generation's outputs (the Codex manifest per `client_version`, the standard list and the models-table HTML) are serialized once, written to `<CACHE_DIR>/out/` (temp file + rename) and streamed to clients in 64 KiB chunks; the idle process keeps only a small index, and old generation files are deleted once no response still reads them. At most 24 published keys are kept. Concurrent requests for the same generation and version share one build. Shared builds and request-triggered refreshes are detached from client disconnect (still bounded by their deadlines). Table-entry requests do not wait for collection at all.
 
-Reads are split by purpose. **`@cpa-upstream` responses** (channel model lists and Ollama `/api/show` via `api-call`) are persisted as one file per request identity under `<CACHE_DIR>/v2/` on the dedicated named volume `models-enricher-cache`, so they survive restart and container recreation. The SHA-256 identity covers method, complete URL/query, request headers/authentication and body. After a failed refresh the last validated success is reused; failures never replace or delete it, and a valid empty response replaces it. The cache holds at most **100,000,000 bytes of payload** and evicts whole entries **FIFO** by admission sequence, which survives restart; a body larger than the whole budget is never admitted. An eviction removes fallback for that input until it is read again. **Authority reads** (CPA native inventory, management discovery/identity, AISIX membership) keep their earlier policy — stale only on network errors, timeouts or 502/503/504, invalidated on 401/403 or invalid bodies — and stay in a 32 MiB process-local FIFO memory cache; they are never written to disk, because management responses can contain credentials. Persisted metadata never grants catalog membership, entitlement or routing readiness: catalogs are always recomposed from the current CPA snapshot, so newly added CPA models appear during metadata outages and removed models do not return. The volume is private to the enricher (0700/0600, owned by 65532); deleting it is a deliberate destructive action. The container keeps its 64MiB `/tmp` tmpfs and 384 MiB cgroup limit; measured production peak is about 256 MiB and steady anon+swap about 76 MiB (median). The client-facing CPA key comes from `CPA_CLIENT_KEY` (defaults to `CPA_API_KEY`).
+Reads are split by purpose. **`@cpa-upstream` responses** (channel model lists and Ollama `/api/show` via `api-call`) are persisted as one file per request identity under `<CACHE_DIR>/v2/` on the dedicated named volume `model-catalog-cache`, so they survive restart and container recreation. The SHA-256 identity covers method, complete URL/query, request headers/authentication and body. After a failed refresh the last validated success is reused; failures never replace or delete it, and a valid empty response replaces it. The cache holds at most **100,000,000 bytes of payload** and evicts whole entries **FIFO** by admission sequence, which survives restart; a body larger than the whole budget is never admitted. An eviction removes fallback for that input until it is read again. **Authority reads** (CPA native inventory, management discovery/identity, AISIX membership) keep their earlier policy — stale only on network errors, timeouts or 502/503/504, invalidated on 401/403 or invalid bodies — and stay in a 32 MiB process-local FIFO memory cache; they are never written to disk, because management responses can contain credentials. Persisted metadata never grants catalog membership, entitlement or routing readiness: catalogs are always recomposed from the current CPA snapshot, so newly added CPA models appear during metadata outages and removed models do not return. The volume is private to model-catalog (0700/0600, owned by 65532); deleting it is a deliberate destructive action. The container keeps its 64MiB `/tmp` tmpfs and 384 MiB cgroup limit; measured production peak is about 256 MiB and steady anon+swap about 76 MiB (median). The client-facing CPA key comes from `CPA_CLIENT_KEY` (defaults to `CPA_API_KEY`).
 
 AISIX owns alias routing over concrete CPA targets. Client WebSocket ends at the front keeper and `responses-ws-sse-bridge`, which turns each turn into `POST /v1/responses`; Sub2API account WS mode is `off` ([docs/websocket-termination.md](websocket-termination.md)). The internal models gateway routes model IDs containing `/` to CPA and all others to AISIX ([docs/model-routing.md](model-routing.md)).
 

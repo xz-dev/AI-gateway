@@ -23,7 +23,7 @@ CHECKS = {
     "sub2api": (8080, "/health", 200),
     "openai-api-cache-keeper": (8085, "/healthz", 200),
     "responses-ws-sse-bridge": (8086, "/healthz", 200),
-    "models-enricher": (8090, "/healthz", 200),
+    "model-catalog": (8090, "/healthz", 200),
     "ai-sse-keepalive-proxy": (8080, "/healthz", 200),
     "apisix": (9080, "/healthz", 404),
     "apisix-models": (9080, "/healthz", 200),
@@ -33,7 +33,6 @@ OBSERVE_HTTP = {
     "cloudflared": ("127.0.0.1", 20241, "/ready", 200),
     "aisix-status": ("127.0.0.1", 8080, "/", 404),
     "aisix": ("172.30.68.2", 9090, "/metrics", 200),
-    "model-catalog-sidecar": ("172.30.41.3", 8080, "/models-table/refresh", 403),
     "egress-proxy": ("172.30.18.2", 3128, "*", 400),
 }
 GRACE = 120

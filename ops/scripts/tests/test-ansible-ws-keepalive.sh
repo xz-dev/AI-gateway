@@ -158,7 +158,6 @@ playbook() {
       -e "ai_ops_compose_cmd=$tmp/fake-compose" \
       -e "ai_ops_runtime=$tmp/fake-runtime" \
       -e "ai_ops_mode=$mode_value" \
-      -e service=ai-sse-keepalive-proxy \
       -e ai_ops_ws_keepalive_verify_retries=2 \
       -e ai_ops_ws_keepalive_verify_delay_seconds=0 \
       "$@" >"$output" 2>&1
