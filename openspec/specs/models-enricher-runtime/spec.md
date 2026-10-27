@@ -68,7 +68,7 @@ The sidecar SHALL make no network request to models.dev, modelparams.dev, a pack
 - **THEN** catalog builds succeed using CPA, AISIX and bundled data
 
 ### Requirement: Operational command interface is preserved
-The image SHALL provide the executable `/models-enricher` with these subcommands:
+The image SHALL provide the executable `/model-catalog` with these subcommands:
 - `healthcheck`: exits 0 only when the local server's `/readyz` reports ready.
 - `validate-config <path|->`: reads a file or at most 16 MiB from stdin, and validates the full configuration including shared chain rules and legacy-field rejection.
   - Valid input: exits 0 and prints exactly one JSON line `{"version":1,"config_digest":"<lowercase hex SHA-256 of the input bytes>"}` to stdout.
@@ -79,10 +79,10 @@ The image SHALL provide the executable `/models-enricher` with these subcommands
 Starting without a subcommand SHALL run the server. Startup with an invalid configuration SHALL exit non-zero before listening.
 
 #### Scenario: Ansible validation keeps working
-- **WHEN** the Ansible models-enricher operation pipes the private YAML to `/models-enricher validate-config -`
+- **WHEN** the Ansible model-catalog operation pipes the private YAML to `/model-catalog validate-config -`
 - **THEN** a valid file exits 0 and prints the version-1 digest JSON matching the file's `sha256sum`
 - **AND** an invalid one exits 1 with the field path on stderr
 
 #### Scenario: Compose healthcheck keeps working
-- **WHEN** Docker runs `/models-enricher healthcheck` against a serving container
+- **WHEN** Docker runs `/model-catalog healthcheck` against a serving container
 - **THEN** it exits 0
