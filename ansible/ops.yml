@@ -310,7 +310,6 @@
       loop:
         - models-enricher-netns
         - enricher-cpa-relay
-        - enricher-squid-relay
         - apisix-models-enricher-relay
         - apisix-models
       loop_control:
@@ -1266,7 +1265,6 @@
       loop:
         - models-enricher-netns
         - enricher-cpa-relay
-        - enricher-squid-relay
         - apisix-models-enricher-relay
         - apisix-models
       loop_control:

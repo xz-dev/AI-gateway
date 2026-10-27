@@ -777,14 +777,11 @@ services:
     extra_hosts:
       - "aisix:172.30.64.3"
       - "cpa:172.30.29.3"
-      - "enricher-egress-relay:172.30.31.3"
     networks:
       apisix-models-enricher-target:
         ipv4_address: 172.30.28.2
       enricher-cpa-source:
         ipv4_address: 172.30.29.2
-      enricher-squid-source:
-        ipv4_address: 172.30.31.2
       enricher-aisix-source:
         ipv4_address: 172.30.64.2
 
@@ -865,18 +862,6 @@ services:
         ipv4_address: 172.30.29.3
       enricher-cpa-target:
         ipv4_address: 172.30.30.3
-
-  enricher-squid-relay:
-    <<: *socat-relay
-    command: ["TCP4-LISTEN:3128,bind=172.30.31.3,reuseaddr,fork", "TCP4:172.30.32.2:3128,connect-timeout=10"]
-    depends_on:
-      egress-proxy: {condition: service_started}
-    networks:
-      enricher-squid-source:
-        aliases: [enricher-egress-relay]
-        ipv4_address: 172.30.31.3
-      enricher-squid-target:
-        ipv4_address: 172.30.32.3
 
   model-catalog-sidecar:
     image: ${MODEL_CATALOG_SIDECAR_IMAGE:-docker.io/nginxinc/nginx-unprivileged:1.31.6-alpine@sha256:26b0bf6fbf07297983cb341998d79c831508787de26627dd2a112321b9c3a4af}
@@ -1205,9 +1190,6 @@ networks:
   enricher-cpa-target:
     internal: true
     ipam: {config: [{subnet: 172.30.30.0/29}]}
-  enricher-squid-source:
-    internal: true
-    ipam: {config: [{subnet: 172.30.31.0/29}]}
   enricher-squid-target:
     internal: true
     ipam: {config: [{subnet: 172.30.32.0/29}]}

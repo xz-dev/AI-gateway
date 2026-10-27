@@ -62,7 +62,7 @@ config = config_path.read_bytes() if config_path.exists() else b""
 old = b"OLD-CONFIG" in config
 new = b"NEW-CONFIG" in config
 protected_services = [
-    "models-enricher-netns", "enricher-cpa-relay", "enricher-squid-relay",
+    "models-enricher-netns", "enricher-cpa-relay",
     "apisix-models-enricher-relay", "apisix-models",
 ]
 
