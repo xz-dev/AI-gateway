@@ -71,8 +71,6 @@ services:
         ipv4_address: 172.30.18.2
       sub2api-squid-target:
         ipv4_address: 172.30.20.2
-      enricher-squid-target:
-        ipv4_address: 172.30.32.2
       proxy-egress:
         gw_priority: 1
     healthcheck:
@@ -1190,9 +1188,6 @@ networks:
   enricher-cpa-target:
     internal: true
     ipam: {config: [{subnet: 172.30.30.0/29}]}
-  enricher-squid-target:
-    internal: true
-    ipam: {config: [{subnet: 172.30.32.0/29}]}
   apisix-catalog-source:
     internal: true
     ipam: {config: [{subnet: 172.30.41.0/29}]}

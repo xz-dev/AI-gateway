@@ -191,7 +191,7 @@ Example TLS-preserving destination:
 }
 ```
 
-The tracked default does not authorize provider inference. `models-enricher` has no internet egress: models.dev and modelparams.dev data come from exactly pinned npm snapshots (`@opencode-ai/models`, `modelparams`) converted at image build time and bumped by an hourly Dependabot entry, and channel upstream data comes through CPA `api-call`. The `enricher` entry in `egress-proxy/policy.example.json` and the `enricher-squid-target` network still exist until the next egress-proxy restart window; the enricher no longer uses them. Optional components need separate exact rules:
+The tracked default does not authorize provider inference. `models-enricher` has no internet egress: models.dev and modelparams.dev data come from exactly pinned npm snapshots (`@opencode-ai/models`, `modelparams`) converted at image build time and bumped by an hourly Dependabot entry, and channel upstream data comes through CPA `api-call`. Optional components need separate exact rules:
 
 | Component | Exact domain | Anchored path |
 |---|---|---|

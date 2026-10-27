@@ -177,10 +177,6 @@ expected = {
             r"^/Wei-Shaw/model-price-repo/main/model_prices_and_context_window\.sha256$",
         ),
     )),
-    "enricher": sorted((
-        entry("modelparams.dev", r"^/api/v1/models\.json($|[?])"),
-        entry("models.dev", r"^/(api\.json|catalog\.json)($|[?])"),
-    )),
 }
 
 
