@@ -29,7 +29,7 @@ jobs:
       matrix:
         component: ${{ fromJSON(inputs.component == 'aisix' && '["aisix"]' || inputs.component == 'aisix-status' && '["aisix-status"]' || '["aisix","aisix-status"]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Read immutable image version
         id: image
         shell: bash
