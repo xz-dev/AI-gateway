@@ -108,7 +108,7 @@ A restart request already accepted by Docker can still finish after the guard st
 
 Keeper and bridge have guarded single-service Ansible `deploy`/`rollback`
 profiles; the old scoped standard-cache tags remain retired and fail in preflight.
-See [Keeper and ws-sse bridge rollout](../ansible/README.md#keeper-and-ws-sse-bridge-rollout).
+See [Keeper and ws-sse bridge rollout](ansible-operations.md#guarded-component-rollout).
 Coordinate one production writer and a maintenance window with other owners and
 this recovery timer. A keeper restart interrupts in-flight streams and collectors;
 the named volume survives, but keeper wipes its history buckets at startup, so
@@ -144,7 +144,7 @@ the recorded controller PID gone on its original host, and no other deployment
 writers locally/remotely. It releases only ownership; it never declares success,
 rolls back, or changes live configuration. An empty lock left by the bounded
 keeper experiment monitor has no Ansible owner and cannot pass this recovery.
-See [component operations](../ansible/README.md#controller-deadline-logs-and-stale-lock-recovery)
+See [component operations](ansible-operations.md#controller-deadline-logs-and-stale-lock-recovery)
 for partial logs, progress stages and recovery commands.
 
 The changed apply/rollback path was verified offline with fake Docker, including
