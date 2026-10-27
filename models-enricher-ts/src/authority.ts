@@ -1,7 +1,7 @@
 // Authority snapshot: CPA native inventory, management discovery and identity, and the optional
 // AISIX inventory, collected independently of catalog traffic and published as immutable generations.
 import { createHash } from "node:crypto";
-import { CpaClient, type Channel, type Discovery } from "./cpa.ts";
+import { CpaClient, decodeNativeManifest, type Channel, type Discovery } from "./cpa.ts";
 import { HttpPool, InvalidResponseError } from "./http.ts";
 import { exactModelID, isRecord, parseJSON, type Row } from "./json.ts";
 import type { Logger } from "./log.ts";
@@ -12,8 +12,8 @@ export type Availability = "usable" | "empty" | "failed";
 
 export interface AdmittedModel {
   readonly id: string;
-  /** The CPA native manifest row (the `@self` record). */
-  readonly row: Row;
+  /** Position of the CPA native manifest row (the `@self` record) in `nativeRows(generation)`. */
+  readonly index: number;
   /** Emit this CPA record exactly as-is: OAuth-only routes, or identity that could not be read. */
   readonly preserveNative: boolean;
 }
@@ -23,6 +23,11 @@ export interface AuthorityGeneration {
   readonly generation: number;
   readonly cpa: Availability;
   readonly aisix: Availability | "disabled";
+  /**
+   * The validated native manifest body. Rows are parsed per build (nativeRows) instead of staying
+   * resident; the string is the one the authority read cache already holds.
+   */
+  readonly nativeText: string;
   /** Admitted CPA models in native manifest order; first occurrence wins for duplicate IDs. */
   readonly admitted: readonly AdmittedModel[];
   /** AISIX IDs absent from the complete raw CPA inventory, in first-seen order with exact bytes. */
@@ -46,6 +51,7 @@ const EMPTY: AuthorityGeneration = Object.freeze({
   generation: 0,
   cpa: "failed",
   aisix: "failed",
+  nativeText: "",
   admitted: Object.freeze([]),
   supplemental: Object.freeze([]),
   channels: Object.freeze([]),
@@ -210,20 +216,25 @@ export async function readIdentities(cpa: CpaClient, discovery: Discovery, optio
  * (former bare_models_takeover); prefixed ones need a positive identity match, except that read
  * failures keep the existing CPA record unchanged instead of dropping it.
  */
+/** Parses the generation's native rows; callers drop them when their build ends. */
+export function nativeRows(generation: AuthorityGeneration): Row[] {
+  return generation.nativeText === "" ? [] : decodeNativeManifest(generation.nativeText);
+}
+
 export function admitModels(rows: readonly Row[], ids: Identities, staticSlugs: ReadonlySet<string>): { admitted: AdmittedModel[]; fallbackCount: number } {
   const admitted: AdmittedModel[] = [];
   const seen = new Set<string>();
   let fallbackCount = 0;
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const id = exactModelID(row);
     if (seen.has(id)) continue;
     if ((!id.includes("/") || ids.bare.has(id)) && !ids.qualified.has(id)) {
-      admitted.push({ id, row, preserveNative: false });
+      admitted.push({ id, index, preserveNative: false });
     } else if (ids.qualified.has(id)) {
-      admitted.push({ id, row, preserveNative: ids.nativeOnly.has(id) && !staticSlugs.has(id) });
+      admitted.push({ id, index, preserveNative: ids.nativeOnly.has(id) && !staticSlugs.has(id) });
     } else if (ids.incomplete || ids.unavailable.has(id)) {
       fallbackCount++;
-      admitted.push({ id, row, preserveNative: !staticSlugs.has(id) });
+      admitted.push({ id, index, preserveNative: !staticSlugs.has(id) });
     } else {
       continue;
     }
@@ -366,6 +377,7 @@ export class AuthorityOwner {
 
     // Mandatory CPA phase.
     let cpaState: Availability = "failed";
+    let nativeText = "";
     let admitted: AdmittedModel[] = [];
     let channels: readonly Channel[] = [];
     let discoveryIncomplete = true;
@@ -375,6 +387,7 @@ export class AuthorityOwner {
     try {
       const native = await cpa.nativeManifest(cpaOptions);
       part(native.text);
+      nativeText = native.text;
       for (const row of native.value) rawCpaIDs.add(exactModelID(row));
       cpaState = rawCpaIDs.size > 0 ? "usable" : "empty";
       const discovery = await cpa.discover(cpaOptions);
@@ -410,12 +423,15 @@ export class AuthorityOwner {
     const fingerprint = hash.digest("hex");
     const previous = this.#current;
     if (previous.generation !== 0 && fingerprint === this.#fingerprint) {
-      return { generation: previous, published: false, errors, staleInputs };
+      // Same content: hold the read cache's current string so an equal old copy is not kept alive.
+      if (nativeText !== "") this.#current = Object.freeze({ ...previous, nativeText });
+      return { generation: this.#current, published: false, errors, staleInputs };
     }
     const next: AuthorityGeneration = Object.freeze({
       generation: previous.generation + 1,
       cpa: cpaState,
       aisix: aisixState,
+      nativeText,
       admitted: Object.freeze(admitted),
       supplemental: Object.freeze(supplemental),
       channels: Object.freeze(channels),

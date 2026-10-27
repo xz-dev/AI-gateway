@@ -4,6 +4,7 @@ import {
   AisixClient,
   AuthorityOwner,
   admitModels,
+  nativeRows,
   decodeAISIXModels,
   runtimeConflicts,
   supplementalIDs,
@@ -107,7 +108,7 @@ test("force-model-prefix OAuth registrations match definitions and aliases witho
   }));
   const { generation } = await h.owner.refresh();
   assert.deepEqual(ids(generation), ["beta/alien", "named", "session/alien", "session/named", "session/vendor/model"]);
-  const row = generation.admitted.find((m) => m.id === "session/vendor/model")!.row;
+  const row = nativeRows(generation)[generation.admitted.find((m) => m.id === "session/vendor/model")!.index];
   assert.equal(JSON.stringify(row), `{"slug":"session/vendor/model","n":9007199254740993}`);
 });
 
@@ -137,7 +138,7 @@ test("identity reads: 503 reuses the last success, denial or bad shape preserves
     }
     assert.deepEqual(ids(after), ["p/vendor/m", "vendor/m"], `${code}: denied/invalid identity must preserve the CPA baseline`);
     assert.deepEqual(preserved(after), ["vendor/m"]);
-    assert.equal(JSON.stringify(after.admitted.find((m) => m.id === "vendor/m")!.row), `{"slug":"vendor/m","id":"unchanged","null":null}`);
+    assert.equal(JSON.stringify(nativeRows(after)[after.admitted.find((m) => m.id === "vendor/m")!.index]), `{"slug":"vendor/m","id":"unchanged","null":null}`);
     assert.match(h.log.text(), /identity read failed/);
     status = 503;
     assert.deepEqual(ids((await h.owner.refresh()).generation), ["p/vendor/m", "vendor/m"], "denied input resurrected on a later 503");
@@ -254,7 +255,10 @@ test("generations: unchanged inputs keep the generation, changes publish atomica
   h.advance(10 * 60_000);
   const same = await h.owner.refresh();
   assert.equal(same.published, false);
-  assert.equal(same.generation, first.generation);
+  // Same generation and members; only the held text is swapped for the read cache's current copy.
+  assert.equal(same.generation.generation, first.generation.generation);
+  assert.equal(same.generation.admitted, first.generation.admitted);
+  assert.equal(h.owner.current(), same.generation);
 
   fake.native = `{"models":[{"slug":"new"}]}`;
   block = true;
@@ -292,7 +296,7 @@ test("refreshes coalesce; a forced refresh bypasses freshness once", async (t) =
 test("runtime conflicts: empty and duplicate prefixes, custom pool collisions", () => {
   const ch = (prefix: string, type: Channel["type"] = "openai-compatibility"): Channel => ({ type, name: prefix, prefix, baseUrl: "", authIndex: "", models: [] });
   assert.equal(runtimeConflicts([ch(""), ch("a"), ch("a", "claude-api-key")], [], []).length, 2);
-  assert.deepEqual(runtimeConflicts([ch("a")], ["a", "native", "free"], [{ id: "native/m", row: {}, preserveNative: false }]), [
+  assert.deepEqual(runtimeConflicts([ch("a")], ["a", "native", "free"], [{ id: "native/m", index: 0, preserveNative: false }]), [
     `custom channel "a" conflicts with CPA channel prefix`,
     `custom channel "native" conflicts with native manifest provider prefix`,
   ]);

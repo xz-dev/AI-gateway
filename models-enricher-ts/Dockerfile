@@ -10,15 +10,18 @@ RUN test -f vendor/openai-api-pi-extension/metadata-core.ts || { echo "vendor/op
 RUN npm run build
 
 FROM ${NODE_IMAGE}
+# MALLOC_ARENA_MAX=2: an exited build worker's glibc arenas would otherwise stay resident.
+# The entrypoint caps the main heap and exposes gc() for the post-build memory-reducing collection.
 ENV NODE_ENV=production \
-    NODE_COMPILE_CACHE=/app/.node-compile-cache
+    NODE_COMPILE_CACHE=/app/.node-compile-cache \
+    MALLOC_ARENA_MAX=2
 COPY --from=build /src/dist/server.mjs /src/dist/worker.mjs /app/dist/
 COPY --from=build /src/data/source-tables.json /app/data/source-tables.json
 COPY config.yaml /app/config.yaml
 # A named volume inherits owner and mode from the mount point on first creation.
 RUN install -d -m 0700 -o 65532 -g 65532 /var/cache/models-enricher \
  && install -d -o 65532 -g 65532 /app/.node-compile-cache \
- && printf '#!/bin/sh\nexec node /app/dist/server.mjs "$@"\n' > /models-enricher \
+ && printf '#!/bin/sh\nexec node --max-old-space-size=96 --expose-gc /app/dist/server.mjs "$@"\n' > /models-enricher \
  && chmod 0755 /models-enricher \
  && rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 USER 65532:65532

@@ -1,13 +1,28 @@
 // HTTP surface on node:http. /routing-index was removed (no consumer) and answers 404 like any
 // other unknown path; /models-table/refresh accepts POST only.
+import { createReadStream } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
 import { errorMessage, type Logger } from "./log.ts";
 import { errorReply, type CatalogService, type Reply } from "./service.ts";
 
-function send(res: ServerResponse, reply: Reply): void {
-  if (res.writableEnded || res.destroyed) return;
-  res.writeHead(reply.status, { "Content-Type": reply.contentType, "Content-Length": Buffer.byteLength(reply.body) });
-  res.end(reply.body);
+/** Writes `body`, then streams the published file in 64 KiB chunks; the lease is always released. */
+async function send(res: ServerResponse, reply: Reply): Promise<void> {
+  const { file } = reply;
+  try {
+    if (res.writableEnded || res.destroyed) return;
+    const length = Buffer.byteLength(reply.body) + (file ? file.size + Buffer.byteLength(file.tail) : 0);
+    res.writeHead(reply.status, { "Content-Type": reply.contentType, "Content-Length": length });
+    if (!file) return void res.end(reply.body);
+    if (reply.body !== "") res.write(reply.body);
+    await pipeline(createReadStream(file.path, { highWaterMark: 64 << 10 }), res, { end: false });
+    res.end(file.tail);
+  } catch {
+    // Client gone or file unreadable after the headers: drop the connection, never a short body.
+    res.destroy();
+  } finally {
+    file?.release();
+  }
 }
 
 /** Aborts when the client goes away before the response is written. */

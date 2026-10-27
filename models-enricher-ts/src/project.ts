@@ -1,11 +1,8 @@
-// Output projections: Codex manifest and standard list bodies, the generation-keyed projection
-// cache, and the server-rendered models table (no JavaScript, refresh is a plain POST form).
+// Output projections: Codex manifest and standard list bodies, and the server-rendered models
+// table (no JavaScript, refresh is a plain POST form). Bodies are published as files (outputs.ts);
+// the table rows are one file, the page head and tail are rendered per request.
 import type { PreparedGeneration, Projection } from "./build.ts";
 import type { Row } from "./json.ts";
-
-export const PROJECTION_TTL_MS = 5 * 60_000;
-export const PROJECTION_MAX_ENTRIES = 24;
-export const PROJECTION_MAX_BYTES = 64 << 20;
 
 export function codexBody(projection: Projection): string {
   return JSON.stringify({ models: projection.models });
@@ -16,81 +13,6 @@ export function standardBody(prepared: PreparedGeneration): string {
   const data: Array<{ id: string; object: "model" }> = [];
   for (const member of prepared.members) if (prepared.kept.has(member.id)) data.push({ id: member.id, object: "model" });
   return JSON.stringify({ object: "list", data });
-}
-
-type Entry = { generation: number; body?: string; stored: number; flight?: Promise<string> };
-
-/**
- * Bodies keyed by generation + format + client_version. Entries of other generations are dropped
- * whenever a newer generation is looked up, so a late old-generation build never becomes current.
- * Bounded by entry count and total body bytes; concurrent builds of one key share a flight.
- */
-export class ProjectionCache {
-  readonly #entries = new Map<string, Entry>();
-  #bytes = 0;
-  clock: () => number;
-
-  constructor(clock: () => number = Date.now) {
-    this.clock = clock;
-  }
-
-  get size(): number {
-    return this.#entries.size;
-  }
-
-  clear(): void {
-    for (const [key, entry] of this.#entries) if (!entry.flight) this.#drop(key);
-  }
-
-  load(generation: number, key: string, build: () => Promise<string>): Promise<string> {
-    for (const [other, entry] of this.#entries) if (entry.generation !== generation && !entry.flight) this.#drop(other);
-    const full = `${generation}:${key}`;
-    const existing = this.#entries.get(full);
-    if (existing?.flight) return existing.flight;
-    if (existing?.body !== undefined && this.clock() - existing.stored < PROJECTION_TTL_MS) return Promise.resolve(existing.body);
-    if (existing) this.#drop(full);
-    const entry: Entry = { generation, stored: 0 };
-    entry.flight = build().then(
-      (body) => {
-        entry.flight = undefined;
-        // Only store when still the registered flight of a current-generation key.
-        if (this.#entries.get(full) === entry && this.#current(generation)) {
-          entry.body = body;
-          entry.stored = this.clock();
-          this.#bytes += Buffer.byteLength(body);
-          this.#evict();
-        } else if (this.#entries.get(full) === entry) {
-          this.#entries.delete(full);
-        }
-        return body;
-      },
-      (error: unknown) => {
-        if (this.#entries.get(full) === entry) this.#entries.delete(full);
-        throw error;
-      },
-    );
-    this.#entries.set(full, entry);
-    return entry.flight;
-  }
-
-  #current(generation: number): boolean {
-    for (const entry of this.#entries.values()) if (entry.generation > generation) return false;
-    return true;
-  }
-
-  #drop(key: string): void {
-    const entry = this.#entries.get(key);
-    if (!entry) return;
-    if (entry.body !== undefined) this.#bytes -= Buffer.byteLength(entry.body);
-    this.#entries.delete(key);
-  }
-
-  #evict(): void {
-    for (const [key, entry] of this.#entries) {
-      if (this.#entries.size <= PROJECTION_MAX_ENTRIES && this.#bytes <= PROJECTION_MAX_BYTES) return;
-      if (!entry.flight) this.#drop(key);
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -116,14 +38,19 @@ export interface TableRow {
   readonly cells?: ReadonlyArray<{ text: string; missing: boolean }>;
 }
 
-export interface TableData {
+/** What the page head needs; kept in memory instead of the rows. */
+export interface TableSummary {
   readonly generation: number;
-  readonly rows: readonly TableRow[];
+  readonly rowCount: number;
   readonly kept: number;
   readonly hidden: number;
   readonly referencedOnly: number;
   readonly dataVersions: PreparedGeneration["catalog"]["dataVersions"];
   readonly clientVersion: string;
+}
+
+export interface TableData extends TableSummary {
+  readonly rows: readonly TableRow[];
 }
 
 function cell(entry: Row, key: string): { text: string; missing: boolean } {
@@ -169,6 +96,7 @@ export function tableData(prepared: PreparedGeneration, projection: Projection, 
   rows.sort(slugOrder);
   return {
     generation: prepared.authority.generation,
+    rowCount: rows.length,
     rows,
     kept: prepared.kept.size,
     hidden: prepared.hidden.size,
@@ -182,7 +110,7 @@ const ESCAPES: Readonly<Record<string, string>> = { "&": "&amp;", "<": "&lt;", "
 export const escapeHTML = (text: string) => text.replace(/[&<>"']/g, (char) => ESCAPES[char]!);
 
 export interface TablePage {
-  table?: TableData;
+  table?: TableSummary;
   /** Error text shown instead of the table. */
   error?: string;
   notice?: { level: "success" | "warning"; text: string };
@@ -193,14 +121,16 @@ export interface TablePage {
 
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-export function renderTable(page: TablePage): string {
-  const parts: string[] = [];
+export const TABLE_TAIL = "</body>\n</html>\n";
+
+/** Page up to the table; with `page.table` the published rows file follows, then TABLE_TAIL. */
+export function renderTableHead(page: TablePage): string {
   const { table } = page;
   const versions = table?.dataVersions;
   const meta = table
-    ? `${table.rows.length} models · kept ${table.kept} · hidden ${table.hidden} · referenced-only ${table.referencedOnly} · generation ${table.generation} · client_version=${table.clientVersion} · @opencode-ai/models ${versions?.modelsDevVersion ?? "未使用"} (snapshot ${versions?.modelsDevGeneratedAt ?? "未知"}) · modelparams ${versions?.modelparamsVersion ?? "未使用"} · ${iso(page.renderedAt)}`
+    ? `${table.rowCount} models · kept ${table.kept} · hidden ${table.hidden} · referenced-only ${table.referencedOnly} · generation ${table.generation} · client_version=${table.clientVersion} · @opencode-ai/models ${versions?.modelsDevVersion ?? "未使用"} (snapshot ${versions?.modelsDevGeneratedAt ?? "未知"}) · modelparams ${versions?.modelparamsVersion ?? "未使用"} · ${iso(page.renderedAt)}`
     : iso(page.renderedAt);
-  parts.push(`<!DOCTYPE html>
+  let head = `<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
@@ -227,20 +157,26 @@ export function renderTable(page: TablePage): string {
 <form id="refresh" method="post" action="/models-table/refresh"><button type="submit">强制刷新</button></form>
 <div id="meta">${escapeHTML(meta)}</div>
 <div id="refresh-times">最后成功刷新：${page.lastSuccess ? iso(page.lastSuccess) : "尚无成功刷新"} · 下次定时刷新：${page.nextScheduled ? iso(page.nextScheduled) : "未启动或已停止"}</div>
-`);
-  if (page.notice) parts.push(`<div id="notice" class="${page.notice.level}">${escapeHTML(page.notice.text)}</div>\n`);
-  if (page.error !== undefined) {
-    parts.push(`<div id="err">${escapeHTML(page.error)}</div>\n`);
-  } else if (table) {
-    parts.push(`<table id="tbl">\n  <thead><tr><th>slug</th><th>status</th>${COLUMNS.map(([label]) => `<th>${label}</th>`).join("")}</tr></thead>\n  <tbody>\n`);
-    for (const row of table.rows) {
-      const cells = row.cells
-        ? row.cells.map((c) => `<td${c.missing ? ' class="null"' : ""}>${escapeHTML(c.text)}</td>`).join("")
-        : `<td colspan="${COLUMNS.length}">not processed</td>`;
-      parts.push(`  <tr${row.hidden ? ' class="hidden"' : ""}><td>${escapeHTML(row.slug)}</td><td>${escapeHTML(row.status)}</td>${cells}</tr>\n`);
-    }
-    parts.push("  </tbody>\n</table>\n");
+`;
+  if (page.notice) head += `<div id="notice" class="${page.notice.level}">${escapeHTML(page.notice.text)}</div>\n`;
+  if (page.error !== undefined) head += `<div id="err">${escapeHTML(page.error)}</div>\n`;
+  return head;
+}
+
+/** The published table fragment (one file per table build). */
+export function renderTableRows(table: TableData): string {
+  const parts: string[] = [`<table id="tbl">\n  <thead><tr><th>slug</th><th>status</th>${COLUMNS.map(([label]) => `<th>${label}</th>`).join("")}</tr></thead>\n  <tbody>\n`];
+  for (const row of table.rows) {
+    const cells = row.cells
+      ? row.cells.map((c) => `<td${c.missing ? ' class="null"' : ""}>${escapeHTML(c.text)}</td>`).join("")
+      : `<td colspan="${COLUMNS.length}">not processed</td>`;
+    parts.push(`  <tr${row.hidden ? ' class="hidden"' : ""}><td>${escapeHTML(row.slug)}</td><td>${escapeHTML(row.status)}</td>${cells}</tr>\n`);
   }
-  parts.push("</body>\n</html>\n");
+  parts.push("  </tbody>\n</table>\n");
   return parts.join("");
+}
+
+export function summarize(table: TableData): TableSummary {
+  const { rows: _rows, ...summary } = table;
+  return summary;
 }

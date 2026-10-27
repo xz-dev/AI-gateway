@@ -1,6 +1,6 @@
 // End-to-end harness: fake CPA (and optional AISIX) + the real config parser, authority owner,
 // compile worker (src/worker.ts) and catalog service.
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AisixClient, AuthorityOwner } from "../src/authority.ts";
@@ -8,8 +8,9 @@ import type { BuildDeps } from "../src/build.ts";
 import { parseConfig } from "../src/config.ts";
 import { DiskCache } from "../src/disk-cache.ts";
 import type { Row } from "../src/json.ts";
+import { OutputStore } from "../src/outputs.ts";
 import { ReadCache } from "../src/read-cache.ts";
-import { CatalogService } from "../src/service.ts";
+import { CatalogService, PINNED_KEYS, type Reply } from "../src/service.ts";
 import { cpaClient, fakeCPA, serveCPA, type FakeCPA } from "./fake-cpa.ts";
 import { captureLog, tempDir, type CapturedLog } from "./helpers.ts";
 
@@ -85,15 +86,27 @@ export async function harness(t: { after(fn: () => unknown): void }, options: Ha
   const aisix = options.aisix ? new AisixClient(options.aisix, "", client.pool, cache) : undefined;
   const owner = new AuthorityOwner({ cpa: client, aisix, staticSlugs: new Set(config.staticModels.map((m) => m.slug)), cpaTimeoutMs: 5_000, aisixTimeoutMs: 5_000, log });
   const deps = { config, cpa: client, workerFile: WORKER, tablesPath: await writeTables(dir, options.providers ?? {}), log };
-  const service = new CatalogService({ build: deps, owner, log, clock });
+  const outputs = await OutputStore.open(join(dir, "cache", "out"), PINNED_KEYS);
+  const service = new CatalogService({ build: deps, owner, outputs, log, clock });
   t.after(() => service.stop());
   return { service, owner, deps, fake, log, apiCalls, advance: (ms) => (now += ms) };
 }
 
+/** The full response text: body, published file and tail; releases the file lease. */
+export async function replyText(reply: Reply): Promise<string> {
+  if (!reply.file) return reply.body;
+  try {
+    return reply.body + (await readFile(reply.file.path, "utf8")) + reply.file.tail;
+  } finally {
+    reply.file.release();
+  }
+}
+
 export async function codex(h: Harness, clientVersion = "1.0.0"): Promise<Row[]> {
   const reply = await h.service.catalog(clientVersion);
-  if (reply.status !== 200) throw new Error(`catalog ${reply.status}: ${reply.body}`);
-  return (JSON.parse(reply.body) as { models: Row[] }).models;
+  const text = await replyText(reply);
+  if (reply.status !== 200) throw new Error(`catalog ${reply.status}: ${text}`);
+  return (JSON.parse(text) as { models: Row[] }).models;
 }
 
 export const bySlug = (models: Row[]) => new Map(models.map((model) => [model.slug as string, model]));

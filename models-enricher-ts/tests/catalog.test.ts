@@ -3,7 +3,8 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { Row } from "../src/json.ts";
-import { bySlug, channels, codex, harness } from "./catalog-harness.ts";
+import { nativeRows } from "../src/authority.ts";
+import { bySlug, channels, codex, harness, replyText } from "./catalog-harness.ts";
 import { json, serve, tempDir } from "./helpers.ts";
 
 const levels = (...efforts: string[]) => efforts.map((effort) => ({ effort }));
@@ -46,8 +47,9 @@ test("@self first keeps CPA values; later entries fill gaps; rule overrides win;
   assert.equal(six.max_tokens, 1000000);
   assert.equal(six.context_window, 300000);
   assert.equal(six.max_output_tokens, 64000);
-  // Native rows in the published generation are never mutated by projections.
-  const row = h.owner.current().admitted.find((model) => model.id === "codex/gpt-6")!.row;
+  // The authority snapshot is never mutated by projections.
+  const authority = h.owner.current();
+  const row = nativeRows(authority)[authority.admitted.find((model) => model.id === "codex/gpt-6")!.index]!;
   assert.equal(row.max_tokens, undefined);
 });
 
@@ -65,7 +67,7 @@ test("include_models: */** hides unprefixed models from both catalogs; hidden mo
 `,
   });
   assert.deepEqual([...bySlug(await codex(h)).keys()], ["codex/gpt-5.6-sol"]);
-  const standard = JSON.parse((await h.service.catalog("")).body);
+  const standard = JSON.parse(await replyText(await h.service.catalog("")));
   assert.deepEqual(standard, { object: "list", data: [{ id: "codex/gpt-5.6-sol", object: "model" }] });
   assert.deepEqual(h.apiCalls, [], "the hidden image model's @cpa-upstream chain triggers no api-call");
 });
@@ -132,6 +134,33 @@ static_models:
   assert.equal(claude.max_context_window, 1000000, "explicit max_context_window is not synchronized");
   assert.equal(claude.max_output_tokens, 64000);
   assert.ok(!models.has("hidden/claude-x"), "pool entries are never emitted");
+});
+
+test("sync_max_context_window: enabled, per-model glob list, and off", async (t) => {
+  const row = (slug: string) => native(slug, { context_window: 200000, max_context_window: 872000 });
+  const setup = (sync: string, models = ["a", "keep-b"]) =>
+    harness(t, {
+      channels: channels([{ prefix: "xl", models }, { prefix: "aihub", models: ["c", "low", "none", "explicit"] }]),
+      native: [
+        row("xl/a"),
+        row("xl/keep-b"),
+        row("aihub/c"),
+        native("aihub/low", { context_window: 500000, max_context_window: 128000 }),
+        native("aihub/none", { context_window: 500000 }),
+        row("aihub/explicit"),
+      ],
+      yaml: `metadata:\n  chain: ["@self"]\n  models:\n    - match: "aihub/explicit"\n      overrides: {max_context_window: 100}\n${sync}`,
+    });
+  const max = async (sync: string) => {
+    const models = bySlug(await codex(await setup(sync)));
+    return Object.fromEntries([...models].map(([slug, model]) => [slug, model.max_context_window]));
+  };
+  // Enabled: every entry equals context_window; an explicit override still wins.
+  assert.deepEqual(await max("sync_max_context_window: true\n"), { "xl/a": 200000, "xl/keep-b": 200000, "aihub/c": 200000, "aihub/low": 500000, "aihub/none": 500000, "aihub/explicit": 100 });
+  // Per model: only selected IDs are synchronized; the others keep larger upper bounds.
+  assert.deepEqual(await max('sync_max_context_window: ["xl/**", "!xl/keep-*"]\n'), { "xl/a": 200000, "xl/keep-b": 872000, "aihub/c": 872000, "aihub/low": 500000, "aihub/none": 500000, "aihub/explicit": 100 });
+  // Off (absent): upper bounds are only raised when missing or smaller.
+  assert.deepEqual(await max(""), { "xl/a": 872000, "xl/keep-b": 872000, "aihub/c": 872000, "aihub/low": 500000, "aihub/none": 500000, "aihub/explicit": 100 });
 });
 
 test("membership comes from authority only; preserveNative rows are emitted unchanged", async (t) => {
@@ -250,7 +279,11 @@ test("generation pinning: a new generation never serves a previous projection", 
   h.fake.native = JSON.stringify({ models: [native("codex/a"), native("codex/b")] });
   await h.owner.refresh({ bypass: true });
   assert.equal((await codex(h)).length, 2);
-  assert.equal(h.service.cache.size, 1, "the old generation's projection was dropped");
+  const entries = [...h.service.outputs.entries()];
+  assert.deepEqual(entries.map((entry) => [entry.key, entry.generation]).sort(), [["codex:1.0.0", 2], ["standard", 2]], "the old generation's files were replaced");
+  const { readdir } = await import("node:fs/promises");
+  for (let i = 0; i < 50 && (await readdir(h.service.outputs.dir)).length > 2; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual((await readdir(h.service.outputs.dir)).sort(), entries.map((entry) => entry.path.slice(h.service.outputs.dir.length + 1)).sort(), "old generation files deleted");
 });
 
 test("CPA failure answers 502 without a catalog", async (t) => {
@@ -258,5 +291,5 @@ test("CPA failure answers 502 without a catalog", async (t) => {
   h.fake.nativeStatus = 500;
   const reply = await h.service.catalog("1.0.0");
   assert.equal(reply.status, 502);
-  assert.match(reply.body, /native_manifest_failed/);
+  assert.match(await replyText(reply), /native_manifest_failed/);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ConfigError, parseConfig, parseDuration, syncMaxContextWindowFor } from "../src/config.ts";
+import { ConfigError, parseConfig, parseDuration, syncedSlugs } from "../src/config.ts";
 
 const base = "cpa_base_url: http://cpa:8317\n";
 const rejects = (yaml: string, pattern: RegExp) => assert.throws(() => parseConfig(base + yaml), (error: unknown) => error instanceof ConfigError && pattern.test(error.message));
@@ -22,6 +22,7 @@ test("every legacy field is rejected with its path and a migration hint", () => 
     ["channels:\n  xl:\n    models: {}", /^channels\.xl\.models: removed field; .*root metadata_from map/],
     ["channels:\n  xl:\n    provider_prefix_map: {}", /^channels\.xl\.provider_prefix_map: removed field/],
     ["channels:\n  xl:\n    global_fallback: true", /^channels\.xl\.global_fallback: removed field/],
+    ["channels:\n  xl:\n    sync_max_context_window: true", /^channels\.xl\.sync_max_context_window: removed field; use the root sync_max_context_window glob list/],
     ["static_models:\n  - slug: a\n    source_priority: []", /^static_models\[0\]\.source_priority: removed field/],
     ["chain: [\"@self\"]", /^chain: removed field; move it under metadata\.chain/],
     ["include_models: [\"**\"]", /^include_models: removed field; move it under metadata/],
@@ -55,13 +56,13 @@ test("gateway fields: defaults, validation and unknown keys", () => {
   assert.equal(config.aisixTimeoutMs, 8_000);
   assert.equal(config.metadata.chain, undefined, "absent chain uses the shared default");
 
-  const tuned = parseConfig(`${base}entry_refresh_window: 2h\nscheduled_refresh_interval: 1m\naisix_timeout: 1h\nsync_max_context_window: true\nchannels:\n  a:\n    sync_max_context_window: false\n    path: /v1/models\n`);
+  const tuned = parseConfig(`${base}entry_refresh_window: 2h\nscheduled_refresh_interval: 1m\naisix_timeout: 1h\nsync_max_context_window: true\nchannels:\n  a:\n    path: /v1/models\n`);
   assert.equal(tuned.entryRefreshWindowMs, 2 * 3_600_000);
   assert.equal(tuned.scheduledRefreshMs, 60_000);
   assert.equal(tuned.aisixTimeoutMs, 25_000, "AISIX budget is capped by the overall deadline");
-  assert.equal(syncMaxContextWindowFor(tuned, "a/m"), false);
-  assert.equal(syncMaxContextWindowFor(tuned, "b/m"), true);
-  assert.equal(syncMaxContextWindowFor(tuned, "bare"), true);
+  assert.deepEqual([...syncedSlugs(tuned, ["a/m", "bare"])], ["a/m", "bare"]);
+  assert.equal(config.syncMaxContextWindow, false, "absent selects none");
+  assert.equal(syncedSlugs(config, ["a/m"]).size, 0);
   assert.equal(tuned.channels.get("a")!.path, "/v1/models");
 
   rejects("scheduled_refresh_interval: 0s", /scheduled_refresh_interval: must be positive/);
@@ -81,9 +82,23 @@ test("gateway fields: defaults, validation and unknown keys", () => {
   assert.equal(parseDuration("1.5s", "x"), 1_500);
 });
 
+test("sync_max_context_window: boolean or an ordered glob list with include_models semantics", () => {
+  const listed = parseConfig(`${base}sync_max_context_window: ["xl/**", "!xl/keep-*", "zcode/glm-?"]\n`);
+  assert.deepEqual([...syncedSlugs(listed, ["xl/a", "xl/keep-b", "xl/sub/c", "aihub/c", "zcode/glm-5", "zcode/glm-55", "bare"])], ["xl/a", "xl/sub/c", "zcode/glm-5"]);
+  const reincluded = parseConfig(`${base}sync_max_context_window: ["!xl/keep-*", "xl/**"]\n`);
+  assert.deepEqual([...syncedSlugs(reincluded, ["xl/keep-b"])], ["xl/keep-b"], "the last matching entry decides");
+  assert.equal(parseConfig(`${base}sync_max_context_window: false\n`).syncMaxContextWindow, false);
+  rejects("sync_max_context_window: []", /^sync_max_context_window: an empty list selects no model/);
+  rejects("sync_max_context_window: [\"\"]", /^sync_max_context_window\[0\]: expected a non-empty glob/);
+  rejects("sync_max_context_window: [\"!\"]", /^sync_max_context_window\[0\]: `!` must be followed/);
+  rejects("sync_max_context_window: [1]", /^sync_max_context_window\[0\]: expected a non-empty glob/);
+  rejects("sync_max_context_window: yes-please", /^sync_max_context_window: expected true, false or a list/);
+});
+
 test("the tracked example configuration is valid", async () => {
   const { readFile } = await import("node:fs/promises");
   const config = parseConfig(await readFile(new URL("../config.yaml", import.meta.url), "utf8"));
-  assert.equal(config.metadata.chain?.[0], "@self");
+  assert.equal(config.metadata.chain?.at(-1), "@self", "sources first, CPA's row last (Go precedence)");
+  assert.equal(config.syncMaxContextWindow, false, "the example does not synchronize upper bounds");
   assert.ok(config.metadata.models?.some((rule) => rule.match === "**/gpt-image-*"));
 });

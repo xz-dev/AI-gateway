@@ -150,8 +150,8 @@ test("a client disconnect stops only its wait; the shared build finishes and is 
   controller.abort();
   assert.equal(await pending, "AbortError");
   release();
-  for (let i = 0; i < 50 && h.service.cache.size === 0; i++) await sleep(20);
-  assert.equal(h.service.cache.size, 1, "the abandoned build still stored its projection");
+  for (let i = 0; i < 50 && !h.service.outputs.get("codex:2.0.0"); i++) await sleep(20);
+  assert.ok(h.service.outputs.get("codex:2.0.0"), "the abandoned build still published its projection");
   const before = nativeFetches(h);
   assert.equal((await call("/v1/models?client_version=2.0.0")).status, 200);
   assert.equal(nativeFetches(h), before, "served from the shared result without another collection");

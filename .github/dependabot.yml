@@ -9,8 +9,10 @@ updates:
       interval: weekly
   - package-ecosystem: npm
     directory: /models-enricher-ts
+    # Hourly so new models reach the bundled metadata snapshots quickly.
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: "0 * * * *"
     groups:
       # One PR moves both bundled metadata snapshots; review the models-table diff before merging.
       metadata-data:

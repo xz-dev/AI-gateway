@@ -1,7 +1,7 @@
 // Gateway YAML: the shared `metadata` block (parsed by the extension core) plus gateway-only
 // settings. Unknown and legacy keys fail closed so a partially understood file is never served.
 import { parseDocument } from "yaml";
-import { MetadataConfigError, parseMetadataConfigValue, type MetadataConfig } from "./core.ts";
+import { compileModelPattern, MetadataConfigError, parseMetadataConfigValue, selectModels, type MetadataConfig } from "./core.ts";
 import { isRecord, type Row } from "./json.ts";
 import type { StaticModel } from "./postprocess.ts";
 
@@ -14,8 +14,10 @@ export interface ChannelSettings {
   readonly path?: string;
   /** `@cpa-upstream` rows come from Ollama `/api/show` under this base URL. */
   readonly ollamaNativeBaseUrl?: string;
-  readonly syncMaxContextWindow?: boolean;
 }
+
+/** `include_models`-style rules: `!` excludes, the last match decides, unmatched = not selected. */
+export type SyncRules = NonNullable<MetadataConfig["includeModels"]>;
 
 export interface GatewayConfig {
   readonly metadata: MetadataConfig;
@@ -29,7 +31,8 @@ export interface GatewayConfig {
   readonly staticModels: readonly StaticModel[];
   /** Full output slug → full output slug whose metadata it copies. */
   readonly metadataFrom: ReadonlyMap<string, string>;
-  readonly syncMaxContextWindow: boolean;
+  /** true = every non-native entry, false = none, or the ordered glob rules selecting models. */
+  readonly syncMaxContextWindow: boolean | SyncRules;
   readonly aisixModelsUrl: string;
   readonly aisixTimeoutMs: number;
   readonly scheduledRefreshMs: number;
@@ -51,6 +54,7 @@ const LEGACY_CHANNEL: Readonly<Record<string, string>> = {
   exclude: "use metadata.include_models globs with a leading !",
   overrides: 'use metadata.models rules, e.g. {match: "<prefix>/<model>", overrides: {...}}',
   models: "use metadata.models[].match rules; move metadata_from to the root metadata_from map",
+  sync_max_context_window: 'use the root sync_max_context_window glob list, e.g. ["<prefix>/**"]',
 };
 const SHARED_KEYS: Readonly<Record<string, string>> = {
   chain: "move it under metadata.chain",
@@ -73,7 +77,7 @@ const ROOT_KEYS = new Set([
   "scheduled_refresh_interval",
   "entry_refresh_window",
 ]);
-const CHANNEL_KEYS = new Set(["path", "ollama_native_base_url", "sync_max_context_window"]);
+const CHANNEL_KEYS = new Set(["path", "ollama_native_base_url"]);
 const STATIC_KEYS = new Set(["slug", "inherit", "overrides"]);
 const PROTECTED_OVERRIDE_KEYS = ["slug", "id"];
 
@@ -109,10 +113,26 @@ function nonEmptyString(value: unknown, path: string): string {
   return value as string;
 }
 
-function optionalBool(value: unknown, path: string): boolean | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "boolean") fail(path, "expected true or false");
-  return value as boolean;
+function readSyncMaxContextWindow(value: unknown): boolean | SyncRules {
+  const path = "sync_max_context_window";
+  if (value === undefined || typeof value === "boolean") return value ?? false;
+  if (!Array.isArray(value)) fail(path, "expected true, false or a list of model ID globs");
+  if ((value as unknown[]).length === 0) fail(path, "an empty list selects no model; use false or omit the field");
+  return (value as unknown[]).map((item, index) => {
+    const at = `${path}[${index}]`;
+    if (typeof item !== "string" || item === "") fail(at, "expected a non-empty glob string");
+    const raw = item as string;
+    const exclude = raw.startsWith("!");
+    const glob = exclude ? raw.slice(1) : raw;
+    if (glob === "") fail(at, "`!` must be followed by a glob");
+    try {
+      compileModelPattern(glob, at);
+    } catch (error) {
+      if (error instanceof MetadataConfigError) throw new ConfigError(error.message);
+      throw error;
+    }
+    return { raw, exclude, glob };
+  });
 }
 
 function readOverrides(value: unknown, path: string): Row | undefined {
@@ -170,7 +190,6 @@ export function parseConfig(text: string): GatewayConfig {
     channels.set(prefix, {
       path: channel.path === undefined ? undefined : nonEmptyString(channel.path, `${at}.path`),
       ollamaNativeBaseUrl: channel.ollama_native_base_url === undefined ? undefined : nonEmptyString(channel.ollama_native_base_url, `${at}.ollama_native_base_url`),
-      syncMaxContextWindow: optionalBool(channel.sync_max_context_window, `${at}.sync_max_context_window`),
     });
   }
 
@@ -222,7 +241,7 @@ export function parseConfig(text: string): GatewayConfig {
     customChannels,
     staticModels,
     metadataFrom,
-    syncMaxContextWindow: optionalBool(root.sync_max_context_window, "sync_max_context_window") ?? false,
+    syncMaxContextWindow: readSyncMaxContextWindow(root.sync_max_context_window),
     aisixModelsUrl: root.aisix_models_url === undefined ? "" : nonEmptyString(root.aisix_models_url, "aisix_models_url"),
     aisixTimeoutMs: Math.min(optionalDuration(root, "aisix_timeout", channelTimeoutMs), overallDeadlineMs),
     scheduledRefreshMs: optionalDuration(root, "scheduled_refresh_interval", 30 * 60_000),
@@ -230,12 +249,10 @@ export function parseConfig(text: string): GatewayConfig {
   };
 }
 
-/** Channel switch first; unprefixed slugs and unconfigured prefixes use the global switch. */
-export function syncMaxContextWindowFor(config: GatewayConfig, slug: string): boolean {
-  const slash = slug.indexOf("/");
-  if (slash > 0) {
-    const value = config.channels.get(slug.slice(0, slash))?.syncMaxContextWindow;
-    if (value !== undefined) return value;
-  }
-  return config.syncMaxContextWindow;
+/** The slugs whose max_context_window is set to context_window, chosen with the shared matcher. */
+export function syncedSlugs(config: GatewayConfig, slugs: Iterable<string>): Set<string> {
+  const rules = config.syncMaxContextWindow;
+  if (rules === false) return new Set();
+  if (rules === true) return new Set(slugs);
+  return new Set(selectModels({ includeModels: rules, warnings: [] }, [...slugs]).kept);
 }

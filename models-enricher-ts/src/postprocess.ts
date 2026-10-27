@@ -98,7 +98,8 @@ export function postprocess(input: PostprocessInput): Map<string, Row> {
     if (preserveNative.has(slug)) continue;
     entry.slug = slug;
     if ("id" in entry) entry.id = slug;
-    raiseMaxContextWindow(entry, !explicitMax.has(slug) && input.syncMaxContextWindow(slug));
+    // An explicit max_context_window override wins over both synchronization and raising.
+    if (!explicitMax.has(slug)) raiseMaxContextWindow(entry, input.syncMaxContextWindow(slug));
   }
   return entries;
 }

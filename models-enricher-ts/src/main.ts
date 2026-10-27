@@ -2,6 +2,7 @@
 // `warm-compile-cache` keep the Compose/Ansible command interface.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { get } from "node:http";
 import { flushCompileCache } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -12,10 +13,11 @@ import { parseMetadataConfigValue, runCompileWorker } from "./core.ts";
 import { CpaClient } from "./cpa.ts";
 import { DiskCache } from "./disk-cache.ts";
 import { HttpPool } from "./http.ts";
+import { OutputStore } from "./outputs.ts";
 import { errorMessage, jsonLogger } from "./log.ts";
 import { ReadCache } from "./read-cache.ts";
 import { createHTTPServer, parseListenAddr } from "./server.ts";
-import { CatalogService } from "./service.ts";
+import { CatalogService, PINNED_KEYS } from "./service.ts";
 
 export const VALIDATE_CONFIG_VERSION = 1;
 export const STDIN_LIMIT = 16 << 20;
@@ -72,7 +74,7 @@ function healthcheck(): Promise<number> {
 }
 
 function workerLimits(): BuildDeps["resourceLimits"] {
-  const mb = Number(env("WORKER_MAX_OLD_GENERATION_MB", "192"));
+  const mb = Number(env("WORKER_MAX_OLD_GENERATION_MB", "160"));
   return Number.isFinite(mb) && mb > 0 ? { maxOldGenerationSizeMb: mb } : undefined;
 }
 
@@ -101,8 +103,10 @@ async function serve(): Promise<number> {
   }
   const cacheDir = env("CACHE_DIR", "/var/cache/models-enricher");
   let disk: DiskCache;
+  let outputs: OutputStore;
   try {
     disk = await DiskCache.open(cacheDir, log);
+    outputs = await OutputStore.open(join(cacheDir, "out"), PINNED_KEYS);
   } catch (error) {
     // Same contract as the Go sidecar: the input cache volume must be writable by UID 65532.
     log.error("read cache initialization failed; CACHE_DIR must be a writable directory", { dir: cacheDir, err: errorMessage(error) });
@@ -124,6 +128,7 @@ async function serve(): Promise<number> {
   });
   const service = new CatalogService({
     owner,
+    outputs,
     log,
     build: { config, cpa, workerFile: WORKER_FILE, tablesPath: env("TABLES_PATH", DEFAULT_TABLES_PATH), resourceLimits: workerLimits(), log },
   });

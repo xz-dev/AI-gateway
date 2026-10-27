@@ -43,7 +43,7 @@
 
 - [ ] 5b.1 Publish outputs as files under `<CACHE_DIR>/out/`, stream them with fixed 64 KiB chunks, keep only the index in memory, release the parsed generation after each build, set `MALLOC_ARENA_MAX=2` and the heap caps. Verify: tests cover file publication, streaming, and cleanup of old generations; on the shadow, idle anon+swap is below the Go value measured at the same moment.
 - [ ] 5b.2 Make `sync_max_context_window` accept a boolean or an ordered glob list. Reject channel-level `sync_max_context_window` as a legacy field, and remove it from the private config. Verify: tests cover the three spec scenarios; the shadow diff shows unconfigured-channel `max_context_window` unchanged from Go.
-- [ ] 5b.3 Run the enricher npm Dependabot entry on an hourly `cron`. Verify: `check-jsonschema --builtin-schema vendor.dependabot` passes.
+- [x] 5b.3 Run the enricher npm Dependabot entry on an hourly `cron`. Verify: `check-jsonschema --builtin-schema vendor.dependabot` passes.
 
 ## 6. Shadow run and cutover
 

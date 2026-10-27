@@ -18,8 +18,11 @@ aisix_models_url: http://aisix:3000/v1/models
 aisix_timeout: 5s
 
 http_concurrency: 8
-# max_context_window always equals context_window; a channel may set sync_max_context_window: false.
-sync_max_context_window: true
+# Off by default: max_context_window is only raised to context_window when missing or smaller.
+# `true` sets max_context_window = context_window for every model; an ordered glob list selects
+# models like include_models (`!` excludes, last match wins), e.g. ["xl/**", "!xl/grok-*"].
+# An explicit max_context_window override always wins.
+# sync_max_context_window: ["xl/**"]
 
 metadata:
   # Sources ahead of @self override CPA's values; @self last fills what they lack.

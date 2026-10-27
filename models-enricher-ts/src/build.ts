@@ -4,9 +4,9 @@
 // project(): per client version — on-demand @cpa-upstream reads, record-source resolution,
 //   rule overrides and gateway post-processing. Intermediates are function-local.
 import type { ResourceLimits } from "node:worker_threads";
-import { runtimeConflicts, type AuthorityGeneration } from "./authority.ts";
+import { nativeRows, runtimeConflicts, type AuthorityGeneration } from "./authority.ts";
 import type { GatewayConfig } from "./config.ts";
-import { syncMaxContextWindowFor } from "./config.ts";
+import { syncedSlugs } from "./config.ts";
 import { makeResolver, matchRules, neededSites, runCompileWorker, selectModels, type CompiledCatalog, type HiddenModel, type MetadataFields } from "./core.ts";
 import type { Channel, CpaClient } from "./cpa.ts";
 import { exactModelID, mergePatch, type Row } from "./json.ts";
@@ -67,11 +67,13 @@ export async function prepare(deps: BuildDeps, authority: AuthorityGeneration, s
   const conflicts = runtimeConflicts(authority.channels, config.customChannels.keys(), authority.admitted);
   if (conflicts.length > 0) throw new CatalogConfigError(conflicts.join("; "));
 
+  // Parsed here and owned by this build only; the authority keeps just the validated text.
+  const rows = nativeRows(authority);
   const members: Member[] = [];
   const seen = new Set<string>();
   for (const model of authority.admitted) {
     seen.add(model.id);
-    members.push({ id: model.id, origin: "cpa", row: model.row, preserveNative: model.preserveNative });
+    members.push({ id: model.id, origin: "cpa", row: rows[model.index], preserveNative: model.preserveNative });
   }
   for (const id of authority.supplemental) {
     if (seen.has(id)) continue;
@@ -248,6 +250,7 @@ export async function project(deps: BuildDeps, prepared: PreparedGeneration, opt
     (pool.has(id) && !byMember.has(id) ? poolEntries : entries).set(id, entry);
   }
 
+  const synced = syncedSlugs(config, entries.keys());
   postprocess({
     entries,
     preserveNative,
@@ -255,7 +258,7 @@ export async function project(deps: BuildDeps, prepared: PreparedGeneration, opt
     metadataFrom: new Map([...config.metadataFrom].filter(([slug]) => compiled.has(slug))),
     pool: poolEntries,
     staticModels: config.staticModels.filter((model) => compiled.has(model.slug)),
-    syncMaxContextWindow: (slug) => syncMaxContextWindowFor(config, slug),
+    syncMaxContextWindow: (slug) => synced.has(slug),
     log: deps.log,
   });
   const models: Row[] = [];
