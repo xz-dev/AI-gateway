@@ -422,6 +422,7 @@
           tags: [deploy-aisix]
       vars:
         ai_file_label: aisix/resources.yaml
+        ai_file_mode: "0444"  # AISIX runs as uid 10001; private source files may be 0600.
         ai_file_local: "{{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml"
         ai_file_remote: "{{ ai_ops_deploy_root }}/services/routing/aisix/resources.yaml"
         # --force-recreate: resources.yaml is a bind mount, so a file-only change does not
