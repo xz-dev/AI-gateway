@@ -15,7 +15,7 @@ Production CPA runs a gateway-built image (`v8.0.38-pr6760-…`) with `routing.f
 
   The positive identity-admission logic (OAuth model definitions and alias name pairs) and the AISIX "AISIX minus CPA original inventory" supplement are removed.
 - **Compatibility mode**: if CPA reports `force-model-prefix: true`, model-catalog admits every CPA ID containing `/`. This is today's set, so model-catalog can be deployed before the CPA switch and stays correct after a rollback.
-- **BREAKING (operations)**: CPA switches to the official image `eceasy/cli-proxy-api` at the latest release (v8.0.44 at planning time), and `force-model-prefix` is turned off. Both gateway patches are dropped: #6189 (superseded upstream) and #6760 (Codex SSE event boundaries, still open upstream; verification gate below).
+- **BREAKING (operations)**: CPA switches to the official image `eceasy/cli-proxy-api` at the latest release (v8.0.44 at planning time), and `force-model-prefix` is turned off. `stream-bootstrap-buffering` is turned on for upstream's partial fix of the Codex SSE framing defect (#6760 is not in the release). Both gateway patches are dropped: #6189 (superseded upstream) and #6760 (Codex SSE event boundaries, still open upstream; verification gate below).
 - With `force-model-prefix` off, CPA also serves slash IDs that carry no CPA prefix through any credential that registers that exact ID, for example `deepseek/deepseek-v4.1-flash`. Before, only credentials without a prefix could serve them. The inner selector's slash rule is unchanged: bare IDs still go to AISIX.
 
 ## Capabilities

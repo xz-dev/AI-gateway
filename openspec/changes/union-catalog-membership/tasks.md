@@ -63,14 +63,15 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - the member set and passthrough set equal the pre-capture, and Codex manifest rows match row for row;
   - public and Sub2API counts are unchanged;
   - logs report compatibility mode.
-- [ ] 3.3 Batch B: recreate CPA on the official image, with the setting still `true`. Verify:
+- [ ] 3.3 Batch B: recreate CPA on the official image with `stream-bootstrap-buffering: true` (D6), the setting still `true`. Verify:
+  - CPA reports `stream-bootstrap-buffering` on;
   - CPA healthy; one CPA-routed and one AISIX-routed inference succeed;
   - the catalog is unchanged;
   - a `supergrok/grok-imagine-image` images request reaches the xAI upstream, with no CPA `not supported`/`unknown provider` error. Use the cheapest request that proves routing;
   - plugin log lines show no new failure type;
   - the D6 SSE framing gate passes on the CPA operator port and on the public chain.
 
-  If the gate fails, roll back to the previous CPA digest and stop for a user decision.
+  If the gate fails with buffering on, roll back to the previous CPA digest and stop for a user decision.
 - [ ] 3.4 Batch C: `PUT /v0/management/force-model-prefix {"value": false}`, then `POST :9083/models-table/refresh`. Verify:
   - the setting reads `false` and `config.yaml` persists it;
   - the native manifest now contains bare IDs;

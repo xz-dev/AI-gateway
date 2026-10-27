@@ -114,11 +114,12 @@ CPA-admitted(id) =
   - every `event:` line starts a new frame (preceded by a blank line or at stream start);
   - every frame's `data.type` equals its `event:` name.
 
-  If it fails, the rollout stops and the user decides. The options are to restore the custom image, or to enable `stream-bootstrap-buffering`, which holds `response.metadata` only during bootstrap and is a partial fix.
+- **`stream-bootstrap-buffering: true`** (user decision): v8.0.44 lacks #6760, and upstream's partial fix (v8.0.39, 9e79552f) holds `response.metadata` only while bootstrap buffering is on. It is enabled together with the image switch, through the Management API if CPA exposes the setting, otherwise by a backed-up edit of the live `config.yaml` with `cpa-model-sync` paused so the worker-owned file is not raced. This is the one non-default CPA setting kept.
+- If the gate still fails with buffering on, roll back to the previous image digest and stop for a user decision.
 
 ## Risks / Trade-offs
 
-- [#6760 is not in v8.0.44: a `response.metadata` data-only frame followed by `event: error` can merge into a false error] → The D6 gate runs before the setting flip. Rollback is the previous image digest.
+- [#6760 is not in v8.0.44: a `response.metadata` data-only frame followed by `event: error` can merge into a false error] → `stream-bootstrap-buffering` is enabled for upstream's partial fix, and the D6 gate runs before the setting flip. A case outside bootstrap stays exposed; the gate and the Codex SSE checks watch for it. Rollback is the previous image digest.
 - [With the setting off, CPA serves slash IDs without a CPA prefix through any credential registering that exact ID, such as `deepseek/deepseek-v4.1-flash` via the channel that lists it] → This is the upstream default and the user's choice. It is recorded in docs. The catalog does not list these IDs (D1), and Sub2API entitlements still apply.
 - [An upstream original whose first segment equals its own channel's prefix is admitted bare too: the `openrouter` channel declares `openrouter/auto`, so both `openrouter/auto` and `openrouter/openrouter/auto` qualify. Neither is in the native manifest today] → Both route to the same channel. Hide one with `include_models` if it appears. A unit test pins the behavior.
 - [A future OAuth account without a prefix whose originals contain `/` is not admitted] → That is the purpose of `cpa_include`. The models table shows hidden or absent IDs. The docs say to add a glob.
