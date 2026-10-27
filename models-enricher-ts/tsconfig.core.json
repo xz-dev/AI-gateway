@@ -1,0 +1,18 @@
+{
+  "//": "Declarations of the vendored extension core. The submodule is not type-checked here (--noCheck); only its public types are consumed.",
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noCheck": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "rootDir": "vendor/openai-api-pi-extension",
+    "outDir": ".types/core"
+  },
+  "files": ["vendor/openai-api-pi-extension/metadata-core.ts", "vendor/openai-api-pi-extension/metadata-worker.ts"]
+}

@@ -1,0 +1,91 @@
+# models-enricher configuration (example; production policy lives in the private config).
+# The `metadata` block uses the openai-api-pi-extension chain schema:
+#   chain           field sources in order; each field takes its first valid value.
+#                   @self = the CPA native manifest row; @cpa-upstream = the rich row CPA reads
+#                   from the channel's upstream (Ollama: /api/show), read only when a chain needs it.
+#   models          ordered `match:` glob rules (`*` stays inside one segment, `**` spans `/`);
+#                   later matching rules replace the chain, overrides merge in order (RFC 7396).
+#   include_models  optional ordered globs, `!` hides, last match wins, unmatched = hidden.
+# Membership comes from CPA identity admission, the AISIX supplement and static_models only.
+cpa_base_url: http://cpa:8317
+
+# Full-chain refresh: once at startup in the background; entry window and schedule are independent.
+scheduled_refresh_interval: 30m
+entry_refresh_window: 10m
+
+# Optional AISIX-only catalog supplement; the token comes only from the AISIX_TOKEN environment variable.
+aisix_models_url: http://aisix:3000/v1/models
+aisix_timeout: 5s
+
+http_concurrency: 8
+# max_context_window always equals context_window; a channel may set sync_max_context_window: false.
+sync_max_context_window: true
+
+metadata:
+  # @self first keeps CPA's values; external sources only fill missing fields.
+  chain: ["@self", "models.dev/@creator/api_key", "modelparams.dev/@creator/api_key"]
+  # Keeps every admitted model (same as omitting the list). ["*/**"] would hide unprefixed
+  # operator aliases; ["**", "!**/gpt-image-*"] would hide image models.
+  include_models: ["**"]
+  models:
+    - match: "{axis,congee}/**"
+      chain: ["@self", "models.dev/openai/api_key"]
+    - match: "xl/**"
+      chain: ["@self", "modelparams.dev/xai/subscription", "models.dev/openai/api_key", "models.dev/xai/api_key", "models.dev/zai-coding-plan/subscription", "models.dev/moonshotai/api_key", "models.dev/deepseek/api_key", "models.dev/tencent/api_key"]
+    - match: "xl/muse-spark-1.3-contributor"
+      chain: ["@self", "models.dev/meta/api_key"]
+    - match: "zcode/**"
+      chain: ["@self", "models.dev/zai-coding-plan/subscription", "modelparams.dev/z-ai/subscription", "models.dev/zai/api_key"]
+    - match: "ollama-cloud/**"
+      chain: ["@self", "@cpa-upstream", "models.dev/ollama-cloud/api_key"]
+    - match: "nim/**"
+      chain: ["@self", "models.dev/nvidia/api_key"]
+    # NVIDIA records keep the vendor path in their ID: query it literally.
+    - match: "nim/deepseek-ai/deepseek-v4-flash-0731"
+      chain: ["@self", "models.dev/nvidia/api_key/deepseek-ai/deepseek-v4-flash-0731"]
+    - match: "nim/minimaxai/minimax-m3"
+      chain: ["@self", "models.dev/nvidia/api_key/minimaxai/minimax-m3"]
+    - match: "shuaiapi/**"
+      chain: ["@self", "models.dev/anthropic/api_key"]
+    # Haiku 4.5 does not support effort; clearing CPA's placeholder levels drops the conflicting default.
+    - match: "shuaiapi/claude-haiku-4-5"
+      overrides: {supported_reasoning_levels: []}
+    - match: "commandcode/**"
+      chain: ["@self", "models.dev/openai/api_key", "models.dev/anthropic/api_key"]
+    - match: "gmicloud/**"
+      chain: ["@self"]
+    # CPA does not declare an output modality for OAuth gpt-image models.
+    - match: "**/gpt-image-*"
+      overrides: {output_modalities: [image]}
+
+channels:
+  ollama-cloud:
+    ollama_native_base_url: https://ollama.com
+
+# Statics keep only real differences from the chain-selected data.
+static_models:
+  - slug: gpt-5.6-terra
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: gpt-5.6-luna
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: gpt-5.6-sol
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: gpt-6-astra
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: gpt-6-luna
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: gpt-6.1-sol
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: glm-5.2
+    overrides: {default_reasoning_level: max}
+  - slug: glm-5.3
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: kimi-k3-500k
+    inherit: [kimi-k3]
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: claude-sonnet-5
+    overrides: {context_window: 500000, max_context_window: 1000000, default_reasoning_level: high}
+  - slug: claude-fable-5-1
+    overrides: {context_window: 500000, max_context_window: 1000000, default_reasoning_level: high}
+  - slug: claude-opus-5-5
+    overrides: {context_window: 500000, max_context_window: 1000000, default_reasoning_level: medium}
