@@ -85,6 +85,17 @@ The runtime stage copies only `dist/`, the tables JSON, `config.yaml` and the `/
 - **Cache directory**: a missing or unwritable `CACHE_DIR` stops startup with exit 1 and the log line `read cache initialization failed; CACHE_DIR must be a writable directory`. This matches the Go sidecar. Read-only runs need the named volume or a tmpfs on `/var/cache/models-enricher`.
 - **JIT**: stays on (no `--jitless`).
 - **Heap limits**: the main process gets `--max-old-space-size`, and each worker gets `resourceLimits.maxOldGenerationSizeMb`. Both are set from the measurements in task 6.2.
+- **Allocator**: `MALLOC_ARENA_MAX=2`. Without it, glibc keeps the per-thread arenas of an exited build worker, so a finished build leaves resident memory behind.
+
+**First shadow measurement** (2026-10-27, same moment, anon+swap):
+- Go: 84 MiB steady.
+- TS: 99–137 MiB steady; the peak of about 238 MiB was equal to Go's.
+- Causes:
+  - the published generation and the serialized projections stayed on the heap;
+  - the exited workers' glibc arenas were never returned;
+  - the V8 heap was not capped.
+- An empty Node 26 process measures about 28 MiB RSS; one parsed catalog adds about 10 MiB.
+- Fix: D6 (output files) plus the allocator and heap settings above.
 - **Removed settings**: `GOMEMLIMIT`, `HTTP_PROXY`, `HTTPS_PROXY` and `SSL_CERT_FILE` (D7).
 
 **Go baseline** (task 1.2), measured on production on 2026-10-27 against container `ai-gateway-models-enricher-1`, which had been up since 2026-10-23.
@@ -140,7 +151,13 @@ Intermediate maps are function-local, so they are collected after the build. Onl
 - The old bbolt file at the volume root is ignored. It is removed only after Go is deleted (task 7.4), which keeps rollback possible.
 - Alternative: SQLite (`node:sqlite`). Rejected: still experimental on some LTS lines, and a file-per-entry layout is enough at this scale (one file per channel or Ollama lookup).
 
-**Projection cache**: keyed by generation, version and format. Old generations are dropped on publish.
+**Published outputs on disk**:
+- Each projection (a Codex manifest per client version, the standard list) and the models-table HTML is serialized once. It is written to `<CACHE_DIR>/out/<generation>-<key>` with a temp file plus rename, and dropped from memory.
+- Requests stream the file to the socket using `pipeline(createReadStream(path, {highWaterMark: 64 KiB}), res)`. Memory per response is therefore bounded by one chunk, and the kernel page cache, not the process heap, keeps hot files.
+- Node's HTTP stack has no true zero-copy `sendfile`. libuv's `uv_fs_sendfile` is not wired to HTTP sockets, and `http2stream.respondWithFile` also streams through userland buffers. Fixed-chunk streaming is therefore the bounded-memory equivalent.
+- The index keeps only the IDs, timestamps and file names needed for routing, freshness and the hidden/referenced markers.
+- Old generation files are deleted once no in-flight reader holds them.
+- The parsed generation lives only inside a build and is released when the build ends.
 
 ### D7 Network: no internet egress
 
@@ -170,7 +187,7 @@ All reads go to CPA (`cpa:8317`, management and api-call) or AISIX. The service 
 - `gomod` at `/aisix-status`, plus `/models-enricher` until Go is deleted;
 - `github-actions` at `/`.
 
-All run weekly. `@opencode-ai/models` and `modelparams` form one `metadata-data` group, so a single PR updates both pins; build-time tables then make the new data reviewable through the shadow-diff script. Submodule directories owned by other repos (`middleware/*`) are left to their own repos.
+All run weekly, except the enricher's npm entry, which uses `interval: cron` hourly (`0 * * * *`, at the user's request) so new models reach the bundled data quickly. `@opencode-ai/models` and `modelparams` form one `metadata-data` group, so a single PR updates both pins; build-time tables then make the new data reviewable through the shadow-diff script. Submodule directories owned by other repos (`middleware/*`) are left to their own repos.
 
 ## Risks / Trade-offs
 

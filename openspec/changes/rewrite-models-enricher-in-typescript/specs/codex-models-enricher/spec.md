@@ -238,10 +238,17 @@ After chain selection and overrides, the sidecar SHALL apply the following gatew
 - static models with an ordered `inherit` list;
 - the root `metadata_from` map, from a full output slug to the full output slug whose metadata it copies;
 - `custom_channels` pools;
-- `sync_max_context_window` (global or per channel);
+- `sync_max_context_window`, selected per model (see below);
 - removal of a `default_reasoning_level` that is not among the model's supported reasoning levels, unless an override sets it explicitly.
 
 These features SHALL be configured only in the gateway YAML and SHALL NOT change shared chain semantics.
+
+`sync_max_context_window` SHALL accept either a boolean or an ordered glob list:
+- `true` selects every non-native entry.
+- `false`, or an absent field, selects none.
+- A list uses the `include_models` matching rules: `!` excludes, the last matching entry decides, and unmatched models are not selected. An empty list is a configuration error.
+
+For a selected model, `max_context_window` SHALL equal `context_window`. For an unselected model, `max_context_window` SHALL only be raised to `context_window` when it is missing or smaller. In both cases an override that sets `max_context_window` explicitly SHALL win. Rows emitted unchanged as CPA-native SHALL NOT be touched.
 
 #### Scenario: Static model inherits compiled metadata
 
@@ -257,6 +264,17 @@ These features SHALL be configured only in the gateway YAML and SHALL NOT change
 
 - **WHEN** `sync_max_context_window` is enabled and a model has `context_window` 200000 and `max_context_window` 1000000
 - **THEN** the emitted `max_context_window` is 200000
+
+#### Scenario: Context window synchronized per model
+
+- **WHEN** `sync_max_context_window: ["xl/**", "!xl/keep-*"]`, and models `xl/a`, `xl/keep-b` and `aihub/c` each have `context_window` 200000 and `max_context_window` 872000
+- **THEN** `xl/a` reports 200000, while `xl/keep-b` and `aihub/c` keep 872000
+
+#### Scenario: Synchronization off leaves larger upper bounds
+
+- **WHEN** `sync_max_context_window` is absent and a model has `context_window` 500000 and `max_context_window` 872000
+- **THEN** the emitted `max_context_window` is 872000
+- **AND** a model whose `max_context_window` is missing or 128000 is raised to 500000
 
 ### Requirement: Legacy configuration fields are rejected
 

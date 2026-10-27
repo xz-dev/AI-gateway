@@ -9,10 +9,16 @@ The sidecar SHALL stay within these memory bounds:
 - Steady-state resident memory SHALL NOT exceed the Go implementation's steady-state baseline. The baseline is measured on production before cutover and recorded in this change.
 - Peak resident memory during a generation build SHALL stay below the 384 MiB container limit, with headroom for native buffers.
 
-Every in-memory store SHALL have a fixed bound:
+When no build is running, the process SHALL hold only:
+- the current generation's index (IDs, timestamps, file references);
+- the bounded caches below.
+
+It SHALL NOT hold parsed catalogs or serialized response bodies in memory. Published catalogs and models-table bodies SHALL be written as files in the cache directory, and responses SHALL stream from those files with fixed-size buffers.
+
+Every store SHALL have a fixed bound:
 - management and authority read cache: 32 MiB of payload;
 - persistent `@cpa-upstream` cache: 100,000,000 bytes on disk;
-- projection cache: one entry per generation, client version and format.
+- published output files: those of the current generation and of in-flight readers only, keyed by generation, client version and format.
 
 Concurrent upstream reads SHALL be limited by the configured concurrency. Responses SHALL be limited by the existing per-endpoint size limits. Repeated builds SHALL NOT cause resident memory to grow without bound.
 
@@ -23,6 +29,10 @@ Concurrent upstream reads SHALL be limited by the configured concurrency. Respon
 #### Scenario: Peak under limit during a cold build
 - **WHEN** the sidecar starts with an empty cache and builds the first generation of the production catalog
 - **THEN** peak resident memory stays below 384 MiB and the container is not OOM-killed
+
+#### Scenario: Idle process holds no catalog
+- **WHEN** the sidecar has published a generation and served catalog requests, and no build is running
+- **THEN** resident memory returns to near the runtime's empty-process level plus the index, and catalog responses are served by streaming the published files
 
 #### Scenario: Oversized upstream body rejected
 - **WHEN** a management or api-call response exceeds its size limit
