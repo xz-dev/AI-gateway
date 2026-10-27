@@ -135,8 +135,8 @@ export async function prepare(deps: BuildDeps, authority: AuthorityGeneration, s
   return { authority, members, kept, hidden, referencedBy, compileSet, catalog };
 }
 
-// Normalized core field → Codex manifest field. `name` only fills a missing display_name: the
-// gateway's own display name is never replaced (shared rule). max_output_tokens is also emitted
+// Normalized core field → Codex manifest field. `name` becomes display_name in chain order (Go
+// parity: sources ahead of @self rename the entry); without one CPA's name stays. max_output_tokens is also emitted
 // as max_tokens. Every other mapped field takes the chain result, or is removed when the chain
 // yields none (strict replacement; @self in the chain keeps CPA's value as a candidate).
 const FIELD_MAP: ReadonlyArray<readonly [string, readonly string[]]> = [
@@ -157,7 +157,7 @@ export function applyFields(entry: Row, fields: MetadataFields): void {
       else entry[target] = value;
     }
   }
-  if (typeof fields.name === "string" && typeof entry.display_name !== "string") entry.display_name = fields.name;
+  if (typeof fields.name === "string") entry.display_name = fields.name;
 }
 
 /** Longest CPA channel prefix owning a public ID, with the upstream model name. */

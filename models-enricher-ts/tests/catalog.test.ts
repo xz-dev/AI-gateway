@@ -9,6 +9,20 @@ import { json, serve, tempDir } from "./helpers.ts";
 const levels = (...efforts: string[]) => efforts.map((effort) => ({ effort }));
 const native = (slug: string, extra: Row = {}): Row => ({ slug, display_name: `CPA ${slug}`, ...extra });
 
+test("sources ahead of @self override CPA values and display_name (Go parity)", async (t) => {
+  const h = await harness(t, {
+    channels: channels([{ prefix: "codex", models: ["gpt-5"] }]),
+    native: [native("codex/gpt-5", { context_window: 200000 })],
+    providers: { openai: { "gpt-5": { name: "GPT-5", limit: { context: 400000, output: 128000 } } } },
+    yaml: `metadata:
+  chain: ["models.dev/openai/api_key", "@self"]
+`,
+  });
+  const five = bySlug(await codex(h)).get("codex/gpt-5")!;
+  assert.equal(five.context_window, 400000);
+  assert.equal(five.display_name, "GPT-5");
+});
+
 test("@self first keeps CPA values; later entries fill gaps; rule overrides win; max_tokens is filled", async (t) => {
   const h = await harness(t, {
     channels: channels([{ prefix: "codex", models: ["gpt-5", "gpt-6"] }]),
@@ -26,7 +40,7 @@ test("@self first keeps CPA values; later entries fill gaps; rule overrides win;
   assert.equal(five.context_window, 200000);
   assert.equal(five.max_tokens, 128000);
   assert.equal(five.max_output_tokens, 128000);
-  assert.equal(five.display_name, "CPA codex/gpt-5", "the gateway display name is never replaced");
+  assert.equal(five.display_name, "CPA codex/gpt-5", "@self first keeps CPA's display name");
   assert.deepEqual(five.extra, { keep: true });
   const six = models.get("codex/gpt-6")!;
   assert.equal(six.max_tokens, 1000000);
