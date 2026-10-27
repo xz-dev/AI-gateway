@@ -1,9 +1,9 @@
-[submodule "middleware/ai-sse-keepalive-proxy"]
-	path = middleware/ai-sse-keepalive-proxy
+[submodule "services/middleware/ai-sse-keepalive-proxy"]
+	path = services/middleware/ai-sse-keepalive-proxy
 	url = https://github.com/xz-dev/ai-sse-keepalive-proxy.git
-[submodule "middleware/openai-api-cache-keeper"]
-	path = middleware/openai-api-cache-keeper
+[submodule "services/middleware/openai-api-cache-keeper"]
+	path = services/middleware/openai-api-cache-keeper
 	url = https://github.com/xz-dev/openai-api-cache-keeper.git
-[submodule "models-enricher/vendor/openai-api-pi-extension"]
-	path = models-enricher/vendor/openai-api-pi-extension
+[submodule "services/routing/model-catalog/vendor/openai-api-pi-extension"]
+	path = services/routing/model-catalog/vendor/openai-api-pi-extension
 	url = https://github.com/xz-dev/openai-api-pi-extension.git

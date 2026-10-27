@@ -7,7 +7,7 @@ Defines the structure and conventions of the Ansible operations tooling: where o
 ## Requirements
 ### Requirement: Operator configuration lives in project inventory, not ini group vars
 
-Operator-facing configuration SHALL be expressed as YAML in `ansible/inventory/` (`group_vars` and/or `host_vars`), not as ini `[group:vars]` key-value lines. A documented template (`examples/vars.yml` or equivalent) SHALL exist for operators to copy.
+Operator-facing configuration SHALL be expressed as YAML in `ops/ansible/inventory/` (`group_vars` and/or `host_vars`), not as ini `[group:vars]` key-value lines. A documented template (`examples/vars.yml` or equivalent) SHALL exist for operators to copy.
 
 #### Scenario: New operator bootstraps configuration
 
@@ -21,7 +21,7 @@ Operator-facing configuration SHALL be expressed as YAML in `ansible/inventory/`
 
 ### Requirement: Private operator config lives inside the project, gitignored
 
-The operator's private configuration directory (adopted production compose files, `.env`, AISIX resources, Squid policy) SHALL live inside the repository at a gitignored path (e.g. `ansible/private-config/`), not in the operator's home directory. The path SHALL be overridable via inventory for operators who genuinely need an external location.
+The operator's private configuration directory (adopted production compose files, `.env`, AISIX resources, Squid policy) SHALL live inside the repository at a gitignored path (e.g. `ops/ansible/private-config/`), not in the operator's home directory. The path SHALL be overridable via inventory for operators who genuinely need an external location.
 
 #### Scenario: Fresh clone on a second operator machine
 

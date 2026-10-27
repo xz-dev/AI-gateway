@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(tr -d '\n' < "${{ matrix.component }}/VERSION")
+          version=$(tr -d '\n' < "services/routing/${{ matrix.component }}/VERSION")
           [[ "$version" =~ ^[0-9][0-9A-Za-z._+-]*$ ]]
           owner=${GITHUB_REPOSITORY_OWNER,,}
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -56,7 +56,7 @@ jobs:
           fi
       - uses: docker/build-push-action@v6
         with:
-          context: ./${{ matrix.component }}
+          context: ./services/routing/${{ matrix.component }}
           push: true
           pull: true
           tags: |

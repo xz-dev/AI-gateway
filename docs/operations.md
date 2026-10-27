@@ -7,7 +7,7 @@ Coupled-stack operations, persistent state and the validation script.
 Sub2API, AISIX, CLIProxyAPI, models-enricher, AI SSE keepalive proxy, their namespace owners, and adjacent relays are one operational unit. Restart propagation is not reliable across shared namespaces and relay chains. Never restart or recreate a namespace owner alone, or blindly restart dependent applications together. A proven application-only image replacement may use Compose `up -d --no-deps --no-build <service>` while its namespace owner remains unchanged; broader network or CPA changes require the coupled stack. With the production override, include the provider-sidecar tunnel and both provider-sidecar relays in the same full-stack operation.
 
 ```bash
-source ./scripts/container-runtime.sh
+source ./ops/scripts/container-runtime.sh
 
 # Follow all stack and relay logs
 "${AI_GATEWAY_COMPOSE[@]}" logs -f
@@ -31,8 +31,8 @@ Persistent application state lives under ignored `data/`, including the egress C
 ## Validation
 
 ```bash
-./scripts/validate.sh              # private runtime config after init
-./scripts/validate.sh .env.example # tracked template only
+./ops/scripts/validate.sh              # private runtime config after init
+./ops/scripts/validate.sh .env.example # tracked template only
 ```
 
 Validation keeps three durable security contracts. First, the tracked fresh-install policy is the exact control-plane baseline documented in [Egress policy](egress-policy.md): missing, extra, or broadened GitHub rules fail offline validation. Second, egress is fail-closed: application namespaces have no direct route, Squid is sole provider egress, filtered DNS blocks private/reserved and rebinding answers, and policy tests distinguish domain, SNI/Host, method, and path allowlists. Third, every edge is a disjoint one-way relay pair: validation requires each relay listener to bind its own source address, rejects wildcard AISIX proxy/Admin/metrics listeners, and renders both APISIX configurations to reject any wildcard or TLS listener. Compose rendering, local image builds, APISIX/Squid syntax, explicit non-floating version tags, and untracked-secret checks are lightweight scaffold gates, not snapshots of service counts, fixed addresses, or application policy values. Like Compose startup, `validate.sh` automatically includes repo-root `compose.override.yaml` when present; `AI_GATEWAY_COMPOSE_OVERRIDE` selects a different explicit override.

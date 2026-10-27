@@ -1,0 +1,19 @@
+[Unit]
+Description=Bounded AI Gateway application recovery
+After=docker.service ai-gateway.service
+ConditionPathExists=/var/run/docker.sock
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/AI-gateway/ops/scripts/host/gateway-recovery.py --apply
+TimeoutStartSec=120
+StateDirectory=ai-gateway-recovery
+StateDirectoryMode=0700
+UMask=0077
+MemoryMax=64M
+CPUQuota=10%
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+Environment=PYTHONDONTWRITEBYTECODE=1

@@ -1,6 +1,6 @@
 # Model routing and front WebSocket bridge
 
-Read this before you change `apisix-models/`, Sub2API account settings, or the keeper chain.
+Read this before you change `services/routing/apisix-models/`, Sub2API account settings, or the keeper chain.
 
 > Deployed 2026-10-23, keeper cutover 02:07:35 UTC; correlated acceptance completed afterwards. Keeper and the ws→sse bridge end WebSocket before Sub2API; Sub2API sees only HTTP/SSE. Read [websocket-termination.md](websocket-termination.md) for the decision, tradeoffs and validation limits.
 
@@ -14,8 +14,8 @@ The inner models gateway (`apisix-models`) picks the backend from the literal `m
 | no `/` (`claude-opus-5-5`, `gpt-6.1-sol`, any unknown name) | AISIX | caller key, unchanged |
 
 - No catalog lookup, provider check or cache. Unknown IDs are forwarded, and the backend returns the error.
-- One function implements it: `apisix-models/routing_selector.lua`, `document.model:find("/", 1, true)`.
-- `apisix-models/routing_selector_test.lua` enforces it. `scripts/validate.sh` runs the test in CI.
+- One function implements it: `services/routing/apisix-models/routing_selector.lua`, `document.model:find("/", 1, true)`.
+- `services/routing/apisix-models/routing_selector_test.lua` enforces it. `ops/scripts/validate.sh` runs the test in CI.
 
 Do not reintroduce `/routing-index` lookups, last-known-good caches or a "registered provider" check.
 
@@ -46,7 +46,7 @@ Every OpenAI API-key account in Sub2API:
 | --- | --- |
 | `credentials.base_url` | `http://cli-proxy-api:8317/v1` (third-party upstreams such as SiliconFlow keep their own URL) |
 | `extra.openai_apikey_responses_websockets_v2_mode` | `off` (only after the front bridge is live) |
-| API key | private `sub2api` caller key from `aisix/caller-keys.json` (CPA-backed accounts) |
+| API key | private `sub2api` caller key from `services/routing/aisix/caller-keys.json` (CPA-backed accounts) |
 
 Never use `/rk/v1`; that alias was removed with the old keeper and now returns 404. Never set `ctx_pool` or `passthrough` on these accounts.
 
@@ -83,12 +83,12 @@ Sub2API's built-in bridge loses earlier assistant output on parent-plus-delta tu
 - [ ] Changing a keeper, selector or route? List every responsibility of the component you remove (HTTP *and* WebSocket) and show where each one lives afterwards.
 - [ ] Removing a path alias (`/rk`, …)? Find every Sub2API account and client still using it, and migrate them in the same rollout.
 - [ ] Sub2API account settings are database state; Git does not track them. Run the read-only check above before and after each cutover.
-- [ ] `scripts/validate.sh` passes, including `routing_selector_test.lua`.
-- [ ] Production `apisix-models/routing_selector.lua` hash equals the repository file before you deploy the repository. A deploy from a stale checkout silently reverts the live rule.
+- [ ] `ops/scripts/validate.sh` passes, including `routing_selector_test.lua`.
+- [ ] Production `services/routing/apisix-models/routing_selector.lua` hash equals the repository file before you deploy the repository. A deploy from a stale checkout silently reverts the live rule.
 - [ ] After deploy, test with the installed Pi over WebSocket: one bare ID (`claude-opus-5-5`), one slash ID (`xl/claude-opus-5-5`), and a two-turn recall. Confirm in AISIX logs that only the bare ID arrived there. HTTP 101 or a single `OK` alone is not proof.
 
 ## Known production drift (2026-10-22)
 
-- The temporary `responses-websocket-auth` route (added 11:05 UTC) was removed from production at 14:46 UTC. Production `apisix-models/apisix.yaml` again equals this repository.
+- The temporary `responses-websocket-auth` route (added 11:05 UTC) was removed from production at 14:46 UTC. Production `services/routing/apisix-models/apisix.yaml` again equals this repository.
 - The unused `routing_lkg` shared dict was removed from `config.yaml` (repository and production file) at 14:5x UTC. nginx reads it only at startup, so the running `apisix-models` keeps the 1 MiB dict until its next restart; no restart was done for this.
 - `openspec/changes/stabilize-responses-path` describes the retired keeper topology and catalog lookup. Do not archive it as-is.

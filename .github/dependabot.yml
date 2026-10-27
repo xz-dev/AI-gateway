@@ -1,14 +1,14 @@
 version: 2
 updates:
-  # Only the openai-api-pi-extension pin; middleware/* submodules are maintained in their own repos.
+  # Only the openai-api-pi-extension pin; services/middleware/* submodules are maintained in their own repos.
   - package-ecosystem: gitsubmodule
     directory: /
     allow:
-      - dependency-name: models-enricher/vendor/openai-api-pi-extension
+      - dependency-name: services/routing/model-catalog/vendor/openai-api-pi-extension
     schedule:
       interval: weekly
   - package-ecosystem: npm
-    directory: /models-enricher
+    directory: /services/routing/model-catalog
     # Hourly so new models reach the bundled metadata snapshots quickly.
     schedule:
       interval: cron
@@ -21,20 +21,20 @@ updates:
           - modelparams
   - package-ecosystem: docker
     directories:
-      - /aisix
-      - /aisix-status
-      - /cpa-model-sync
-      - /egress-proxy
-      - /models-enricher
+      - /services/routing/aisix
+      - /services/routing/aisix-status
+      - /services/cpa/cpa-model-sync
+      - /services/firewall/egress-proxy
+      - /services/routing/model-catalog
     schedule:
       interval: weekly
   - package-ecosystem: cargo
-    directory: /cpa-model-sync
+    directory: /services/cpa/cpa-model-sync
     schedule:
       interval: weekly
   - package-ecosystem: gomod
     directories:
-      - /aisix-status
+      - /services/routing/aisix-status
     schedule:
       interval: weekly
   - package-ecosystem: github-actions

@@ -12,7 +12,7 @@
 | `POST /models-table/refresh` | 启动或加入同一任务，等待后返回 SSR 结果；客户端取消只结束其等待 |
 | 停机 | 停止 ticker，取消并等待活动任务，再关闭缓存 |
 
-两个 YAML 时长独立，只要求正值。允许进入窗口 `2h`、定时 `1m`；显式 `0s`、负值和非法时长会拒绝加载。省略字段使用默认值。示例位于 `models-enricher/config.yaml`：
+两个 YAML 时长独立，只要求正值。允许进入窗口 `2h`、定时 `1m`；显式 `0s`、负值和非法时长会拒绝加载。省略字段使用默认值。示例位于 `services/routing/model-catalog/config.yaml`：
 
 ```yaml
 scheduled_refresh_interval: 30m
@@ -27,7 +27,7 @@ entry_refresh_window: 10m
 
 ## 本地验证
 
-测试位于 `models-enricher/scheduled_refresh_test.go`，复用现有 `httptest` 假 CPA/AISIX/元数据源，不访问生产。覆盖：冷页不等上游、窗口内不触发、超窗返回旧数据、进入/手动/并发加入单任务、启动/定时、取消/停机、成功时间与独立时长配置。原 SSR、手动刷新、持久输入缓存测试改为显式预热/等待，不再假设 GET 同步采集。
+测试位于 `services/routing/model-catalog/scheduled_refresh_test.go`，复用现有 `httptest` 假 CPA/AISIX/元数据源，不访问生产。覆盖：冷页不等上游、窗口内不触发、超窗返回旧数据、进入/手动/并发加入单任务、启动/定时、取消/停机、成功时间与独立时长配置。原 SSR、手动刷新、持久输入缓存测试改为显式预热/等待，不再假设 GET 同步采集。
 
 变更前，`TestModelsTableColdEntryDoesNotWaitForCollection` 因 `cold GET waited for the blocked upstream` 失败；变更后通过。本地同一假元数据源等待 200ms 的单样本如下，非生产延迟或分位数：
 
@@ -45,7 +45,7 @@ entry_refresh_window: 10m
 (cd models-enricher && TMPDIR=/var/tmp env -u CPA_API_KEY go test -race ./...)
 (cd models-enricher && TMPDIR=/var/tmp env -u CPA_API_KEY go vet ./...)
 (cd models-enricher && TMPDIR=/var/tmp env -u CPA_API_KEY go test -count=1 -run TestModelsTableFakeUpstreamLatency -v .)
-TMPDIR=/var/tmp env -u CPA_API_KEY ./scripts/validate.sh .env.example
+TMPDIR=/var/tmp env -u CPA_API_KEY ./ops/scripts/validate.sh .env.example
 openspec validate --all --strict
 ```
 
@@ -53,7 +53,7 @@ openspec validate --all --strict
 
 此改动只提交源码和文档；没有发布 models-enricher 镜像、访问生产或部署。以下步骤交给中控，在明确授权及单一生产写入 lease 下执行；不重启 VM，也不动 keeper、bridge、Sub2API 或整个上游栈。
 
-1. 确认最终源码提交和其 Validate CI 成功。镜像由 `.github/workflows/publish-models-enricher.yml` 手动触发构建，服务名 `models-enricher`，仓库 `ghcr.io/xz-dev/ai-gateway-models-enricher`，构建上下文 `./models-enricher`。例如在最终提交位于 `main` 后：
+1. 确认最终源码提交和其 Validate CI 成功。镜像由 `.github/workflows/publish-models-enricher.yml` 手动触发构建，服务名 `models-enricher`，仓库 `ghcr.io/xz-dev/ai-gateway-models-enricher`，构建上下文 `./services/routing/model-catalog`。例如在最终提交位于 `main` 后：
 
    ```sh
    version="scheduled-refresh-$(git rev-parse --short=12 HEAD)"
@@ -63,7 +63,7 @@ openspec validate --all --strict
 
    使用全新不可变版本名；核对运行的完整 `headSha` 等于批准源码提交，等待构建成功并读取镜像 digest。不要用其他 main tip 的构建代替，也不要仅凭标签断言镜像来源。
 
-2. fresh-read 生产配置、容器/镜像/netns/健康状态，与本地 gitignored `ansible/private-config` 核对。远端备份目录 `0700`、文件 `0600`；保留旧镜像 pin、本地回滚收据和 CAS 基线。不需要远端 Git checkout。
+2. fresh-read 生产配置、容器/镜像/netns/健康状态，与本地 gitignored `ops/ansible/private-config` 核对。远端备份目录 `0700`、文件 `0600`；保留旧镜像 pin、本地回滚收据和 CAS 基线。不需要远端 Git checkout。
 
 3. 把经核验的不可变镜像 pin 写入 private-config 中 `MODELS_ENRICHER_IMAGE` 的实际配置源，不覆盖其他环境项。默认时长无需修改生产 YAML。若需自定义，在镜像升级后使用既有 `deploy-models-enricher-config` 流程，保留渠道、static_models 和私密凭证：
 

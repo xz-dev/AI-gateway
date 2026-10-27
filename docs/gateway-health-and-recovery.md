@@ -8,14 +8,14 @@ Health has three separate meanings:
 
 ## Application recovery
 
-`scripts/ops/gateway-recovery.py` runs on the Docker host through `ai-gateway-recovery.timer`. It uses Python's standard library, the local Docker Unix socket, and Linux network namespaces. Python 3.12 or later with `os.setns` is required. Probes use direct local sockets, not proxy environment variables, and never request provider inference.
+`ops/scripts/host/gateway-recovery.py` runs on the Docker host through `ai-gateway-recovery.timer`. It uses Python's standard library, the local Docker Unix socket, and Linux network namespaces. Python 3.12 or later with `os.setns` is required. Probes use direct local sockets, not proxy environment variables, and never request provider inference.
 
 | Application | Probe | Meaning |
 | --- | --- | --- |
 | cli-proxy-api | Authenticated `GET /v1/models`, HTTP 200 and a JSON `data` array | CPA can serve its local catalog read path |
 | sub2api | `GET /health`, HTTP 200 | Application health endpoint; dependency semantics belong to Sub2API |
 | openai-api-cache-keeper | `GET /healthz`, HTTP 200 | Keeper HTTP liveness, not proof of cache writes, hits or replay |
-| responses-ws-sse-bridge | `GET :8086/healthz`, HTTP 200 | Bridge local liveness; deployed 2026-10-23, see the [rollout record](deployment-batch-20261023.md#recovery-guard--deployed) |
+| responses-ws-sse-bridge | `GET :8086/healthz`, HTTP 200 | Bridge local liveness; deployed 2026-10-23, see the [rollout record](records/deployment-batch-20261023.md#recovery-guard--deployed) |
 | models-enricher | `GET /healthz`, HTTP 200 | Enricher local liveness |
 | ai-sse-keepalive-proxy | `GET /healthz`, HTTP 200 | Keepalive proxy local liveness |
 | apisix | Local `GET /healthz`, expected HTTP 404 | APISIX's unmatched-route rejection responds; no upstream request |
@@ -65,7 +65,7 @@ cache wipe is needed for this probe fix. Keep catalog authentication intact.
 
 Deploy the explicit `apisix-models` local health route and strict health status check first. Its old `/healthz` catch-all reached CPA; that would turn an upstream outage into an unsafe proxy-restart signal. The old shell check also accepted HTTP 502 and 503 because it ended with `true`.
 
-From `ansible/`:
+From `ops/ansible/`:
 
 ```bash
 ansible-playbook ops.yml --tags deploy-recovery -e ai_ops_mode=plan
@@ -156,7 +156,7 @@ recreated by this repair lane.
 ## Verification and limits
 
 ```bash
-python3 scripts/test-gateway-recovery.py
+python3 ops/scripts/tests/test-gateway-recovery.py
 ```
 
 The tests exercise strict production Compose commands against HTTP 200/502/503, authentication and JSON checks, a live health endpoint with a stuck catalog, startup grace, consecutive failures, cooldown/hourly limits across instances, namespace restoration and wall-clock timeout, and persistence before an unknown restart outcome. They also reject another process's listener in a shared namespace, a missing supervised relay port, default-route escape, a missing owned TUN handle, non-PONG Redis responses, stale native success, and confusing worker progress with dependency readiness. Restart API effects are mocked; this is not a production fault-injection result.

@@ -11,7 +11,7 @@ Component graph and responsibility split of the gateway stack.
 > 1. Components are cleanly separated, so humans can easily review the architecture and check that the configuration is correct.
 > 2. No automated deployment script hides or unifies the complexity of the configuration files. Let an AI make configuration changes for you, so that nothing is changed incorrectly or missed.
 
-Model inventory synchronization: [cpa-model-sync usage and policy migration](../cpa-model-sync/README.md).
+Model inventory synchronization: [cpa-model-sync usage and policy migration](../services/cpa/cpa-model-sync/README.md).
 The Rust sidecar manages only the five supported API-key kinds through CPA's internal
 Management API. Gemini/Interactions retain their existing inventory behavior; models-enricher metadata,
 OAuth/native visibility, static aliases and downstream authorization remain separate.

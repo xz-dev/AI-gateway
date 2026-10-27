@@ -11,7 +11,7 @@
 
 ## 2. Production (separately approved window)
 
-Operator decision (2026-10-20): deploy AISIX and 9083 together, verify, then push the deployment record; leave other agents' code untouched. Activation completed at 03:52 UTC; bounded verification completed at 04:09 UTC. See [deployment evidence and remaining limits](../../../docs/one-way-edges-deployment-2026-10-20.md).
+Operator decision (2026-10-20): deploy AISIX and 9083 together, verify, then push the deployment record; leave other agents' code untouched. Activation completed at 03:52 UTC; bounded verification completed at 04:09 UTC. See [deployment evidence and remaining limits](../../../docs/records/one-way-edges-deployment-2026-10-20.md).
 
 - [x] 2.1 Snapshot compose, override, `.env`, `aisix/config.yaml`, both APISIX configs and the catalog template into `.rollback/one-way-edges-20261020T034458Z/`, and record container/network/volume maps and old baselines
 - [x] 2.2 Upload files and recreate the coupled stack, including the provider-sidecar trio, without builds or volume deletion; remove the four obsolete networks before `up` because their subnets are reused

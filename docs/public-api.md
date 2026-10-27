@@ -2,7 +2,7 @@
 
 Which routes the front APISIX exposes and how opaque responses are shaped.
 
-APISIX forwards the supported OpenAI, Anthropic, Gemini, Codex, Antigravity, image, audio, video, realtime, and compatible root routes defined in [`apisix/apisix.yaml`](../apisix/apisix.yaml).
+APISIX forwards the supported OpenAI, Anthropic, Gemini, Codex, Antigravity, image, audio, video, realtime, and compatible root routes defined in [`services/firewall/apisix/apisix.yaml`](../services/firewall/apisix/apisix.yaml).
 
 Opaque responses are protocol-correct:
 

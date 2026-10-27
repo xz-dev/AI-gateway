@@ -13,8 +13,8 @@ Ansible never constructs configuration on the remote.
   comment. Override from inventory; never edit role files for local settings.
 - `roles/ai_ops/tasks/` — shared preflight and component file operations.
 - `private-config/` — **gitignored** operator's private config directory
-  (`compose.yaml`, `compose.override.yaml`, `.env`, `aisix/resources.yaml`,
-  `cpa-model-sync/config.json`, `data/egress-proxy/policy.json`), adopted from
+  (`compose.yaml`, `compose.override.yaml`, `.env`, `services/routing/aisix/resources.yaml`,
+  `services/cpa/cpa-model-sync/config.json`, `data/egress-proxy/policy.json`), adopted from
   production at baseline.
 
 ## Usage
@@ -82,7 +82,7 @@ defaults. Key ones:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ai_ops_config_dir` | `ansible/private-config/` | private config source dir (gitignored) |
+| `ai_ops_config_dir` | `ops/ansible/private-config/` | private config source dir (gitignored) |
 | `ai_ops_deploy_root` | `/root/AI-gateway` | remote deployment root |
 | `ai_ops_compose_project` | `ai-gateway` | compose project name |
 | `ai_ops_compose_cmd` | auto-detect | compose provider (`docker compose` / `podman compose` / `podman-compose`) |
@@ -120,7 +120,7 @@ or restore them, and do not repeatedly adopt scheduled model changes into a seed
 
 For a new host, initialize this file explicitly **before** planning a component.
 After confirming it is missing, prepare its parent directory privately (0700)
-and review the private seed. From `ansible/`, this one-time copy refuses to replace
+and review the private seed. From `ops/ansible/`, this one-time copy refuses to replace
 an existing live file, including one created after the missing-file check:
 
 ```bash
@@ -177,7 +177,7 @@ binary can be selected with `ai_ops_local_compose_cmd`; do not install global
 packages for a one-off plan.
 
 ```bash
-# From ansible/, with private-config adopted from production, not the public example.
+# From ops/ansible/, with private-config adopted from production, not the public example.
 ansible-playbook ops.yml --tags deploy -e service=openai-api-cache-keeper -e ai_ops_mode=plan
 ansible-playbook ops.yml --tags deploy -e service=responses-ws-sse-bridge -e ai_ops_mode=plan
 
@@ -326,15 +326,15 @@ be mistaken for a stale Ansible transaction.
 Offline lifecycle verification (fake Docker, no production apply):
 
 ```bash
-python3 scripts/test-component-deploy.py
-python3 scripts/test-component-apply.py --evidence /var/tmp/component-apply-tests
+python3 ops/scripts/tests/test-component-deploy.py
+python3 ops/scripts/tests/test-component-apply.py --evidence /var/tmp/component-apply-tests
 ```
 
 ## Model-sync policy safety
 
 `deploy-model-sync` requires a running preview-capable sidecar image before the
 first managed policy change. First adopt the reviewed live
-`cpa-model-sync/config.json` into the ignored private path; when local and remote
+`services/cpa/cpa-model-sync/config.json` into the ignored private path; when local and remote
 bytes match, readback establishes the reviewed baseline without recreation.
 
 For a changed policy, plan mode streams local JSON to `cpa-model-sync --preview -`
@@ -352,8 +352,8 @@ digest; an unproven recovery is reported as failure, never success.
 `deploy-models-enricher-config` requires a running validation-capable
 models-enricher image (one that provides `validate-config`) before the first
 managed config change. First adopt the reviewed live
-`models-enricher/config.yaml` into the ignored private path
-`ansible/private-config/models-enricher/config.yaml`; when local and remote
+`services/routing/model-catalog/config.yaml` into the ignored private path
+`ops/ansible/private-config/services/routing/model-catalog/config.yaml`; when local and remote
 bytes match, readback establishes the reviewed baseline without recreation.
 
 For a changed config, plan mode streams local YAML to
@@ -382,7 +382,7 @@ reported as recovery-required, never success.
   on rainyun-la 2026-09-19.
 - **models-enricher loads `config.yaml` only at startup**, so config deploys
   use the same `--force-recreate` activation; the tracked
-  `models-enricher/config.yaml` is an image/build default — production desired
+  `services/routing/model-catalog/config.yaml` is an image/build default — production desired
   state lives only in the gitignored private config dir.
 - **The post-deploy Admin API route check is optional** (`failed_when: false`):
   the internal relay path currently returns 401, so effective-route verification

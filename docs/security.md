@@ -28,4 +28,4 @@ Security boundaries of the AI gateway stack: client authority, public filtering,
 - Every image uses an explicit non-floating version tag, optionally with a SHA-256 digest pin; `latest` is rejected by validation. Every container has PID, memory, CPU, capability, and log-size bounds. Root filesystems are read-only where runtime evidence showed no required overlay writes; APISIX and Sub2API retain writable roots for generated configuration and request handling.
 - Cloudflare Tunnel receives its token from the ignored mode-`0600` `.env`, never from tracked Compose or config files.
 
-Production rollout and bounded live checks: [2026-10-20 one-way edges deployment](one-way-edges-deployment-2026-10-20.md).
+Production rollout and bounded live checks: [2026-10-20 one-way edges deployment](records/one-way-edges-deployment-2026-10-20.md).

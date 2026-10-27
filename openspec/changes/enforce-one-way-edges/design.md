@@ -15,4 +15,4 @@ A relay can reach the backend on its target network and listeners exposed by its
 
 ## Rollout
 
-Namespace-owner network membership changes for AISIX, Sub2API, CPA, the enricher and apisix-models. Per README Operations, this requires one coupled full-stack recreation, not per-service recreation. The old and new network definitions reuse subnets, so production stopped the coupled stack and removed the obsolete networks before starting the new topology, without deleting volumes. The provider-sidecar trio was included. [Deployment evidence](../../../docs/one-way-edges-deployment-2026-10-20.md) records the checks and limitations.
+Namespace-owner network membership changes for AISIX, Sub2API, CPA, the enricher and apisix-models. Per README Operations, this requires one coupled full-stack recreation, not per-service recreation. The old and new network definitions reuse subnets, so production stopped the coupled stack and removed the obsolete networks before starting the new topology, without deleting volumes. The provider-sidecar trio was included. [Deployment evidence](../../../docs/records/one-way-edges-deployment-2026-10-20.md) records the checks and limitations.

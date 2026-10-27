@@ -28,7 +28,7 @@ Squid 是白名单默认拒绝。CPA 容器走 `cpa-squid-relay` → egress-prox
 应用（render 只重写 `data/egress-proxy/generated/`，squid `reconfigure` 热加载）：
 
 ```bash
-python3 scripts/render-egress-policy.py data/egress-proxy/policy.json data/egress-proxy/generated
+python3 ops/scripts/render-egress-policy.py data/egress-proxy/policy.json data/egress-proxy/generated
 docker exec ai-gateway-egress-proxy-1 squid -f /etc/squid/generated/squid.conf -k parse
 docker exec ai-gateway-egress-proxy-1 squid -f /etc/squid/generated/squid.conf -k reconfigure
 ```
@@ -64,19 +64,19 @@ curl -X POST .../v1/responses -d '{"model":"aihub/<model>","input":"hi"}'       
 
 管理 API（只读盘点用，写操作走配置文件更可控）：`mgmt.key` 在 `data/cpa/mgmt.key`，`GET http://127.0.0.1:8317/v0/management/openai-compatibility`。
 
-## 3. AISIX 路由（`aisix/resources.yaml`）
+## 3. AISIX 路由（`services/routing/aisix/resources.yaml`）
 
 **文件权限坑**（本次踩过）：AISIX 容器跑 uid 10001(`aisix`)，aisix-status 跑 65532(nobody)。bind-mount 文件须 `chown 10001:10001` 目录(755)，`resources.yaml` 600（仅 aisix 读），`config.yaml` 444（status 页要读 token 调 admin API）。否则容器 `Permission denied` 重启崩环、`/status` 页 unavailable。
 
 **直连目标**：每个 `prefix/model` 一个 direct model，`display_name`/`model_name` 与 CPA 名逐字节一致，`provider_key: cpa-pool`。
 
-**逻辑模型 failover 链**（如 `gpt-5.6-terra`）：`strategy: failover`，`targets` 有序候选。`max_fallbacks` 不写 — `deploy-aisix` preflight 会自动跑 `scripts/ops/normalize-aisix-resources.py` 把它改成 `len(targets)-1`，你只改 targets 列表即可。注意 `retries: N` 会放大上游调用：最多 `(N+1) × (max_fallbacks+1)` 次，需有界。
+**逻辑模型 failover 链**（如 `gpt-5.6-terra`）：`strategy: failover`，`targets` 有序候选。`max_fallbacks` 不写 — `deploy-aisix` preflight 会自动跑 `ops/scripts/host/normalize-aisix-resources.py` 把它改成 `len(targets)-1`，你只改 targets 列表即可。注意 `retries: N` 会放大上游调用：最多 `(N+1) × (max_fallbacks+1)` 次，需有界。
 
 应用：`docker compose up -d --no-deps --no-build --pull never --force-recreate aisix`（只重建 aisix，不动其它）。验证 `docker logs` 见 `resources loaded ... resources=N`。
 
-## 4. models-enricher 目录来源（`models-enricher/config.yaml`）
+## 4. models-enricher 目录来源（`services/routing/model-catalog/config.yaml`）
 
-新 prefix 出现在 CPA 目录后，enricher 决定元数据。未配置规则的渠道使用根 `metadata.chain`。要为渠道指定来源，在 `metadata.models` 加一条规则，例如 `{match: "<prefix>/**", chain: ["models.dev/<provider>/api_key", "@self"]}`；需要渠道上游的富数据时在链中加入 `@cpa-upstream`（只在链需要时才经 CPA `api-call` 读取）。要隐藏模型，在 `metadata.include_models` 加 `!` 条目。上限同步需要时把该渠道 glob 加入根 `sync_max_context_window` 列表。改后在 `models-enricher/` 运行 `npm test`，并用部署镜像的 `/models-enricher validate-config -` 校验私有配置（输出 `{"version":1,"config_digest":...}`）。
+新 prefix 出现在 CPA 目录后，enricher 决定元数据。未配置规则的渠道使用根 `metadata.chain`。要为渠道指定来源，在 `metadata.models` 加一条规则，例如 `{match: "<prefix>/**", chain: ["models.dev/<provider>/api_key", "@self"]}`；需要渠道上游的富数据时在链中加入 `@cpa-upstream`（只在链需要时才经 CPA `api-call` 读取）。要隐藏模型，在 `metadata.include_models` 加 `!` 条目。上限同步需要时把该渠道 glob 加入根 `sync_max_context_window` 列表。改后在 `services/routing/model-catalog/` 运行 `npm test`，并用部署镜像的 `/models-enricher validate-config -` 校验私有配置（输出 `{"version":1,"config_digest":...}`）。
 
 WebSocket 入站由 Sub2API 统一鉴权和处理；内部 models gateway 不再维护独立 WS 别名表。
 

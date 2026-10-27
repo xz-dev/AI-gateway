@@ -17,17 +17,17 @@ jobs:
           toolchain: 1.96.0
           components: rustfmt, clippy
       - name: Check Rust model synchronization
-        working-directory: cpa-model-sync
+        working-directory: services/cpa/cpa-model-sync
         run: |
           cargo fmt --check
           cargo test --locked
           cargo clippy --locked --all-targets -- -D warnings
       - uses: actions/setup-go@v5
         with:
-          go-version-file: aisix-status/go.mod
-          cache-dependency-path: aisix-status/go.sum
+          go-version-file: services/routing/aisix-status/go.mod
+          cache-dependency-path: services/routing/aisix-status/go.sum
       - name: Check AISIX status boundary
-        working-directory: aisix-status
+        working-directory: services/routing/aisix-status
         run: |
           go test -race ./...
           go vet ./...
@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: models-enricher
+        working-directory: services/routing/model-catalog
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,7 +44,7 @@ jobs:
         with:
           node-version: 26
           cache: npm
-          cache-dependency-path: models-enricher/package-lock.json
+          cache-dependency-path: services/routing/model-catalog/package-lock.json
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
@@ -59,6 +59,6 @@ jobs:
       - name: Validate reusable Compose and runtime boundaries
         env:
           AI_GATEWAY_TUN_TEST_MODE: ci-privileged
-        run: ./scripts/validate.sh .env.example
+        run: ./ops/scripts/validate.sh .env.example
       - name: Render generic provider-sidecar scaffold
-        run: ./scripts/test-provider-sidecar-compose-candidate.sh
+        run: ./ops/scripts/tests/test-provider-sidecar-compose-candidate.sh

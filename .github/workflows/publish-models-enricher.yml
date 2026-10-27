@@ -51,7 +51,7 @@ jobs:
           fi
       - uses: docker/build-push-action@v6
         with:
-          context: ./models-enricher
+          context: ./services/routing/model-catalog
           push: true
           pull: true
           tags: |
