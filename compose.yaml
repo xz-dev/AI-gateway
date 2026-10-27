@@ -827,7 +827,7 @@ services:
   model-catalog:
     build:
       context: ./services/routing/model-catalog
-    image: ${MODEL_CATALOG_IMAGE:-ghcr.io/xz-dev/ai-gateway-model-catalog:ts-shadow-b4439caba423@sha256:c836e2bb3c829142403b9ed6d8a29c9324a0356f208c5b513f26ccdce663ce70}
+    image: ${MODEL_CATALOG_IMAGE:-ghcr.io/xz-dev/ai-gateway-model-catalog:v1.0.0-467cbac@sha256:8a269bce038d0334021eb2c26f98787ef3a96dd48fac363aabc824c0b204bd5e}
     pull_policy: missing
     network_mode: service:model-catalog-netns
     restart: unless-stopped

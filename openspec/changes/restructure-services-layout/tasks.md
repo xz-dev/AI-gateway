@@ -26,7 +26,7 @@
 - [x] 4.2 CI and Dependabot: rename the workflow to `publish-model-catalog.yml` (image `ai-gateway-model-catalog`) and update the paths in `validate.yml` and `dependabot.yml`. Verify: `check-jsonschema` passes for both, and CI is green after the push.
 - [x] 4.3 Add `ops/scripts/host/migrate-services-layout.py` (plan/apply, idempotent, backup and receipt) for the deploy root and `ansible/private-config`. Verify: a test against a fixture tree covers plan, apply, re-apply as a no-op, and restore.
 - [x] 4.4 Docs: the root README's component table, documentation index and architecture diagram follow the new tree (`model-catalog` reads CPA and AISIX; no sidecar), and every current `docs/` page is updated for the new paths and names. Every `services/<group>/` and every component directory under it, plus `ops/ansible/` and `ops/scripts/`, has its own short README saying where it sits, what it does and how to use it, with a link to its `docs/` page. Also update the Purpose of `codex-models-enricher` and `models-enricher-runtime`. Verify: `git grep -nE 'models-enricher|model-catalog-sidecar'` hits only `openspec/changes/archive`, `docs/records` and the D2 table; link check is 0 broken; `openspec validate --all --strict` passes.
-- [ ] 4.5 Commit (unsigned) and push, then publish `ai-gateway-model-catalog` from the new path. Verify: the publish run succeeds, and the digest is pinned in `compose.yaml` and `.env.example`.
+- [x] 4.5 Commit (unsigned) and push, then publish `ai-gateway-model-catalog` from the new path. Verify: the publish run succeeds, and the digest is pinned in `compose.yaml` and `.env.example`.
 
 ## 5. Production migration
 
