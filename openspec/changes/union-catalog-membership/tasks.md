@@ -68,7 +68,7 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - CPA healthy; one CPA-routed and one AISIX-routed inference succeed;
   - the catalog is unchanged;
   - a `supergrok/grok-imagine-image` images request reaches the xAI upstream, with no CPA `not supported`/`unknown provider` error. Use the cheapest request that proves routing;
-  - plugin log lines show no new failure type;
+  - both `cpa-quota-estimator` and `codex-auto-reset` log `plugin loaded` (a load failure is a regression: roll back);
   - the D6 SSE framing gate passes on the CPA operator port and on the public chain.
 
   If the gate fails with buffering on, roll back to the previous CPA digest and stop for a user decision.

@@ -124,7 +124,7 @@ CPA-admitted(id) =
 - [An upstream original whose first segment equals its own channel's prefix is admitted bare too: the `openrouter` channel declares `openrouter/auto`, so both `openrouter/auto` and `openrouter/openrouter/auto` qualify. Neither is in the native manifest today] → Both route to the same channel. Hide one with `include_models` if it appears. A unit test pins the behavior.
 - [A future OAuth account without a prefix whose originals contain `/` is not admitted] → That is the purpose of `cpa_include`. The models table shows hidden or absent IDs. The docs say to add a glob.
 - [Fallback admits upstream slash originals while Management reads are down] → Warning logs plus the read cache's last good responses. It is the same degraded behavior as today.
-- [Changing the CPA image also changes the plugin host (v8.0.38 → v8.0.44)] → Batch A checks the plugin log lines. The plugin load failure that already exists (noexec `/tmp`) is tracked separately and not counted as a regression.
+- [Changing the CPA image also changes the plugin host (v8.0.38 → v8.0.44); `codex-auto-reset` targets v8.0.36] → The noexec `/tmp` plugin failure is fixed before this change (CPA plugin update), so after the image switch both `cpa-quota-estimator` and `codex-auto-reset` must log `plugin loaded`; any plugin load failure is a regression and triggers the batch B rollback.
 
 ## Migration Plan
 
