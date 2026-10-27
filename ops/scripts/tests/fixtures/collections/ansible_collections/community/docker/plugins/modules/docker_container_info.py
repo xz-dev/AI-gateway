@@ -12,7 +12,8 @@ def main():
         module.exit_json(changed=False, exists=False, container=None)
     rc, image, _ = runtime("inspect", "--format={{.Image}}", ident)
     container = {"Id": ident, "Name": "/" + name.lstrip("/"), "Image": image.strip(),
-                 "State": {"Running": True, "Status": "running"}, "Config": {"Env": []}}
+                 "State": {"Running": True, "Status": "running"},
+                 "Config": {"Env": ["API_KEY=fixture-protected-container-secret"]}}
     module.exit_json(changed=False, exists=True, container=container)
 
 

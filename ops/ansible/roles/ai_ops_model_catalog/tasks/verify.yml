@@ -106,6 +106,7 @@
   loop: "{{ __ai_ops_model_catalog_protected_now.results }}"
   loop_control:
     label: "{{ item.item.key }}"
+  no_log: true  # assert emits the full loop item, including container environment
 
 - name: Preserve sanitized verification facts
   ansible.builtin.set_fact:

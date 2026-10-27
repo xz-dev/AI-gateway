@@ -196,6 +196,7 @@ assert_no_match ' up ' "$state/compose-calls"
 # --- Approved apply: upload, recreate only model-catalog, verify ---
 clear_calls
 playbook deploy-config apply "$tmp/apply.out"
+assert_no_match 'fixture-protected-container-secret' "$tmp/apply.out"
 cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$new_cfg")
 cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$new_cfg")
 grep -q 'up -d --force-recreate --no-deps --no-build model-catalog' "$state/compose-calls"
@@ -283,6 +284,7 @@ if playbook deploy-config apply "$tmp/drift.out"; then
     exit 1
 fi
 unset FAKE_MODE
+assert_no_match 'fixture-protected-container-secret' "$tmp/drift.out"
 grep -q 'protected container' "$tmp/drift.out" || grep -q 'catalog-cpa-relay' "$tmp/drift.out"
 
 # --- Guarded rollback restores the protected config ---
@@ -292,6 +294,7 @@ printf '%s' "$old_cfg" >"$deploy/.ai-ops-state/model-catalog__config.yaml.predep
 printf '%s' "$old_cfg" >"$private/services/routing/model-catalog/config.yaml"
 clear_calls
 playbook rollback-config apply "$tmp/rollback.out"
+assert_no_match 'fixture-protected-container-secret' "$tmp/rollback.out"
 cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
 cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$old_cfg")
 rollback_receipt=$(find "$deploy/.ai-ops-state" -name 'receipt-model-catalog-rollback-*.txt' | head -1)

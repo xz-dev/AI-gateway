@@ -23,3 +23,9 @@ An identical config apply is intentionally a no-op. To exercise the activation p
 `deploy-config.yml -e component=model-catalog` succeeded. Only `ai-gateway-model-catalog-1` changed container ID; all other container IDs stayed identical. Model-catalog was healthy, restarts=0. Public models returned 200 with 367 rows; public Codex models returned 200 with 358 rows; trusted loopback `:9083/models-table` returned 200. Counts matched the pre-capture. The following config check reported `changed=0 failed=0`.
 
 A temporary admin-owned Sub2API key in normal-client group 15 was used; no key value or public hostname is recorded here. Its cleanup proof is recorded with the subsequent CPA plugin maintenance record.
+
+## Apply-output confidentiality follow-up
+
+A final exact-value credential scan found that the real activation's protected-neighbour assertion emitted a complete loop item (including a neighbour's CPA API-key environment), despite `loop_control.label` and the preceding inspection task's `no_log`. Check-mode outputs were unaffected. The credential remained in private 0700 controller scratch, was never copied into tracked files or a report, and the affected log was redacted in place and restricted to 0600.
+
+The assertion now has its own `no_log: true`. A synthetic container-environment canary reproduced the leak before the fix; the model-catalog fixture now verifies absence during successful apply, protected-neighbour failure and rollback. The full fixture passes after the fix. Production verification tasks were replayed read-only against the existing recreated container (no second activation): `changed=0 failed=0`, with no credential value in output. Production-profile lint passed with zero failures/warnings.
