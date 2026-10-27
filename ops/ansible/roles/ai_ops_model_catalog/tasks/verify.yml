@@ -1,0 +1,115 @@
+---
+# Verify one freshly recreated model-catalog container after a config deploy/rollback.
+# Input: ai_ops_managed_file_verify_expected with policy_digest (sha256 of the expected
+# config.yaml bytes), image_identity, old_container (the new one must differ) and
+# protected (service -> container ID, must be unchanged).
+
+- name: Select the expected model-catalog state
+  ansible.builtin.set_fact:
+    __ai_ops_model_catalog_expected: "{{ ai_ops_managed_file_verify_expected }}"
+
+- name: Read model-catalog container
+  community.docker.docker_container_info:
+    name: "{{ ai_ops_compose_project }}-model-catalog-1"
+  register: __ai_ops_model_catalog_now
+  failed_when: not __ai_ops_model_catalog_now.exists
+  no_log: true  # the container record holds its environment
+
+- name: Require a fresh model-catalog container
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_model_catalog_now.container.Id != __ai_ops_model_catalog_expected.old_container
+    fail_msg: >-
+      model-catalog was not recreated
+      (container={{ __ai_ops_model_catalog_now.container.Id }} still matches pre-activation ID
+      {{ __ai_ops_model_catalog_expected.old_container }}).
+
+- name: Require expected model-catalog image identity
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_model_catalog_now.container.Image == __ai_ops_model_catalog_expected.image_identity
+    fail_msg: >-
+      model-catalog image changed during the operation
+      (expected={{ __ai_ops_model_catalog_expected.image_identity }},
+      observed={{ __ai_ops_model_catalog_now.container.Image }}).
+
+- name: Validate mounted config inside the replacement container
+  community.docker.docker_compose_v2_exec:
+    service: model-catalog
+    argv: [/model-catalog, validate-config, /app/config.yaml]
+    tty: false
+  register: __ai_ops_model_catalog_validate_raw
+  changed_when: false
+  failed_when: __ai_ops_model_catalog_validate_raw.rc != 0
+  check_mode: false
+  no_log: true
+
+- name: Parse in-container validation
+  ansible.builtin.set_fact:
+    __ai_ops_model_catalog_validate: "{{ __ai_ops_model_catalog_validate_raw.stdout | from_json }}"
+  no_log: true
+
+- name: Require mounted config to match expected bytes
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_model_catalog_validate.version | int == 1
+      - __ai_ops_model_catalog_validate.config_digest == __ai_ops_model_catalog_expected.policy_digest
+    fail_msg: >-
+      model-catalog loaded unexpected config bytes
+      (expected={{ __ai_ops_model_catalog_expected.policy_digest }},
+      observed={{ __ai_ops_model_catalog_validate.config_digest | default('missing') }}).
+
+- name: Re-check remote file checksum
+  ansible.builtin.stat:
+    path: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+    checksum_algorithm: sha256
+  register: __ai_ops_model_catalog_remote_stat
+
+- name: Require remote file unchanged after activation
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_model_catalog_remote_stat.stat.checksum == __ai_ops_model_catalog_expected.policy_digest
+    fail_msg: >-
+      remote services/routing/model-catalog/config.yaml changed after activation
+      (expected={{ __ai_ops_model_catalog_expected.policy_digest }},
+      observed={{ __ai_ops_model_catalog_remote_stat.stat.checksum }}).
+
+- name: Wait for model-catalog readiness
+  community.docker.docker_compose_v2_exec:
+    service: model-catalog
+    argv: [/model-catalog, healthcheck]
+    tty: false
+  register: __ai_ops_model_catalog_ready
+  changed_when: false
+  failed_when: __ai_ops_model_catalog_ready.rc != 0
+  check_mode: false
+  retries: "{{ ai_ops_model_catalog_verify_retries }}"
+  delay: "{{ ai_ops_model_catalog_verify_delay_seconds }}"
+  until: __ai_ops_model_catalog_ready.rc == 0
+
+- name: Read protected adjacent containers
+  community.docker.docker_container_info:
+    name: "{{ ai_ops_compose_project }}-{{ item.key }}-1"
+  register: __ai_ops_model_catalog_protected_now
+  loop: "{{ __ai_ops_model_catalog_expected.protected | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true  # the container records hold their environment
+
+- name: Require protected container identities unchanged
+  ansible.builtin.assert:
+    that:
+      - (item.container | default({}, true)).Id | default('') == item.item.value
+    fail_msg: >-
+      protected container {{ item.item.key }} was recreated
+      (expected={{ item.item.value }}, observed={{ (item.container | default({}, true)).Id | default('') }}).
+  loop: "{{ __ai_ops_model_catalog_protected_now.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Preserve sanitized verification facts
+  ansible.builtin.set_fact:
+    ai_ops_model_catalog_verified_container: "{{ __ai_ops_model_catalog_now.container.Id }}"
+    ai_ops_model_catalog_verified_image: "{{ __ai_ops_model_catalog_now.container.Image }}"
+    ai_ops_model_catalog_verified_policy_digest: "{{ __ai_ops_model_catalog_validate.config_digest }}"
+    ai_ops_model_catalog_ready_attempts: "{{ __ai_ops_model_catalog_ready.attempts | default(1) }}"

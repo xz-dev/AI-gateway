@@ -1,0 +1,107 @@
+---
+# deploy-config.yml -e component=aisix: services/routing/aisix/resources.yaml.
+
+- name: Normalize max_fallbacks from targets count
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ ai_ops_scripts_dir }}/host/normalize-aisix-resources.py"
+      - "{{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml"
+  delegate_to: localhost
+  register: __ai_ops_aisix_normalize
+  changed_when: __ai_ops_aisix_normalize.stdout != 'normalized 0'
+  # Rewrites the private controller source, as the preview always did; never remote state.
+  check_mode: false
+  tags: [always]
+
+- name: Validate fallback-status contract
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ ai_ops_scripts_dir }}/check-aisix-resource-policy.py"
+      - --yaml
+      - "{{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml"
+  delegate_to: localhost
+  changed_when: false
+  check_mode: false
+  tags: [always]
+
+- name: Reject unverified literal retries=-1
+  ansible.builtin.shell: |
+    grep -nE 'retries:\s*-1' {{ (ai_ops_config_dir + '/services/routing/aisix/resources.yaml') | quote }} && exit 1 || true
+  delegate_to: localhost
+  register: __ai_ops_aisix_retry_guard
+  changed_when: false
+  check_mode: false
+  failed_when: __ai_ops_aisix_retry_guard.rc != 0
+  tags: [always]
+
+- name: Orphan report
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ ai_ops_scripts_dir }}/host/check-aisix-orphans.py"
+      - "{{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml"
+      - --adopted
+      - "{{ ai_ops_aisix_adopted_direct_models | to_json }}"
+      - --standalone
+      - "{{ ai_ops_aisix_standalone_retained | to_json }}"
+  delegate_to: localhost
+  register: __ai_ops_aisix_orphans
+  changed_when: false
+  check_mode: false
+  tags: [always]
+
+- name: Show orphan candidates (deletion requires explicit approval)
+  ansible.builtin.debug:
+    var: __ai_ops_aisix_orphans.stdout_lines
+  tags: [always]
+
+- name: Deploy resources.yaml
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: deploy
+  vars:
+    ai_ops_managed_file_label: aisix/resources.yaml
+    # AISIX runs as uid 10001; private source files may be 0600.
+    ai_ops_managed_file_mode: "0444"
+    ai_ops_managed_file_local: "{{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml"
+    ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/routing/aisix/resources.yaml"
+    # Force-recreate: resources.yaml is a bind mount, so a file-only change does not
+    # alter the container config hash and plain `up -d` would silently keep the old
+    # routing. AISIX loads resources.yaml only at startup; recreation is required.
+    ai_ops_managed_file_activate: {service: aisix, dependencies: false}
+  tags: [always]
+
+- name: Verify effective routes via Admin API (read-only, internal peer)
+  community.docker.docker_compose_v2_exec:
+    service: aisix-status-relay
+    argv:
+      - sh
+      - -c
+      - wget -qO- --header="Authorization: Bearer $AISIX_ADMIN_KEY" http://172.30.68.2:3002/admin/v1/models
+    tty: false
+  register: __ai_ops_aisix_models
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  no_log: true  # response may embed provider model names; keep receipt sanitized
+  tags: [verify]
+
+- name: Admin API check is optional until the pinned fixture proves it
+  ansible.builtin.debug:
+    msg: "admin API read skipped/failed (rc={{ __ai_ops_aisix_models.rc | default('n/a') }}); profile pending fixture proof"
+  when: not ansible_check_mode
+  tags: [verify]
+
+- name: Receipt
+  ansible.builtin.copy:
+    dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-aisix-{{ now(fmt='%s') }}.txt"
+    mode: "0600"
+    content: |
+      operation=aisix-deploy mode=apply
+      orphan_candidates={{ (__ai_ops_aisix_orphans.stdout | from_json).orphan_candidates }}
+      admin_api_checked={{ __ai_ops_aisix_models.rc | default(1) == 0 }}
+  when: not ansible_check_mode
+  tags: [activate]

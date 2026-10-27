@@ -18,9 +18,12 @@ import signal
 import subprocess
 import tempfile
 import threading
+import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fixture_env  # noqa: E402
 FAKE = r'''#!/usr/bin/python3
 import json, os, pathlib, sys, time
 path = pathlib.Path(__file__).with_name('state.json')
@@ -31,6 +34,7 @@ def image(ref):
  if ref not in s['images']:sys.exit(1)
  print(json.dumps({'Id':s['images'][ref], 'RepoDigests':['test/component@'+('sha256:'+'f'*64 if s.get('wrong_digest') else ref.rsplit('@',1)[-1])]}))
 if a[0]=='version':print('27.5.1')
+elif a[:3]==['compose','version','--short']:print('2.40.3')
 elif a[0]=='ps':print(' '.join(c['Id'] for c in s['containers']))
 elif a[0]=='inspect':print(json.dumps([c for c in s['containers'] if c['Id'] in a[1:]]))
 elif a[:2]==['image','inspect']:image(a[2])
@@ -46,6 +50,7 @@ elif a[0]=='pull':
  if s.get('drift_on_pull'):pathlib.Path(s['live'],'.env').write_text('another writer\n')
  save()
 elif a[0]=='compose':
+ if 'AI_OPS_SHADOW' in os.environ:s.setdefault('shadowed',[]).append([x for x in a if x in ('config','up')][:1]);save()
  conf=json.loads(pathlib.Path(a[a.index('-f')+1]).read_text())
  if 'config' in a:
   if '--quiet' not in a:print(json.dumps(conf))
@@ -87,7 +92,7 @@ class Fixture:
         self.home = Path(self.tmp.name)
         self.label, self.evidence, self.service = label, evidence, service
         self.repo, self.live, self.source, self.bin = [self.home / p for p in ('repo', 'live', 'source', 'bin')]
-        shutil.copytree(ROOT / 'ops/ansible', self.repo / 'ops/ansible', ignore=shutil.ignore_patterns('private-config', '*.log', '__pycache__'))
+        shutil.copytree(ROOT / 'ops/ansible', self.repo / 'ops/ansible', ignore=shutil.ignore_patterns('private-config', 'collections', '*.log', '__pycache__'))
         shutil.copytree(ROOT / 'ops/scripts/host', self.repo / 'ops/scripts/host', ignore=shutil.ignore_patterns('__pycache__'))
         for d in (self.live, self.source, self.bin):
             d.mkdir()
@@ -145,10 +150,13 @@ class Fixture:
         inventory = self.home / 'inventory'
         inventory.write_text('[gateway]\nfixture ansible_connection=local ansible_python_interpreter=/usr/bin/python3\n')
         self.inventory = inventory
-        self.env = dict(os.environ, PATH=str(self.bin)+':'+os.environ['PATH'], ANSIBLE_NOCOLOR='1', ANSIBLE_LOCAL_TEMP=str(self.home/'ansible-tmp'))
-        self.variables = {'service':service,'ai_ops_mode':'plan','ai_ops_runtime':'docker','ai_ops_config_dir':str(self.source),
-                          'ai_ops_deploy_root':str(self.live),'ai_ops_compose_cmd':'docker compose','ai_ops_local_compose_cmd':str(self.exe)+' compose',
-                          'ai_ops_front_verify_retries':1,'ai_ops_front_verify_delay_seconds':0,'ai_ops_min_mem_mb':0,'ai_ops_min_disk_mb':0}
+        fixture, renderer = fixture_env.prepare(self.home, render=str(self.exe)+' compose')
+        fixture['ANSIBLE_ROLES_PATH'] = str(self.repo/'ops/ansible/roles')
+        self.env = dict(os.environ, PATH=str(self.bin)+':'+os.environ['PATH'], ANSIBLE_NOCOLOR='1', ANSIBLE_LOCAL_TEMP=str(self.home/'ansible-tmp'), **fixture)
+        self.variables = {'component':service,'ai_ops_runtime':'docker','ai_ops_config_dir':str(self.source),
+                          'ai_ops_deploy_root':str(self.live),'ai_ops_compose_cmd':'docker compose',
+                          'ai_ops_component_verify_retries':1,'ai_ops_component_verify_delay_seconds':0,'ai_ops_min_mem_mb':0,'ai_ops_min_disk_mb':0,
+                          **renderer}
 
     def save(self, state):
         self.statefile.write_text(json.dumps(state))
@@ -160,10 +168,12 @@ class Fixture:
         return {p.name:p.read_bytes() for p in (self.live/'.ai-ops-state').glob('*.baseline')}
 
     def argv(self, op='deploy', apply=False, digest=None, **extra):
-        variables = dict(self.variables, ai_ops_mode='apply' if apply else 'plan', **extra)
+        variables = dict(self.variables, **extra)
         if digest:
-            variables['ai_ops_front_approved_digest'] = digest
-        return ['ansible-playbook','-i',str(self.inventory),'ops.yml','--tags',op,'-e',json.dumps(variables)]
+            variables['ai_ops_component_approved_digest'] = digest
+        playbook = {'deploy':'deploy','rollback':'rollback','recover-stale-lock':'unlock'}[op]
+        check = [] if apply else ['--check','--diff']
+        return ['ansible-playbook','-i',str(self.inventory),'playbooks/'+playbook+'.yml',*check,'-e',json.dumps(variables)]
 
     def run(self, label, op='deploy', apply=False, digest=None, success=True, **extra):
         result = subprocess.run(self.argv(op, apply, digest, **extra), cwd=self.repo/'ops/ansible', env=self.env, capture_output=True, text=True, timeout=360)
@@ -186,11 +196,11 @@ class Fixture:
         self.tmp.cleanup()
 
     def mutate(self, name):
-        tasks = self.repo/'ops/ansible/roles/ai_ops/tasks'
-        path = tasks/'front-component.yml'
+        tasks = self.repo/'ops/ansible/roles/ai_ops_component/tasks'
+        path = tasks/'transaction.yml'
         text = path.read_text()
         if name == 'no-image-proof':
-            old = "    - name: Verify exact candidate digest locally (rollback and preload never pull)\n      ansible.builtin.include_tasks: component-image.yml\n      vars:\n        _front_image_mode: local\n"
+            old = "    - name: Verify exact candidate digest locally (rollback and preload never pull)\n      ansible.builtin.include_tasks:\n        file: image.yml\n        apply:\n          tags: [always]\n      vars:\n        __ai_ops_component_image_mode: local\n"
             assert old in text
             text = text.replace(old, '')
         elif name == 'early-baseline':
@@ -198,14 +208,19 @@ class Fixture:
             text = text.replace(marker, "    - name: MUTATION advance baseline before recreate\n      ansible.builtin.copy:\n        src: '{{ ai_ops_deploy_root }}/{{ item }}'\n        dest: '{{ ai_ops_deploy_root }}/.ai-ops-state/{{ item }}.baseline'\n        remote_src: true\n      loop: [compose.yaml, compose.override.yaml, .env]\n\n" + marker)
         elif name == 'no-group-cas':
             marker = '    - name: Refuse changed live state after image preparation'
-            text = text.replace(marker, "    - name: MUTATION bless changed live state\n      ansible.builtin.set_fact:\n        _front_before_hashes: '{{ _front_live_hashes }}'\n\n" + marker)
+            text = text.replace(marker, "    - name: MUTATION bless changed live state\n      ansible.builtin.set_fact:\n        __ai_ops_component_before_hashes: '{{ __ai_ops_component_live_hashes }}'\n\n" + marker)
         elif name == 'no-neighbour-check':
-            text = '\n'.join(line for line in text.splitlines() if '_front_runtime.identity.protected == _front_before_runtime.identity.protected' not in line) + '\n'
+            text = '\n'.join(line for line in text.splitlines() if '__ai_ops_component_runtime.identity.protected == __ai_ops_component_before_runtime.identity.protected' not in line) + '\n'
+        elif name == 'no-env-isolation':
+            path = tasks/'state.yml'
+            text = path.read_text()
+            assert "ai_ops_compose_argv + ['config'" in text
+            text = text.replace("ai_ops_compose_argv + ['config'", "ai_ops_compose_base_argv + ['config'")
         elif name == 'no-progress':
             path = self.repo/'ops/scripts/host/component-lock.py'
             text = path.read_text().replace('result = progress(root, request)', "result = {'skipped': True}")
         elif name == 'no-native-probe':
-            path = tasks/'front-runtime.yml'
+            path = tasks/'runtime.yml'
             text = path.read_text()
             start = text.index("                ok = state.get('Running')")
             end = text.index("                return 'recovery_probe'", start)
@@ -219,17 +234,39 @@ def main():
     os.umask(0o077)
     parser=argparse.ArgumentParser()
     parser.add_argument('--evidence', type=Path, required=True)
-    parser.add_argument('--mutation', choices=['no-image-proof','early-baseline','no-progress','no-native-probe','no-group-cas','no-neighbour-check'])
-    parser.add_argument('--case', choices=['skip','digest','rollback','kill','native','generic','cas','neighbour','front','preload','worker','cpa-config','keeper-config','rollback-stale','rollback-identity'], action='append')
+    parser.add_argument('--mutation', choices=['no-image-proof','early-baseline','no-progress','no-native-probe','no-group-cas','no-neighbour-check','no-env-isolation'])
+    parser.add_argument('--case', choices=['skip','digest','rollback','kill','native','generic','cas','neighbour','front','preload','worker','cpa-config','keeper-config','rollback-stale','rollback-identity','keepalive','shadow'], action='append')
     args=parser.parse_args()
     args.evidence.mkdir(parents=True,exist_ok=True,mode=0o700)
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Probe)
     threading.Thread(target=server.serve_forever,daemon=True).start()
-    for case in args.case or ['skip','digest','rollback','kill','native','generic','cas','neighbour','front','preload','worker','cpa-config','keeper-config','rollback-stale','rollback-identity']:
-        f=Fixture(args.evidence,case,'aisix-status' if case=='native' else 'responses-ws-sse-bridge' if case=='front' else 'cloudflared' if case=='preload' else 'cpa-model-sync' if case=='worker' else 'cli-proxy-api' if case=='cpa-config' else 'openai-api-cache-keeper' if case=='keeper-config' else 'model-catalog',native=case not in ('native','worker'))
+    for case in args.case or ['skip','digest','rollback','kill','native','generic','cas','neighbour','front','preload','worker','cpa-config','keeper-config','rollback-stale','rollback-identity','keepalive','shadow']:
+        f=Fixture(args.evidence,case,'aisix-status' if case=='native' else 'responses-ws-sse-bridge' if case=='front' else 'cloudflared' if case=='preload' else 'cpa-model-sync' if case=='worker' else 'ai-sse-keepalive-proxy' if case=='keepalive' else 'cli-proxy-api' if case=='cpa-config' else 'openai-api-cache-keeper' if case=='keeper-config' else 'model-catalog',native=case not in ('native','worker'))
         try:
-            if case in ('worker','cpa-config','keeper-config'):
+            if case in ('worker','cpa-config','keeper-config','keepalive'):
                 shutil.copyfile(f.live/'compose.yaml',f.source/'compose.yaml')
+            if case=='keepalive':
+                # Replaces the retired deploy-ws-keepalive: a matching profile deploy is a no-op.
+                digest=f.run('plan')
+                text=(args.evidence/'keepalive-plan.log').read_text()
+                assert '"activation_required": false' in text, 'matching keepalive state required activation'
+                f.run('noop-apply',apply=True,digest=digest)
+                assert not f.state()['mutations'] and 'up' not in f.state().get('attempts',[]), 'keepalive no-op recreated or pulled'
+                assert f.baselines()==f.initial_baselines
+                print('PASS',case,flush=True)
+                continue
+            if case=='shadow':
+                # A remote login variable must not reach the render or the recreate (env -i).
+                if args.mutation:
+                    f.mutate(args.mutation)
+                f.env['AI_OPS_SHADOW']='1';f.env['SECRET']='shadow-value'
+                digest=f.run('plan')
+                f.run('apply',apply=True,digest=digest)
+                current=f.state()
+                assert current['containers'][0]['Config']['Image']==f.new and ['up',f.service] in current['mutations']
+                assert not current.get('shadowed'), 'a Compose call saw the shadowing environment: '+str(current.get('shadowed'))
+                print('PASS',case,flush=True)
+                continue
             if case=='worker':
                 scripts=f.live/'ops/scripts/host';scripts.mkdir(parents=True)
                 progress=scripts/'gateway-recovery.py'

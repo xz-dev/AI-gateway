@@ -1,0 +1,36 @@
+---
+# Read-only identity of model-catalog and its protected neighbours.
+# Outputs: __ai_ops_model_catalog_container_id, __ai_ops_model_catalog_image_id,
+#          __ai_ops_model_catalog_protected_map.
+
+- name: Read current model-catalog container
+  community.docker.docker_container_info:
+    name: "{{ ai_ops_compose_project }}-model-catalog-1"
+  register: __ai_ops_model_catalog_info
+  failed_when: not __ai_ops_model_catalog_info.exists
+  no_log: true  # the container record holds its environment
+
+- name: Read protected adjacent container identities
+  community.docker.docker_container_info:
+    name: "{{ ai_ops_compose_project }}-{{ item }}-1"
+  register: __ai_ops_model_catalog_protected
+  loop:
+    - model-catalog-netns
+    - catalog-cpa-relay
+    - apisix-models-catalog-relay
+    - apisix-models
+  no_log: true  # the container records hold their environment
+
+- name: Record model-catalog identities
+  ansible.builtin.set_fact:
+    __ai_ops_model_catalog_container_id: "{{ __ai_ops_model_catalog_info.container.Id }}"
+    __ai_ops_model_catalog_image_id: "{{ __ai_ops_model_catalog_info.container.Image }}"
+    __ai_ops_model_catalog_protected_map: >-
+      {{ dict(__ai_ops_model_catalog_protected.results | map(attribute='item')
+         | zip(__ai_ops_model_catalog_protected.results | map(attribute='container')
+               | map('default', {}, true) | map(attribute='Id', default=''))) }}
+
+- name: Require current model-catalog image identity
+  ansible.builtin.assert:
+    that: __ai_ops_model_catalog_image_id | trim != ""
+    fail_msg: model-catalog image identity is unavailable; deploy cannot be bound.

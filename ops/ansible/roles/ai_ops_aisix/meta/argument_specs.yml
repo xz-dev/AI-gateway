@@ -1,0 +1,16 @@
+---
+argument_specs:
+  deploy:
+    short_description: Normalize, validate and deploy AISIX resources.yaml.
+    description:
+      - Normalizes max_fallbacks, validates the fallback-status contract, reports orphan
+        candidates, then deploys resources.yaml (mode 0444) and recreates only aisix.
+    options:
+      ai_ops_aisix_adopted_direct_models:
+        type: list
+        elements: str
+        description: Direct-connect models adopted into resources.yaml (orphan deletion approval).
+      ai_ops_aisix_standalone_retained:
+        type: list
+        elements: str
+        description: Direct-connect models kept standalone (never orphan candidates).

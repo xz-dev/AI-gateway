@@ -55,7 +55,7 @@ The combined cadence explains the approximately 10.6-second noise; this was
 internal probe traffic, not evidence of an external client misconfiguration.
 
 Changing the repository does not update production. Deploy the recovery script
-through its guarded `deploy-recovery` entry point, and separately review the
+through its guarded `playbooks/recovery.yml` entry point, and separately review the
 public APISIX HEALTHCHECK Compose update/recreate. The component image/env-only
 transaction does not permit healthcheck changes; do not use full-stack `up` as
 a workaround or activate the deferred Operator services. No keeper recreate or
@@ -68,11 +68,11 @@ Deploy the explicit `apisix-models` local health route and strict health status 
 From `ops/ansible/`:
 
 ```bash
-ansible-playbook ops.yml --tags deploy-recovery -e ai_ops_mode=plan
-ansible-playbook ops.yml --tags deploy-recovery -e ai_ops_mode=apply
+ansible-playbook playbooks/recovery.yml --check --diff
+ansible-playbook playbooks/recovery.yml
 ```
 
-Plan compares the four candidate script/unit checksums with live files and reports which need upload; it does not copy files or start the timer. Apply copies the recovery script, its read-only `gateway_health.py` role probes, and units; checks application probes without restarting, verifies units, and enables the timer. It does not deploy application routes or recreate containers. Inspect the route and healthcheck change separately before deploying them.
+The check run shows the diff of the two scripts and two units against the live files; it does not copy files or start the timer. Apply copies the recovery script, its read-only `gateway_health.py` role probes, and units; checks application probes without restarting; a changed unit notifies the `daemon-reload` and timer-restart handlers, which run before the units are verified and the timer is enabled. It does not deploy application routes or recreate containers. Inspect the route and healthcheck change separately before deploying them.
 
 ```bash
 systemctl status ai-gateway-recovery.timer --no-pager
@@ -116,7 +116,7 @@ cached continuations are not restored.
 
 The updated recovery source includes bridge `:8086/healthz` among its eight
 application checks. This addition is not deployed merely by committing the source;
-use the separate reviewed `deploy-recovery` operation. The timer restarts only
+use the separate reviewed `playbooks/recovery.yml` operation. The timer restarts only
 running containers that fail probes. It still skips stopped or exited containers
 and cannot break Compose boot health gates. Boot start depends on
 `ai-gateway.service` and Compose `depends_on`. On 2026-10-23 a VM reboot

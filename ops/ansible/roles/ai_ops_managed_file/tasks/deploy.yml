@@ -1,0 +1,160 @@
+---
+# Drift gate + upload + activate for one managed file. Check mode uploads nothing:
+# the upload reports what would change, and every remote mutation below is apply-only.
+# Outputs: ai_ops_managed_file_uploaded, ai_ops_managed_file_recovery_failed.
+
+- name: Prepare {{ ai_ops_managed_file_label }}
+  ansible.builtin.include_tasks:
+    file: prepare.yml
+    apply:
+      tags: [always]
+  tags: [always]
+
+- name: Ensure remote parent dir for {{ ai_ops_managed_file_label }}
+  ansible.builtin.file:
+    path: "{{ ai_ops_managed_file_remote | dirname }}"
+    state: directory
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [upload]
+
+# Only a real upload replaces the pre-deploy copy: a no-op deploy reports no change
+# and keeps the last rollback point.
+- name: Save pre-deploy copy of {{ ai_ops_managed_file_label }}
+  ansible.builtin.copy:
+    src: "{{ ai_ops_managed_file_remote }}"
+    dest: "{{ __ai_ops_managed_file_predeploy }}"
+    remote_src: true
+    mode: preserve
+  diff: false
+  when:
+    - not ansible_check_mode
+    - __ai_ops_managed_file_remote_stat.stat.exists
+    - ai_ops_managed_file_differs
+  tags: [upload]
+
+- name: Upload {{ ai_ops_managed_file_label }}
+  ansible.builtin.copy:
+    src: "{{ ai_ops_managed_file_local }}"
+    dest: "{{ ai_ops_managed_file_remote }}"
+    mode: "{{ ai_ops_managed_file_mode | default('preserve') }}"
+  diff: "{{ not __ai_ops_managed_file_secret }}"
+  register: __ai_ops_managed_file_upload
+  when: ai_ops_managed_file_differs
+  tags: [upload]
+
+- name: Record the upload result of {{ ai_ops_managed_file_label }}
+  ansible.builtin.set_fact:
+    ai_ops_managed_file_uploaded: "{{ not ansible_check_mode and __ai_ops_managed_file_upload is changed }}"
+    ai_ops_managed_file_recovery_failed: false
+    __ai_ops_managed_file_activated: false
+  tags: [always]
+
+- name: Activate {{ ai_ops_managed_file_label }}
+  when:
+    - ai_ops_managed_file_activate is defined
+    - ai_ops_managed_file_uploaded
+  tags: [activate]
+  block:
+    - name: Recreate the activated service without dependencies, builds or pulls
+      ansible.builtin.include_tasks:
+        file: activate.yml
+        apply:
+          tags: [always]
+
+    - name: Select the expected state of the activated file
+      ansible.builtin.set_fact:
+        ai_ops_managed_file_verify_expected: "{{ ai_ops_managed_file_verify.expected }}"
+      when: ai_ops_managed_file_verify is defined
+
+    - name: Verify activated {{ ai_ops_managed_file_label }}
+      ansible.builtin.include_role:
+        name: "{{ ai_ops_managed_file_verify.role }}"
+        tasks_from: "{{ ai_ops_managed_file_verify.tasks_from }}"
+        apply:
+          tags: [always]
+      when: ai_ops_managed_file_verify is defined
+
+    - name: Remember the verified activation
+      ansible.builtin.set_fact:
+        __ai_ops_managed_file_activated: true
+  rescue:
+    - name: "Activation failed: restore pre-deploy copy of {{ ai_ops_managed_file_label }}"
+      ansible.builtin.copy:
+        src: "{{ __ai_ops_managed_file_predeploy }}"
+        dest: "{{ ai_ops_managed_file_remote }}"
+        remote_src: true
+        mode: "{{ ai_ops_managed_file_mode | default('preserve') }}"
+      diff: false
+      when: __ai_ops_managed_file_remote_stat.stat.exists
+
+    - name: Reactivate restored {{ ai_ops_managed_file_label }}
+      ansible.builtin.include_tasks:
+        file: activate.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_managed_file_recovery: true
+
+    - name: Verify restored {{ ai_ops_managed_file_label }}
+      when: ai_ops_managed_file_verify is defined
+      block:
+        - name: Select the expected state of the restored file
+          ansible.builtin.set_fact:
+            ai_ops_managed_file_verify_expected: "{{ ai_ops_managed_file_verify.recovery_expected | default({}) }}"
+
+        - name: Verify restored service
+          ansible.builtin.include_role:
+            name: "{{ ai_ops_managed_file_verify.role }}"
+            tasks_from: "{{ ai_ops_managed_file_verify.tasks_from }}"
+            apply:
+              tags: [always]
+      rescue:
+        - name: Remember failed recovery verification
+          ansible.builtin.set_fact:
+            ai_ops_managed_file_recovery_failed: true
+
+    - name: Record failed activation/recovery receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_managed_file_failure_receipt.path }}"
+        mode: "0600"
+        content: "{{ ai_ops_managed_file_failure_receipt.content }}"
+      when: ai_ops_managed_file_failure_receipt is defined
+
+    - name: Report recovery outcome and fail
+      ansible.builtin.fail:
+        msg: >-
+          Activation/verification of {{ ai_ops_managed_file_label }} failed; pre-deploy copy restored,
+          reactivation rc={{ __ai_ops_managed_file_reactivate.rc | default('n/a') }},
+          recovery verification={{ 'failed' if ai_ops_managed_file_recovery_failed else 'passed' }}.
+          Investigate before retrying.
+
+# A matching single-file adoption needs only readback, not a needless restart.
+- name: Decide whether this file's baseline can be committed
+  ansible.builtin.set_fact:
+    __ai_ops_managed_file_commit: "{{ not ansible_check_mode and (__ai_ops_managed_file_activated or not ai_ops_managed_file_differs) }}"
+  tags: [upload]
+
+- name: Read back activated file before recording its baseline
+  ansible.builtin.stat:
+    path: "{{ ai_ops_managed_file_remote }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_managed_file_activated_stat
+  when: __ai_ops_managed_file_commit
+  tags: [upload]
+
+- name: Refuse changed activated file before advancing baseline
+  ansible.builtin.assert:
+    that: __ai_ops_managed_file_activated_stat.stat.checksum == ai_ops_managed_file_local_checksum
+    fail_msg: Activated file drifted; baseline was not advanced.
+  when: __ai_ops_managed_file_commit
+  tags: [upload]
+
+- name: Record new baseline for {{ ai_ops_managed_file_label }}
+  ansible.builtin.copy:
+    src: "{{ ai_ops_managed_file_local }}"
+    dest: "{{ __ai_ops_managed_file_baseline }}"
+    mode: "0600"
+  diff: false
+  when: __ai_ops_managed_file_commit
+  tags: [upload]

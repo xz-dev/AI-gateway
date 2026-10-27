@@ -1,0 +1,10 @@
+---
+# rollback.yml -e component=<profile>: restore the last guarded snapshot of the component.
+- name: Select the rollback operation
+  ansible.builtin.set_fact:
+    __ai_ops_component_operation: rollback
+  tags: [always]
+
+- name: Run the guarded component rollback
+  ansible.builtin.include_tasks: transaction.yml
+  tags: [always]

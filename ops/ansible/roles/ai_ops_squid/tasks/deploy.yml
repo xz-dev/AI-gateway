@@ -1,0 +1,18 @@
+---
+# deploy-config.yml -e component=egress-proxy [-e ai_ops_squid_source_only=true]
+
+- name: Render and validate the Squid policy tree
+  ansible.builtin.include_tasks: render.yml
+  when: not ai_ops_squid_source_only | bool
+  tags: [always]
+
+- name: Deploy the Squid policy tree
+  ansible.builtin.include_tasks: tree.yml
+  when: not ai_ops_squid_source_only | bool
+  tags: [always]
+
+# Keep the regeneration input aligned even when the rendered tree is unchanged.
+# Run only after the tree drift gate and any required activation have succeeded.
+- name: Synchronize source squid policy
+  ansible.builtin.include_tasks: source.yml
+  tags: [always]

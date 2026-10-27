@@ -1,0 +1,84 @@
+---
+# Rollback: upload the protected pre-deploy copy and reactivate.
+
+- name: Select baseline and pre-deploy copy paths for rollback
+  ansible.builtin.set_fact:
+    __ai_ops_managed_file_baseline: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_ops_managed_file_label | replace('/', '__') }}.baseline"
+    __ai_ops_managed_file_predeploy: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_ops_managed_file_label | replace('/', '__') }}.predeploy"
+  tags: [always]
+
+- name: Read remote current checksum
+  ansible.builtin.stat:
+    path: "{{ ai_ops_managed_file_remote }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_managed_file_rb_remote
+  tags: [always]
+
+- name: Read deploy baseline checksum
+  ansible.builtin.stat:
+    path: "{{ __ai_ops_managed_file_baseline }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_managed_file_rb_baseline
+  tags: [always]
+
+- name: Refuse rollback over independent remote change
+  ansible.builtin.fail:
+    msg: >-
+      Remote {{ ai_ops_managed_file_label }} changed independently after this deploy
+      (remote={{ __ai_ops_managed_file_rb_remote.stat.checksum }} deployed={{ __ai_ops_managed_file_rb_baseline.stat.checksum }}).
+      Stop and reconcile manually; nothing was overwritten.
+  when:
+    - __ai_ops_managed_file_rb_remote.stat.exists
+    - __ai_ops_managed_file_rb_baseline.stat.exists
+    - __ai_ops_managed_file_rb_remote.stat.checksum != __ai_ops_managed_file_rb_baseline.stat.checksum
+  tags: [always]
+
+- name: Verify pre-deploy copy exists
+  ansible.builtin.stat:
+    path: "{{ __ai_ops_managed_file_predeploy }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_managed_file_rb_pre
+  failed_when: not __ai_ops_managed_file_rb_pre.stat.exists
+  tags: [always]
+
+- name: Upload pre-deploy copy of {{ ai_ops_managed_file_label }}
+  ansible.builtin.copy:
+    src: "{{ __ai_ops_managed_file_predeploy }}"
+    dest: "{{ ai_ops_managed_file_remote }}"
+    remote_src: true
+    mode: "{{ ai_ops_managed_file_mode | default('preserve') }}"
+  diff: false
+  tags: [upload]
+
+- name: Reactivate and verify {{ ai_ops_managed_file_label }}
+  when: not ansible_check_mode
+  tags: [activate]
+  block:
+    - name: Reactivate {{ ai_ops_managed_file_label }}
+      ansible.builtin.include_tasks:
+        file: activate.yml
+        apply:
+          tags: [always]
+      when: ai_ops_managed_file_activate is defined
+
+    - name: Select the expected state of the rolled back file
+      ansible.builtin.set_fact:
+        ai_ops_managed_file_verify_expected: >-
+          {{ ai_ops_managed_file_verify.expected | combine({'policy_digest': __ai_ops_managed_file_rb_pre.stat.checksum}) }}
+      when: ai_ops_managed_file_verify is defined
+
+    - name: Verify rolled back {{ ai_ops_managed_file_label }}
+      ansible.builtin.include_role:
+        name: "{{ ai_ops_managed_file_verify.role }}"
+        tasks_from: "{{ ai_ops_managed_file_verify.tasks_from }}"
+        apply:
+          tags: [always]
+      when: ai_ops_managed_file_verify is defined
+
+    - name: Restore baseline to pre-deploy content
+      ansible.builtin.copy:
+        src: "{{ __ai_ops_managed_file_predeploy }}"
+        dest: "{{ __ai_ops_managed_file_baseline }}"
+        remote_src: true
+        mode: "0600"
+      diff: false

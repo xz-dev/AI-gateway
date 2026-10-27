@@ -8,10 +8,11 @@
 |---|---|
 | `init.sh`, `init-egress-proxy.sh`, `init-provider-sidecar-*.sh` | Create private runtime files (`.env`, CPA/AISIX config, egress policy, sidecar TLS); never overwrite |
 | `validate.sh` | Static and runtime checks of the Compose stack, network rules and Lua tests (CI runs it) |
+| `check-tracked-inventory.py` | Fails if a tracked `ops/ansible` file carries a real inventory (Tailscale address, `ansible_host` outside `inventories/example/`); `validate.sh` runs it |
 | `render-egress-policy.py`, `check-*.py` | Squid policy renderer and policy/affinity checks |
 | `container-runtime.sh` | Selects Docker or rootless Podman; exports `AI_GATEWAY_COMPOSE` |
 | [`host/`](host/) | Tooling installed on the deploy root: `gateway-recovery.py` with its systemd units, deploy helpers used by Ansible |
-| [`tests/`](tests/) | `test-*` suites for relays, namespaces, Ansible roles, recovery and catalog routes |
+| [`tests/`](tests/) | `test-*` suites for relays, namespaces, Ansible playbooks and roles (with test-only `community.docker` shims in `tests/fixtures/collections`), recovery and catalog routes |
 
 **How:**
 

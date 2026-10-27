@@ -78,7 +78,7 @@ class ImageProof(unittest.TestCase):
                                     for call in command.call_args_list))
 
     def test_preloaded_profiles_disable_pull(self):
-        defaults = (ROOT / 'ops/ansible/roles/ai_ops/defaults/main.yml').read_text()
+        defaults = (ROOT / 'ops/ansible/roles/ai_ops_component/defaults/main.yml').read_text()
         for service in ('cloudflared', 'cpa-model-sync', 'egress-proxy'):
             with self.subTest(service=service):
                 profile = re.search(r'^  ' + re.escape(service) + r':.*\n(?:    .*\n)*', defaults, re.M)
@@ -282,43 +282,48 @@ with patch.object(connection, '_build_command', side_effect=lambda exe, subsyste
 
 class TaskOrdering(unittest.TestCase):
     def test_baseline_follows_readiness_and_group_readback(self):
-        text = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-component.yml').read_text()
+        text = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/transaction.yml').read_text()
         self.assertLess(text.index('Wait for selected component health'), text.index('Advance baselines only after'))
         self.assertLess(text.index('Refuse post-activation drift'), text.index('Advance baselines only after'))
         self.assertLess(text.index('Record stage before selected component activation'), text.index('Recreate only selected'))
         self.assertIn("'--no-deps', '--no-build', '--pull', 'never'", text)
-        helper = (ROOT / 'ops/ansible/roles/ai_ops/tasks/deploy-file.yml').read_text()
+        helper = (ROOT / 'ops/ansible/roles/ai_ops_managed_file/tasks/deploy.yml').read_text()
         self.assertNotIn('Adopt matching remote into baseline', helper)
-        tail = helper.split('- name: "Record new baseline', 1)[1]
-        self.assertIn('when: _ai_commit_baseline', tail)
-        self.assertIn('ai_activate_cmd is defined and _ai_upload is changed', helper)
-        self.assertIn('ai_defer_baseline', helper)
+        tail = helper.split('- name: Record new baseline', 1)[1]
+        self.assertIn('when: __ai_ops_managed_file_commit', tail)
+        activate = helper.split('- name: Activate {{ ai_ops_managed_file_label }}', 1)[1].split('  block:', 1)[0]
+        self.assertIn('- ai_ops_managed_file_activate is defined', activate)
+        self.assertIn('- ai_ops_managed_file_uploaded', activate)
+        self.assertLess(helper.index('Remember the verified activation'), helper.index('Record new baseline'))
         self.assertIn('Read back activated file', helper)
 
     def test_generic_and_front_share_one_transaction(self):
-        ops = (ROOT / 'ops/ansible/ops.yml').read_text()
-        self.assertIn("when: service | default('') in ai_ops_profiles", ops)
-        self.assertNotIn('Pull exact image for {{ service }}', ops)
-        self.assertNotIn('Assert {{ service }} appears in ps output', ops)
+        for operation in ('deploy', 'rollback'):
+            playbook = (ROOT / 'ops/ansible/playbooks' / (operation + '.yml')).read_text()
+            self.assertIn('name: ai_ops_component\n        tasks_from: ' + operation, playbook)
+        for path in (ROOT / 'ops/ansible').glob('[!c]*/**/*.yml'):
+            text = path.read_text()
+            self.assertNotIn('Pull exact image for', text, path)
+            self.assertNotIn('appears in ps output', text, path)
 
     def test_commands_have_bounded_async_time_and_keep_preload_identity(self):
-        text = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-component.yml').read_text()
-        defaults = (ROOT / 'ops/ansible/roles/ai_ops/defaults/main.yml').read_text()
+        text = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/transaction.yml').read_text()
+        defaults = (ROOT / 'ops/ansible/roles/ai_ops_component/defaults/main.yml').read_text()
         self.assertEqual(text.count('async: "{{ ai_ops_component_command_timeout }}"'), 2)
         self.assertIn('ai_ops_component_command_timeout: 600', defaults)
-        self.assertIn('_front_candidate_image_id == _front_planned_image_id', text)
+        self.assertIn('__ai_ops_component_candidate_image_id == __ai_ops_component_planned_image_id', text)
         self.assertIn('Validate candidate Compose explicitly', text)
         self.assertIn('Validate uploaded candidate using the exact apply Compose argv', text)
 
     def test_rollback_guard_precedes_any_mutation(self):
-        text = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-component.yml').read_text()
+        text = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/transaction.yml').read_text()
         self.assertLess(text.index('Refuse stale rollback selection'), text.index('Acquire exclusive owned'))
         self.assertEqual(text.count('rollback-guard'), 2)
         self.assertLess(text.index('Recheck rollback provenance under the owned lock'), text.index('Allocate immutable private snapshot'))
-        self.assertIn("'after': _front_failure_after | default(none)", text)
+        self.assertIn("'after': __ai_ops_component_failure_after | default(none)", text)
 
     def test_existing_native_probe_is_reused_not_reimplemented(self):
-        runtime = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-runtime.yml').read_text()
+        runtime = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/runtime.yml').read_text()
         self.assertIn('module.namespace_probe', runtime)
         self.assertIn('module.OBSERVE_HTTP', runtime)
         self.assertIn('module.worker_health', runtime)

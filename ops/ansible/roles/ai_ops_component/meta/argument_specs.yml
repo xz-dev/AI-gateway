@@ -1,0 +1,80 @@
+---
+argument_specs:
+  deploy:
+    short_description: Approval-bound deploy of one Compose component.
+    description:
+      - Plans in check mode (diff, approval digest, image proof) and applies only with the
+        exact digest, under the component writer lock, with CAS re-reads, snapshot and receipt.
+      - Recreates only the component, through the secret-free env -i Compose argv.
+    options:
+      ai_ops_component_name:
+        type: str
+        required: true
+        choices:
+          - cli-proxy-api
+          - sub2api
+          - aisix
+          - cloudflared
+          - ai-sse-keepalive-proxy
+          - openai-api-cache-keeper
+          - responses-ws-sse-bridge
+          - provider-sidecar
+          - aisix-status
+          - model-catalog
+          - apisix
+          - apisix-models
+          - cpa-model-sync
+          - egress-proxy
+        description: Component profile (the playbook's -e component=<name>).
+      ai_ops_component_profiles:
+        type: dict
+        description: Profile per component (pull, front_cache, env); keys equal the choices above.
+      ai_ops_component_approved_digest:
+        type: str
+        description: Approval digest printed by a fresh --check --diff run; required for apply.
+      ai_ops_component_verify_retries:
+        type: int
+        description: Readiness attempts after the recreate.
+      ai_ops_component_verify_delay_seconds:
+        type: int
+        description: Delay between readiness attempts.
+      ai_ops_component_command_timeout:
+        type: int
+        description: Async timeout in seconds of the pull and of the recreate.
+  rollback:
+    short_description: Approval-bound rollback of one Compose component to its last snapshot.
+    options:
+      ai_ops_component_name:
+        type: str
+        required: true
+        choices:
+          - cli-proxy-api
+          - sub2api
+          - aisix
+          - cloudflared
+          - ai-sse-keepalive-proxy
+          - openai-api-cache-keeper
+          - responses-ws-sse-bridge
+          - provider-sidecar
+          - aisix-status
+          - model-catalog
+          - apisix
+          - apisix-models
+          - cpa-model-sync
+          - egress-proxy
+        description: Component profile (the playbook's -e component=<name>).
+      ai_ops_component_profiles:
+        type: dict
+        description: Profile per component (pull, front_cache, env); keys equal the choices above.
+      ai_ops_component_approved_digest:
+        type: str
+        description: Approval digest printed by a fresh --check --diff run; required for apply.
+      ai_ops_component_verify_retries:
+        type: int
+        description: Readiness attempts after the recreate.
+      ai_ops_component_verify_delay_seconds:
+        type: int
+        description: Delay between readiness attempts.
+      ai_ops_component_command_timeout:
+        type: int
+        description: Async timeout in seconds of the pull and of the recreate.

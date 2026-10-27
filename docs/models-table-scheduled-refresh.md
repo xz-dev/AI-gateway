@@ -41,4 +41,4 @@ Go 实现时期的冷 GET / 手动 POST 单样本测量和当时的部署交接�
 
 ## 部署
 
-镜像由 `.github/workflows/publish-model-catalog.yml` 手动触发构建（`ghcr.io/xz-dev/ai-gateway-model-catalog`，构建上下文 `./services/routing/model-catalog`），按 digest 写入 private-config 的 `MODEL_CATALOG_IMAGE`。镜像升级走通用组件流程（`--tags deploy -e service=model-catalog`），配置改动走 `deploy-model-catalog-config`，两者都先 plan 再 apply，见 [Ansible operations](ansible-operations.md#model-catalog-config-safety)。部署后通过 localhost/Tailscale `:9083/models-table` 验证冷页即时返回、时间戳、超窗异步、手动等待/加入和定时更新；`/healthz` 只代表进程存活，不能替代目录采集验收。
+镜像由 `.github/workflows/publish-model-catalog.yml` 手动触发构建（`ghcr.io/xz-dev/ai-gateway-model-catalog`，构建上下文 `./services/routing/model-catalog`），按 digest 写入 private-config 的 `MODEL_CATALOG_IMAGE`。镜像升级走通用组件流程（`playbooks/deploy.yml -e component=model-catalog`），配置改动走 `playbooks/deploy-config.yml -e component=model-catalog`，两者都先 `--check --diff` 再 apply，见 [Ansible operations](ansible-operations.md#model-catalog-config-safety)。部署后通过 localhost/Tailscale `:9083/models-table` 验证冷页即时返回、时间戳、超窗异步、手动等待/加入和定时更新；`/healthz` 只代表进程存活，不能替代目录采集验收。

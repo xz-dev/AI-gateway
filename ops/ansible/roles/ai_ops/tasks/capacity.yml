@@ -1,0 +1,26 @@
+---
+# Capacity gate for component deploys (memory/disk, no tuning of the host).
+
+- name: Read available memory and disk
+  ansible.builtin.shell: |
+    set -eo pipefail
+    avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+    disk_mb=$(df -m "{{ ai_ops_deploy_root }}" | awk 'NR==2 {print $4}')
+    echo "mem_available_mb=${avail_mb} disk_free_mb=${disk_mb}"
+  args:
+    executable: /bin/bash
+  register: __ai_ops_capacity
+  changed_when: false
+  check_mode: false
+
+- name: Show capacity
+  ansible.builtin.debug:
+    var: __ai_ops_capacity.stdout
+
+- name: Capacity gate blocks apply below thresholds
+  ansible.builtin.assert:
+    that:
+      - (__ai_ops_capacity.stdout | regex_search('mem_available_mb=([0-9]+)', '\\1') | first | int) >= ai_ops_min_mem_mb | int
+      - (__ai_ops_capacity.stdout | regex_search('disk_free_mb=([0-9]+)', '\\1') | first | int) >= ai_ops_min_disk_mb | int
+    fail_msg: "insufficient capacity: {{ __ai_ops_capacity.stdout }} (need mem >= {{ ai_ops_min_mem_mb }}MB, disk >= {{ ai_ops_min_disk_mb }}MB)"
+  when: not ansible_check_mode

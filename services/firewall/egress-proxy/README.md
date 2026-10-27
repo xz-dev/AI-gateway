@@ -8,5 +8,5 @@
 
 - `./ops/scripts/init-egress-proxy.sh` creates `data/egress-proxy/policy.json` from [`policy.example.json`](policy.example.json) and renders it.
 - Re-render after edits: `python3 ops/scripts/render-egress-policy.py data/egress-proxy/policy.json data/egress-proxy/generated`.
-- Production: `ansible-playbook ops.yml --tags deploy-squid`.
+- Production: `ansible-playbook playbooks/deploy-config.yml -e component=egress-proxy` from `ops/ansible/`.
 - Policy rules: [egress policy](../../../docs/egress-policy.md).

@@ -1,0 +1,43 @@
+---
+# rollback-config.yml -e component=model-catalog: restore the pre-deploy config and
+# prove readiness on the same image with neighbours unchanged.
+
+- name: Capture pre-rollback model-catalog identities
+  ansible.builtin.include_tasks:
+    file: identity.yml
+    apply:
+      tags: [always]
+  tags: [always]
+
+- name: Roll back model-catalog config and prove readiness
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: rollback
+  vars:
+    ai_ops_managed_file_label: model-catalog/config.yaml
+    ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+    ai_ops_managed_file_mode: "0644"
+    ai_ops_managed_file_activate: {service: model-catalog, dependencies: false}
+    ai_ops_managed_file_verify:
+      role: ai_ops_model_catalog
+      tasks_from: verify
+      expected:
+        image_identity: "{{ __ai_ops_model_catalog_image_id }}"
+        old_container: "{{ __ai_ops_model_catalog_container_id }}"
+        protected: "{{ __ai_ops_model_catalog_protected_map }}"
+  tags: [always]
+
+- name: Write sanitized model-catalog rollback receipt
+  ansible.builtin.copy:
+    dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-rollback-{{ now(fmt='%s') }}.txt"
+    mode: "0600"
+    content: |
+      operation=model-catalog-config-rollback
+      config_digest={{ ai_ops_model_catalog_verified_policy_digest }}
+      image_identity={{ ai_ops_model_catalog_verified_image }}
+      container_id={{ ai_ops_model_catalog_verified_container }}
+      readiness_attempts={{ ai_ops_model_catalog_ready_attempts }}
+      protected_containers_unchanged=true
+      outcome=success
+  when: not ansible_check_mode
+  tags: [activate]

@@ -1,0 +1,44 @@
+---
+# Deploy one private configuration file and activate only its service.
+#   ansible-playbook playbooks/deploy-config.yml -e component=<name> --check --diff
+# component: aisix (resources.yaml), egress-proxy (Squid policy; add
+# -e ai_ops_squid_source_only=true to only resync policy.json), cpa-model-sync
+# (policy, needs -e ai_ops_model_sync_approved_digest=<digest>), model-catalog (config.yaml).
+- name: Deploy one AI-gateway configuration
+  hosts: gateway
+  gather_facts: false
+  module_defaults:
+    community.docker.docker_compose_v2: &ai_ops_compose
+      project_src: "{{ ai_ops_compose_project_src }}"
+      project_name: "{{ ai_ops_compose_project }}"
+      files: "{{ ai_ops_compose_files }}"
+      env_files: "{{ ai_ops_compose_env_files }}"
+    community.docker.docker_compose_v2_exec: *ai_ops_compose
+  vars:
+    deploy_config_roles:
+      aisix: ai_ops_aisix
+      egress-proxy: ai_ops_squid
+      cpa-model-sync: ai_ops_model_sync
+      model-catalog: ai_ops_model_catalog
+  pre_tasks:
+    # Runs on the controller before any connection; the message lists the choices.
+    - name: Validate the component
+      ansible.builtin.validate_argument_spec:
+        argument_spec:
+          component:
+            type: str
+            required: true
+            choices: [aisix, egress-proxy, cpa-model-sync, model-catalog]
+        provided_arguments:
+          component: "{{ component | default(omit) }}"
+      tags: [always]
+  roles:
+    # Shared preflight; the play-level role also makes its defaults play-wide.
+    - role: ai_ops
+      tags: [always]
+  tasks:
+    - name: Deploy the selected configuration
+      ansible.builtin.include_role:
+        name: "{{ deploy_config_roles[component] }}"
+        tasks_from: deploy
+      tags: [always]

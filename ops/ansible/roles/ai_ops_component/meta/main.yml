@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: ai_ops_component
+  author: xz-dev
+  description: Approval-bound deploy and rollback of one AI-gateway Compose component.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

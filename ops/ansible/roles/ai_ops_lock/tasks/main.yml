@@ -1,0 +1,60 @@
+---
+- name: Require the minimum stale-lock age
+  ansible.builtin.assert:
+    that:
+      - ai_ops_lock_min_age_seconds | int >= 900
+    fail_msg: Stale-lock recovery is separate from deploy; it never activates or restores anything.
+  tags: [always]
+
+- name: Read lock owner without modifying lock or state
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}", info, "{{ ai_ops_deploy_root }}"]
+    stdin: '{}'
+  register: __ai_ops_lock_raw
+  changed_when: false
+  check_mode: false
+  tags: [always]
+
+- name: Parse recovery owner
+  ansible.builtin.set_fact:
+    __ai_ops_lock: "{{ __ai_ops_lock_raw.stdout | from_json }}"
+  tags: [always]
+
+- name: Show exact lock owner for manual review
+  ansible.builtin.debug:
+    var: __ai_ops_lock
+  tags: [always]
+
+- name: Recover only the named transaction after controller and remote liveness checks
+  when: not ansible_check_mode
+  tags: [always]
+  block:
+    - name: Require exact owner transaction; legacy or unknown locks stay locked
+      ansible.builtin.assert:
+        that:
+          - __ai_ops_lock.held
+          - __ai_ops_lock.owner is mapping
+          - ai_ops_lock_transaction | length > 0
+          - __ai_ops_lock.owner.transaction == ai_ops_lock_transaction
+        fail_msg: Review the lock owner and progress receipt, then supply ai_ops_lock_transaction.
+
+    - name: Check original controller is dead and no other local writer is alive
+      ansible.builtin.command:
+        argv:
+          - python3
+          - '-c'
+          - "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}"
+          - controller-check
+          - "{{ ai_ops_deploy_root }}"
+        stdin: "{{ __ai_ops_lock.owner | to_json }}"
+      delegate_to: localhost
+      register: __ai_ops_lock_controller_raw
+      changed_when: false
+
+    - name: Release stale owned lock only after checking its receipt, age and remote writers
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}", recover, "{{ ai_ops_deploy_root }}"]
+        stdin: >-
+          {{ {'transaction': ai_ops_lock_transaction, 'min_age_seconds': ai_ops_lock_min_age_seconds | int, 'controller_clear':
+          (__ai_ops_lock_controller_raw.stdout | from_json).controller_clear} | to_json }}
+      changed_when: true

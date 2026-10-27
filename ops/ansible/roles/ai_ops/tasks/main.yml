@@ -1,5 +1,79 @@
 ---
-# ai_ops role entry point. The play-level `roles:` declaration exists so this
-# role's defaults/main.yml apply play-wide (pre_tasks included). Operation logic
-# lives in the sibling task files (preflight/deploy-file/rollback-file) and is
-# invoked via include_role + tasks_from under tags in ops.yml.
+# Shared preflight: Compose provider, connectivity, deploy root, module prerequisites,
+# pinned renderer and the protected state directory. It is read-only in check mode.
+
+- name: Detect Compose provider (mirrors ops/scripts/container-runtime.sh)
+  ansible.builtin.shell: |
+    runtime="{{ ai_ops_runtime }}"
+    if [ -z "$runtime" ]; then
+      if command -v docker >/dev/null && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then runtime=docker;
+      elif command -v podman >/dev/null && podman info >/dev/null 2>&1; then runtime=podman;
+      else echo 'no usable container runtime' >&2; exit 1; fi
+    fi
+    if [ "$runtime" = docker ]; then echo "docker compose";
+    elif podman compose version >/dev/null 2>&1; then echo "podman compose";
+    elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose";
+    else echo 'no compose provider' >&2; exit 1; fi
+  register: __ai_ops_compose_detect
+  changed_when: false
+  check_mode: false
+  when: ai_ops_compose_cmd == ""
+
+- name: Set compose command and runtime CLI (inventory override wins)
+  ansible.builtin.set_fact:
+    ai_ops_compose_cmd: "{{ ai_ops_compose_cmd if ai_ops_compose_cmd != '' else __ai_ops_compose_detect.stdout }}"
+    ai_ops_runtime_cli: >-
+      {{ ai_ops_runtime if ai_ops_runtime != '' else ((ai_ops_compose_cmd if ai_ops_compose_cmd != '' else __ai_ops_compose_detect.stdout).split() |
+      first) }}
+
+- name: Show detected compose provider
+  ansible.builtin.debug:
+    msg: "compose provider: {{ ai_ops_compose_cmd }}"
+
+- name: Verify SSH connectivity (no fallback auth)
+  ansible.builtin.ping:
+
+- name: Verify deploy root exists
+  ansible.builtin.stat:
+    path: "{{ ai_ops_deploy_root }}"
+  register: __ai_ops_root
+  failed_when: not (__ai_ops_root.stat.exists and __ai_ops_root.stat.isdir)
+
+- name: Verify local config dir exists
+  ansible.builtin.stat:
+    path: "{{ ai_ops_config_dir }}"
+  delegate_to: localhost
+  register: __ai_ops_cfg
+  failed_when: not (__ai_ops_cfg.stat.exists and __ai_ops_cfg.stat.isdir)
+
+- name: Read the remote PATH for the secret-free Compose argv
+  ansible.builtin.command: printenv PATH
+  register: __ai_ops_path
+  changed_when: false
+  check_mode: false
+
+# The one definition of the Compose prefix for the kept command calls (design D12):
+# ai_ops_compose_argv runs it secret-free under env -i (component transaction);
+# ai_ops_compose_base_argv is the plain prefix of the configuration operations.
+- name: Build the Compose argv shared by the kept command calls
+  ansible.builtin.set_fact:
+    ai_ops_compose_base_argv: >-
+      {{ ai_ops_compose_cmd.split() + ['-p', ai_ops_compose_project]
+         + (['-f'] | product(ai_ops_compose_files) | flatten)
+         + (['--env-file'] | product(ai_ops_compose_env_files) | flatten) }}
+
+- name: Build the secret-free env -i Compose argv
+  ansible.builtin.set_fact:
+    ai_ops_compose_argv: "{{ ['env', '-i', 'PATH=' + __ai_ops_path.stdout] + ai_ops_compose_base_argv }}"
+
+- name: Check community.docker prerequisites and the renderer pin
+  ansible.builtin.include_tasks: prerequisites.yml
+
+- name: Ensure protected state dir
+  ansible.builtin.file:
+    path: "{{ ai_ops_deploy_root }}/.ai-ops-state"
+    state: directory
+    mode: "0700"
+  when:
+    - ai_ops_state_dir_required | bool
+    - not ansible_check_mode

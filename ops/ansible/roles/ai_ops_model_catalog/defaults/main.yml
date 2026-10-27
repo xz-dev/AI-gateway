@@ -1,0 +1,5 @@
+---
+# Bounded wait for the recreated container's readiness (/readyz through its
+# healthcheck subcommand) after a config-only force-recreate. Raise on slow hosts.
+ai_ops_model_catalog_verify_retries: 30
+ai_ops_model_catalog_verify_delay_seconds: 2

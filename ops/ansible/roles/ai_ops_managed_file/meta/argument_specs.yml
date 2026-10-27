@@ -1,0 +1,81 @@
+---
+# Shared by the concern roles; never called from a playbook directly.
+argument_specs:
+  prepare:
+    short_description: Read-only drift gate and local/remote diff of one managed file.
+    options: &ai_ops_managed_file_common
+      ai_ops_managed_file_label:
+        type: str
+        required: true
+        description:
+          - State label of the file; names .ai-ops-state/<label with / as __>.baseline|.predeploy.
+          - One of compose.yaml, compose.override.yaml, .env, aisix/resources.yaml,
+            cpa-model-sync/config.json, model-catalog/config.yaml.
+      ai_ops_managed_file_local:
+        type: path
+        description: Controller path of the desired file.
+      ai_ops_managed_file_remote:
+        type: str
+        required: true
+        description: Remote path of the live file.
+      ai_ops_managed_file_mode:
+        type: str
+        description: Explicit upload mode of the live file; preserve when unset.
+      ai_ops_managed_file_activate:
+        type: dict
+        description: Service activated after a changed upload, through community.docker.docker_compose_v2.
+        options:
+          service:
+            type: str
+            required: true
+            description: The one Compose service to activate.
+          state:
+            type: str
+            choices: [present, restarted]
+            description: present (when unset) recreates the service; restarted restarts it.
+          recreate:
+            type: str
+            choices: [always]
+            description: Always force-recreate (--force-recreate), also when unset.
+          dependencies:
+            type: bool
+            required: true
+            choices: [false]
+            description: Must be false (--no-deps); dependencies and neighbours are never touched.
+      ai_ops_managed_file_verify:
+        type: dict
+        description: Role task file that verifies the activated (and restored) service.
+        options:
+          role:
+            type: str
+            required: true
+            description: Role holding the verification tasks.
+          tasks_from:
+            type: str
+            required: true
+            description: Verification task file of that role.
+          expected:
+            type: dict
+            required: true
+            description: Expected state after activation, read as ai_ops_managed_file_verify_expected.
+          recovery_expected:
+            type: dict
+            description: Expected state after a rescue restore.
+      ai_ops_managed_file_failure_receipt:
+        type: dict
+        description: Sanitized receipt written when activation fails.
+        options:
+          path:
+            type: str
+            required: true
+            description: Remote receipt path.
+          content:
+            type: str
+            required: true
+            description: Receipt content.
+  deploy:
+    short_description: Drift gate, upload, activation with restore-on-failure, and baseline of one managed file.
+    options: *ai_ops_managed_file_common
+  rollback:
+    short_description: Restore the pre-deploy copy of one managed file, reactivate and verify it.
+    options: *ai_ops_managed_file_common

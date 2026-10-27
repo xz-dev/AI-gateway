@@ -1,0 +1,66 @@
+---
+argument_specs:
+  main:
+    short_description: Shared preflight for every AI-gateway operation.
+    description:
+      - Detects the Compose provider, checks connectivity, the deploy root, the community.docker
+        prerequisites and the pinned controller renderer, and builds the env -i Compose argv.
+      - Read-only in check mode; installs nothing.
+    options:
+      ai_ops_config_dir:
+        type: path
+        description: Controller directory holding the private desired state.
+      ai_ops_scripts_dir:
+        type: path
+        description: Controller copy of ops/scripts.
+      ai_ops_deploy_root:
+        type: str
+        description: Remote deployment root.
+      ai_ops_compose_project:
+        type: str
+        description: Remote Compose project name.
+      ai_ops_compose_cmd:
+        type: str
+        description: Compose provider command; empty auto-detects on the remote.
+      ai_ops_runtime:
+        type: str
+        choices: ["", docker, podman]
+        description: Container runtime override; empty auto-detects.
+      ai_ops_compose_project_src:
+        type: str
+        description: Compose project directory passed to the community.docker modules.
+      ai_ops_compose_files:
+        type: list
+        elements: str
+        description: Compose files of the deployment.
+      ai_ops_compose_env_files:
+        type: list
+        elements: str
+        description: Env files of the deployment.
+      ai_ops_compose_renderer_version:
+        type: str
+        description: Pinned controller Compose version; must equal the host's Compose version.
+      ai_ops_compose_renderer_sha256:
+        type: dict
+        description: SHA-256 of the pinned renderer per controller architecture (uname -m).
+      ai_ops_compose_renderer_base_url:
+        type: str
+        description: Release download base URL of the renderer.
+      ai_ops_compose_renderer_dir:
+        type: path
+        description: Task-scoped controller directory of the renderer.
+      ai_ops_state_dir_required:
+        type: bool
+        description: Create the remote .ai-ops-state directory in preflight.
+  capacity:
+    short_description: Memory and disk gate for component deploys.
+    options:
+      ai_ops_deploy_root:
+        type: str
+        description: Remote deployment root whose filesystem is measured.
+      ai_ops_min_mem_mb:
+        type: int
+        description: Minimum available memory in MB for an apply.
+      ai_ops_min_disk_mb:
+        type: int
+        description: Minimum free disk in MB for an apply.

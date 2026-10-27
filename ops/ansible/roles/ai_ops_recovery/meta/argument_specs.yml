@@ -1,0 +1,11 @@
+---
+argument_specs:
+  main:
+    short_description: Install the bounded host recovery guard (service + 30-second timer).
+    description:
+      - Copies gateway_health.py and gateway-recovery.py, verifies the application probes,
+        installs the units and enables the timer. Check mode shows the file diffs only.
+    options:
+      ai_ops_recovery_unit_dir:
+        type: str
+        description: Directory of the systemd units on the host.

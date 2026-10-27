@@ -1,0 +1,115 @@
+---
+# deploy-config.yml -e component=model-catalog: drift gate, static validation with the
+# deployed binary, single-service recreate, readiness and neighbour verification.
+
+- name: Select model-catalog config paths
+  ansible.builtin.set_fact:
+    __ai_ops_model_catalog_file:
+      ai_ops_managed_file_label: model-catalog/config.yaml
+      ai_ops_managed_file_local: "{{ ai_ops_config_dir }}/services/routing/model-catalog/config.yaml"
+      ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+  tags: [always]
+
+- name: Prepare model-catalog config
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: prepare
+    apply:
+      tags: [always]
+  vars:
+    ai_ops_managed_file_label: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_label }}"
+    ai_ops_managed_file_local: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_local }}"
+    ai_ops_managed_file_remote: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_remote }}"
+  tags: [always]
+
+- name: Plan the model-catalog recreate
+  when: ai_ops_managed_file_differs
+  tags: [always]
+  block:
+    - name: Read model-catalog identities
+      ansible.builtin.include_tasks:
+        file: identity.yml
+        apply:
+          tags: [always]
+
+    - name: Read candidate config locally
+      ansible.builtin.slurp:
+        src: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_local }}"
+      delegate_to: localhost
+      register: __ai_ops_model_catalog_candidate
+      no_log: true
+
+    - name: Validate candidate with deployed model-catalog binary
+      community.docker.docker_compose_v2_exec:
+        service: model-catalog
+        argv: [/model-catalog, validate-config, "-"]
+        stdin: "{{ __ai_ops_model_catalog_candidate.content | b64decode }}"
+        stdin_add_newline: false
+        tty: false
+      register: __ai_ops_model_catalog_validate_raw
+      changed_when: false
+      failed_when: __ai_ops_model_catalog_validate_raw.rc != 0
+      check_mode: false
+      no_log: true
+
+    - name: Parse candidate validation
+      ansible.builtin.set_fact:
+        __ai_ops_model_catalog_candidate_validation: "{{ __ai_ops_model_catalog_validate_raw.stdout | from_json }}"
+      no_log: true
+
+    - name: Show candidate validation digest
+      ansible.builtin.debug:
+        msg:
+          config_digest: "{{ __ai_ops_model_catalog_candidate_validation.config_digest }}"
+          image_identity: "{{ __ai_ops_model_catalog_image_id }}"
+          recreation: model-catalog
+
+- name: Deploy model-catalog config
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: deploy
+  vars:
+    ai_ops_managed_file_label: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_label }}"
+    ai_ops_managed_file_local: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_local }}"
+    ai_ops_managed_file_remote: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_remote }}"
+    # model-catalog runs as 65532:65532 and reads the bind-mounted YAML at
+    # startup; a restrictive local mode must never propagate to production.
+    ai_ops_managed_file_mode: "0644"
+    ai_ops_managed_file_activate: {service: model-catalog, dependencies: false}
+    ai_ops_managed_file_verify:
+      role: ai_ops_model_catalog
+      tasks_from: verify
+      expected:
+        policy_digest: "{{ ai_ops_managed_file_local_checksum }}"
+        image_identity: "{{ __ai_ops_model_catalog_image_id | default('') }}"
+        old_container: "{{ __ai_ops_model_catalog_container_id | default('') }}"
+        protected: "{{ __ai_ops_model_catalog_protected_map | default({}) }}"
+      recovery_expected:
+        policy_digest: "{{ ai_ops_managed_file_remote_checksum }}"
+        image_identity: "{{ __ai_ops_model_catalog_image_id | default('') }}"
+        old_container: "{{ __ai_ops_model_catalog_container_id | default('') }}"
+        protected: "{{ __ai_ops_model_catalog_protected_map | default({}) }}"
+    ai_ops_managed_file_failure_receipt:
+      path: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-failed-{{ now(fmt='%s') }}.txt"
+      content: |
+        operation=model-catalog-config-deploy mode=apply
+        candidate_config_digest={{ __ai_ops_model_catalog_candidate_validation.config_digest | default('unknown') }}
+        recovery_config_digest={{ ai_ops_model_catalog_verified_policy_digest | default('unknown') }}
+        recovery_verification={{ 'failed' if ai_ops_managed_file_recovery_failed | default(false) else 'passed' }}
+        outcome={{ 'recovery-required' if ai_ops_managed_file_recovery_failed | default(false) else 'candidate-failed-recovered' }}
+  tags: [always]
+
+- name: Write sanitized model-catalog deploy receipt
+  ansible.builtin.copy:
+    dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-catalog-{{ now(fmt='%s') }}.txt"
+    mode: "0600"
+    content: |
+      operation=model-catalog-config-deploy mode=apply
+      config_digest={{ ai_ops_model_catalog_verified_policy_digest }}
+      image_identity={{ ai_ops_model_catalog_verified_image }}
+      container_id={{ ai_ops_model_catalog_verified_container }}
+      readiness_attempts={{ ai_ops_model_catalog_ready_attempts }}
+      protected_containers_unchanged=true
+      outcome=success
+  when: ai_ops_managed_file_uploaded
+  tags: [activate]

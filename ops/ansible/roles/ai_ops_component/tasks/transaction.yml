@@ -1,0 +1,716 @@
+---
+# The component transaction behind deploy.yml and rollback.yml (selected by
+# ai_ops_component_profiles). No remote Git, build, dependency restart, or unreviewed
+# full-stack activation. Every Compose call is the secret-free env -i argv (design D12).
+- name: Require supported component operation and Docker Compose
+  tags: [always]
+  ansible.builtin.assert:
+    that:
+      - ai_ops_runtime_cli == 'docker'
+      - __ai_ops_component_operation in ['deploy', 'rollback']
+    fail_msg: Front component operations require Docker Compose.
+
+- name: Check worker-owned CPA YAML only for CPA component operations
+  tags: [always]
+  when: ai_ops_component_name in ['cli-proxy-api', 'cpa-model-sync']
+  block:
+    - name: Read live CPA config without exposing credentials
+      ansible.builtin.slurp:
+        src: "{{ ai_ops_deploy_root }}/data/cpa/conf/config.yaml"
+      register: __ai_ops_component_cpa_live_yaml
+      no_log: true
+
+    - name: Parse live CPA YAML on the controller
+      ansible.builtin.set_fact:
+        __ai_ops_component_cpa_document: "{{ __ai_ops_component_cpa_live_yaml.content | b64decode | from_yaml }}"
+      no_log: true
+
+    - name: Require a live CPA YAML mapping without enforcing a config schema
+      ansible.builtin.assert:
+        that: __ai_ops_component_cpa_document is mapping
+      no_log: true
+
+- name: Validate the actual remote Compose argv before any mutation
+  tags: [always]
+  ansible.builtin.command:
+    argv: "{{ ai_ops_compose_argv + ['config', '--quiet'] }}"
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Read component writer lock ownership without creating state
+  tags: [always]
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}", info, "{{ ai_ops_deploy_root }}"]
+    stdin: '{}'
+  register: __ai_ops_component_lock_raw
+  changed_when: false
+  check_mode: false
+
+- name: Parse component writer lock ownership
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_lock: "{{ __ai_ops_component_lock_raw.stdout | from_json }}"
+
+- name: Read immutable rollback snapshot reference
+  tags: [always]
+  ansible.builtin.slurp:
+    src: "{{ ai_ops_deploy_root }}/.ai-ops-state/front-{{ ai_ops_component_name }}-last.json"
+  register: __ai_ops_component_rollback_raw
+  no_log: true
+  when: __ai_ops_component_operation == 'rollback'
+
+- name: Select rollback snapshot
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_previous: "{{ __ai_ops_component_rollback_raw.content | b64decode | from_json }}"
+  no_log: true
+  when: __ai_ops_component_operation == 'rollback'
+
+- name: Require snapshot belonging to this component
+  tags: [always]
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_component_previous.service == ai_ops_component_name
+      - __ai_ops_component_previous.snapshot.startswith(ai_ops_deploy_root + '/.ai-ops-state/front-' + ai_ops_component_name + '-')
+    fail_msg: Invalid front component rollback receipt; recover manually without overwriting live files.
+  when: __ai_ops_component_operation == 'rollback'
+
+- name: Select protected configuration source
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_source_root: "{{ ai_ops_config_dir if __ai_ops_component_operation == 'deploy' else __ai_ops_component_previous.snapshot }}"
+    __ai_ops_component_source_host: "{{ 'localhost' if __ai_ops_component_operation == 'deploy' else inventory_hostname }}"
+  no_log: true
+
+- name: Read candidate configuration checksums
+  tags: [always]
+  ansible.builtin.stat:
+    path: "{{ __ai_ops_component_source_root }}/{{ item }}"
+    checksum_algorithm: sha256
+  loop: [compose.yaml, compose.override.yaml, .env]
+  delegate_to: "{{ __ai_ops_component_source_host }}"
+  register: __ai_ops_component_source_files
+  no_log: true
+
+- name: Require all candidate files
+  tags: [always]
+  ansible.builtin.assert:
+    that: __ai_ops_component_source_files.results | selectattr('stat.exists', 'equalto', true) | list | length == 3
+    fail_msg: Candidate configuration is incomplete.
+
+- name: Collect candidate file hashes
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_source_hashes: >-
+      {{ dict(__ai_ops_component_source_files.results | map(attribute='item') | zip(__ai_ops_component_source_files.results |
+      map(attribute='stat.checksum'))) }}
+  no_log: true
+
+- name: Select the candidate renderer (pinned controller renderer for deploy, host Compose for rollback)
+  tags: [always]
+  ansible.builtin.set_fact:
+    # ai_ops_compose_argv[:3] is env -i PATH=<remote PATH>.
+    __ai_ops_component_render_argv: >-
+      {{ (['env', '-i', 'PATH=' + lookup('ansible.builtin.env', 'PATH'), ai_ops_compose_renderer_path]
+          if __ai_ops_component_operation == 'deploy' else ai_ops_compose_argv[:3] + ai_ops_compose_cmd.split())
+         + ['-p', ai_ops_compose_project,
+            '-f', __ai_ops_component_source_root + '/compose.yaml',
+            '-f', __ai_ops_component_source_root + '/compose.override.yaml',
+            '--env-file', __ai_ops_component_source_root + '/.env'] }}
+  no_log: true
+
+- name: Validate candidate Compose explicitly without mutation
+  tags: [always]
+  ansible.builtin.command:
+    argv: "{{ __ai_ops_component_render_argv + ['config', '--quiet'] }}"
+  delegate_to: "{{ __ai_ops_component_source_host }}"
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Render candidate Compose without exposing secrets
+  tags: [always]
+  ansible.builtin.command:
+    argv: "{{ __ai_ops_component_render_argv + ['config', '--no-path-resolution', '--format', 'json'] }}"
+  delegate_to: "{{ __ai_ops_component_source_host }}"
+  register: __ai_ops_component_source_config_raw
+  no_log: true
+  changed_when: false
+  check_mode: false
+
+- name: Parse candidate Compose
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_source_config: "{{ __ai_ops_component_source_config_raw.stdout | from_json }}"
+  no_log: true
+
+- name: Select namespace ownership contract
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_shared_namespace: "{{ __ai_ops_component_source_config.services[ai_ops_component_name].get('network_mode', '').startswith('service:') }}"
+
+- name: Read current configuration and container identities
+  tags: [always]
+  ansible.builtin.include_tasks:
+    file: state.yml
+    apply:
+      tags: [always]
+
+- name: Refuse stale rollback selection or unrelated live identity
+  tags: [always]
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}", rollback-guard, "{{ ai_ops_deploy_root }}"]
+    stdin: >-
+      {{ {'service': ai_ops_component_name, 'snapshot': __ai_ops_component_previous.snapshot, 'live': __ai_ops_component_runtime.identity.target} |
+      to_json }}
+    stdin_add_newline: false
+  changed_when: false
+  check_mode: false
+  when: __ai_ops_component_operation == 'rollback'
+
+- name: Validate single-service scope and pure-cache topology
+  tags: [always]
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import json, re, sys
+        data = json.load(sys.stdin)
+        service = data['service']
+        current, candidate = data['current'], data['candidate']
+        try:
+            old, new = current['services'][service], candidate['services'][service]
+            for config in (current, candidate):
+                config['services'].pop(service)
+            assert current == candidate, 'unrelated effective Compose configuration changed'
+            def fixed(c):
+                return {k: v for k, v in c.items() if k not in ('image', 'environment')}
+            assert fixed(old) == fixed(new), 'component profile only permits image and environment changes'
+            expected = data['expected_env']
+            if data['front_cache']:
+                assert all(str(new.get('environment', {}).get(k)) == v for k, v in expected.items()), 'front topology environment mismatch'
+                assert new.get('network_mode') == 'service:ai-sse-keepalive-proxy-netns', 'wrong namespace owner'
+                assert not new.get('ports') and not new.get('networks'), 'front component must remain private'
+                routing = ('CPA_API_KEY', 'ROUTING_INDEX_URL', 'UPSTREAM_CPA_URL', 'UPSTREAM_AISIX_URL')
+                assert not any(k in new.get('environment', {}) for k in routing), 'front component must not acquire provider credentials or routing'
+                pattern = r'ghcr\.io/xz-dev/' + re.escape(service) + r':[0-9a-f]{40}@sha256:[0-9a-f]{64}'
+                assert re.fullmatch(pattern, new['image']), 'candidate image must pin source revision and digest'
+                assert re.fullmatch(pattern, old['image']), 'current image must be immutable for rollback'
+            elif data['pull']:
+                assert re.search(r'@sha256:[0-9a-f]{64}$', new['image']), 'registry image requires immutable digest'
+                assert re.search(r'@sha256:[0-9a-f]{64}$', old['image']), 'current registry image must be immutable for rollback'
+            assert new.get('image'), 'candidate image missing'
+            old_env, new_env = old.get('environment', {}), new.get('environment', {})
+            print(json.dumps({'image': new['image'], 'current_image': old['image'],
+                              'env': {k: str(new['environment'][k]) for k in expected},
+                              'environment_changes': sorted(k for k in set(old_env) | set(new_env) if old_env.get(k) != new_env.get(k))}))
+        except (AssertionError, KeyError) as exc:
+            sys.exit(str(exc) if isinstance(exc, AssertionError) else 'missing required front component field')
+    stdin: >-
+      {{ {'service': ai_ops_component_name, 'current': __ai_ops_component_live_config, 'candidate': __ai_ops_component_source_config, 'expected_env':
+      ai_ops_component_profiles[ai_ops_component_name].get('env', {}), 'front_cache': ai_ops_component_profiles[ai_ops_component_name].get('front_cache',
+      false), 'pull': ai_ops_component_profiles[ai_ops_component_name].get('pull', true)} | to_json }}
+    stdin_add_newline: false
+  register: __ai_ops_component_scope_raw
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Parse validated component plan
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_scope: "{{ __ai_ops_component_scope_raw.stdout | from_json }}"
+    __ai_ops_component_before_hashes: "{{ __ai_ops_component_live_hashes }}"
+    __ai_ops_component_before_runtime: "{{ __ai_ops_component_runtime }}"
+    __ai_ops_component_before_config: "{{ __ai_ops_component_live_config }}"
+  no_log: true
+
+- name: Verify candidate image before approval without pulling
+  tags: [always]
+  ansible.builtin.include_tasks:
+    file: image.yml
+    apply:
+      tags: [always]
+  vars:
+    __ai_ops_component_image_mode: "{{ 'plan' if __ai_ops_component_operation == 'deploy' else 'local' }}"
+
+- name: Remember the image identity bound by the reviewed plan
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_planned_image_id: "{{ __ai_ops_component_image.image_id }}"
+
+- name: Require healthy namespace ownership and stable active component
+  tags: [always]
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_component_runtime.owner.running
+      - __ai_ops_component_operation == 'rollback' or __ai_ops_component_runtime.target.running
+      - not __ai_ops_component_runtime.target.paused
+      - __ai_ops_component_operation == 'rollback' or not __ai_ops_component_runtime.target.restarting
+      - __ai_ops_component_operation == 'rollback' or __ai_ops_component_runtime.target.netns == __ai_ops_component_runtime.owner.netns
+      - >-
+          __ai_ops_component_operation == 'rollback' or not __ai_ops_component_shared_namespace or __ai_ops_component_runtime.target.network_mode ==
+          'container:' + __ai_ops_component_runtime.owner.id
+      - >-
+          __ai_ops_component_operation == 'rollback' or not ai_ops_component_profiles[ai_ops_component_name].get('front_cache', false) or
+          __ai_ops_component_runtime.target.ready
+      - __ai_ops_component_operation == 'rollback' or __ai_ops_component_runtime.target.image_ref == __ai_ops_component_scope.current_image
+      - >-
+          __ai_ops_component_operation == 'rollback' or not ai_ops_component_profiles[ai_ops_component_name].get('front_cache', false) or
+          __ai_ops_component_runtime.target.env == __ai_ops_component_live_config.services[ai_ops_component_name].get('environment', {}) | dict2items
+          | selectattr('key', 'in', ['PORT', 'LISTEN_ADDR', 'UPSTREAM_URL', 'IGNORE_CLIENT_STORE_FALSE']) | items2dict
+    fail_msg: Front component is not on the expected active namespace; stop rather than repairing adjacent services.
+
+- name: Guard rollback against intervening configuration or container changes
+  tags: [always]
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_component_source_hashes == __ai_ops_component_previous.before_hashes
+      - __ai_ops_component_runtime.identity.protected == __ai_ops_component_previous.before_runtime.identity.protected
+      - __ai_ops_component_runtime.target.image in [__ai_ops_component_previous.before_runtime.target.image, __ai_ops_component_previous.candidate_image_id]
+      - >-
+          __ai_ops_component_live_hashes['compose.yaml'] in [__ai_ops_component_previous.before_hashes['compose.yaml'],
+          __ai_ops_component_previous.candidate_hashes['compose.yaml']]
+      - >-
+          __ai_ops_component_live_hashes['compose.override.yaml'] in [__ai_ops_component_previous.before_hashes['compose.override.yaml'],
+          __ai_ops_component_previous.candidate_hashes['compose.override.yaml']]
+      - __ai_ops_component_live_hashes['.env'] in [__ai_ops_component_previous.before_hashes['.env'], __ai_ops_component_previous.candidate_hashes['.env']]
+    fail_msg: Rollback snapshot or live state drifted; no file was restored. Reconcile with the coordinator.
+  when: __ai_ops_component_operation == 'rollback'
+
+- name: Bind approval to candidate files and freshly read live identities
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_plan_digest: >-
+      {{ {'host': inventory_hostname, 'root': ai_ops_deploy_root, 'project': ai_ops_compose_project, 'operation': __ai_ops_component_operation, 'service':
+      ai_ops_component_name, 'source': __ai_ops_component_source_root, 'candidate': __ai_ops_component_source_hashes, 'live':
+      __ai_ops_component_before_hashes, 'identity': __ai_ops_component_before_runtime.identity, 'image_proof': __ai_ops_component_image} |
+      to_json(sort_keys=true) | hash('sha256') }}
+
+- name: Determine whether an already verified component needs activation
+  tags: [always]
+  ansible.builtin.set_fact:
+    __ai_ops_component_apply_required: >-
+      {{ __ai_ops_component_source_hashes != __ai_ops_component_before_hashes or not __ai_ops_component_runtime.target.ready or
+      __ai_ops_component_runtime.target.config_env_hash != (__ai_ops_component_source_config.services[ai_ops_component_name].get('environment', {}) |
+      to_json(sort_keys=true) | hash('sha256')) or (__ai_ops_component_planned_image_id is not none and __ai_ops_component_runtime.target.image !=
+      __ai_ops_component_planned_image_id) }}
+
+- name: Show sanitized front component plan
+  tags: [always]
+  ansible.builtin.debug:
+    msg:
+      operation: "{{ __ai_ops_component_operation }}"
+      host: "{{ inventory_hostname }}"
+      deployment_root: "{{ ai_ops_deploy_root }}"
+      project: "{{ ai_ops_compose_project }}"
+      service: "{{ ai_ops_component_name }}"
+      config_diff: "{{ __ai_ops_component_source_hashes != __ai_ops_component_before_hashes }}"
+      activation_required: "{{ __ai_ops_component_apply_required }}"
+      image: "{{ __ai_ops_component_scope.image }}"
+      current_image_id: "{{ __ai_ops_component_runtime.target.image }}"
+      env: "{{ __ai_ops_component_scope.env }}"
+      environment_changes: "{{ __ai_ops_component_scope.environment_changes }}"
+      candidate_sha256: "{{ __ai_ops_component_source_hashes }}"
+      live_sha256: "{{ __ai_ops_component_before_hashes }}"
+      health: "{{ __ai_ops_component_runtime.target.health }}"
+      namespace_owner: "{{ __ai_ops_component_runtime.owner.id }}"
+      protected_containers: "{{ __ai_ops_component_runtime.identity.protected | length }}"
+      approval_digest: "{{ __ai_ops_component_plan_digest }}"
+      readiness_source: "{{ __ai_ops_component_runtime.target.readiness_source }}"
+      ready: "{{ __ai_ops_component_runtime.target.ready }}"
+      writer_lock: "{{ __ai_ops_component_lock }}"
+      image_proof: "{{ __ai_ops_component_image }}"
+      compose_validation_argv: "{{ ai_ops_compose_argv + ['config', '--quiet'] }}"
+      pull_argv: >-
+        {{ [ai_ops_runtime_cli, 'pull', __ai_ops_component_scope.image] if __ai_ops_component_operation == 'deploy' and
+        ai_ops_component_profiles[ai_ops_component_name].get('pull', true) else [] }}
+      recreate_argv: "{{ ai_ops_compose_argv + ['up', '-d', '--force-recreate', '--no-deps', '--no-build', '--pull', 'never', ai_ops_component_name] }}"
+      interruption: Recreating the selected component interrupts its in-flight streams. No dependency is restarted.
+
+- name: Require the exact approved front plan before any mutation
+  tags: [always]
+  ansible.builtin.assert:
+    that:
+      - not __ai_ops_component_lock.held
+      - __ai_ops_component_runtime.target.readiness_source != 'missing'
+      - ai_ops_component_approved_digest | length > 0
+      - ai_ops_component_approved_digest == __ai_ops_component_plan_digest
+    fail_msg: Review plan and rerun apply with ai_ops_component_approved_digest; stale plans fail closed.
+  when: not ansible_check_mode
+
+- name: Report an already verified no-op without restarting anything
+  tags: [always]
+  ansible.builtin.debug:
+    msg: No activation needed; reviewed files and ready runtime already match.
+  when: not ansible_check_mode and not __ai_ops_component_apply_required
+
+- name: Apply reviewed front component transaction
+  tags: [activate]
+  when: not ansible_check_mode and __ai_ops_component_apply_required
+  block:
+    - name: Ensure private component state directory
+      ansible.builtin.file:
+        path: "{{ ai_ops_deploy_root }}/.ai-ops-state"
+        state: directory
+        mode: '0700'
+
+    - name: Read outermost Ansible controller identity (not its per-task worker)
+      ansible.builtin.command:
+        argv:
+          - python3
+          - '-c'
+          - "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}"
+          - controller-identity
+          - "{{ ai_ops_deploy_root }}"
+        stdin: '{}'
+      delegate_to: localhost
+      register: __ai_ops_component_controller_raw
+      changed_when: false
+
+    - name: Identify this controller transaction
+      ansible.builtin.set_fact:
+        __ai_ops_component_transaction: "{{ lookup('pipe', 'python3 -c \"import uuid; print(uuid.uuid4().hex)\"') }}"
+        __ai_ops_component_controller: "{{ __ai_ops_component_controller_raw.stdout | from_json }}"
+
+    - name: Acquire exclusive owned component lock and durable initial receipt
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}", acquire, "{{ ai_ops_deploy_root }}"]
+        stdin: >-
+          {{ {'transaction': __ai_ops_component_transaction, 'controller_host': __ai_ops_component_controller.controller_host, 'controller_pid':
+          __ai_ops_component_controller.controller_pid, 'service': ai_ops_component_name, 'operation': __ai_ops_component_operation,
+          'approval_digest': __ai_ops_component_plan_digest} | to_json }}
+      register: __ai_ops_component_writer_lock
+      changed_when: true
+      no_log: true
+
+    - name: Record image preparation stage durably
+      ansible.builtin.include_tasks:
+        file: progress.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_stage: preparing-image
+
+    - name: Pull only the exact pinned candidate image independently of pull_policy
+      community.docker.docker_image_pull:
+        name: "{{ __ai_ops_component_scope.image }}"
+        pull: always
+      async: "{{ ai_ops_component_command_timeout }}"
+      poll: 5
+      when: __ai_ops_component_operation == 'deploy' and ai_ops_component_profiles[ai_ops_component_name].get('pull', true)
+
+    - name: Verify exact candidate digest locally (rollback and preload never pull)
+      ansible.builtin.include_tasks:
+        file: image.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_image_mode: local
+
+    - name: Save verified candidate image identity
+      ansible.builtin.set_fact:
+        __ai_ops_component_candidate_image_id: "{{ __ai_ops_component_image.image_id }}"
+
+    - name: Record prepared image stage durably
+      ansible.builtin.include_tasks:
+        file: progress.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_stage: image-ready
+
+    - name: Re-read live state immediately before backup and writes
+      ansible.builtin.include_tasks:
+        file: state.yml
+        apply:
+          tags: [always]
+
+    - name: Refuse changed live state after image preparation
+      ansible.builtin.assert:
+        that:
+          - __ai_ops_component_live_hashes == __ai_ops_component_before_hashes
+          - __ai_ops_component_runtime.identity == __ai_ops_component_before_runtime.identity
+          - __ai_ops_component_candidate_image_id != ''
+          - __ai_ops_component_planned_image_id is none or __ai_ops_component_candidate_image_id == __ai_ops_component_planned_image_id
+          - __ai_ops_component_operation != 'rollback' or __ai_ops_component_candidate_image_id == __ai_ops_component_previous.before_runtime.target.image
+        fail_msg: CAS failed after image preparation; no configuration was uploaded and no container recreated.
+
+    - name: Recheck rollback provenance under the owned lock before writes
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}", rollback-guard, "{{ ai_ops_deploy_root }}"]
+        stdin: >-
+          {{ {'service': ai_ops_component_name, 'snapshot': __ai_ops_component_previous.snapshot, 'live': __ai_ops_component_runtime.identity.target,
+          'transaction': __ai_ops_component_transaction} | to_json }}
+        stdin_add_newline: false
+      changed_when: false
+      when: __ai_ops_component_operation == 'rollback'
+
+    - name: Allocate immutable private snapshot
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ ai_ops_deploy_root }}/.ai-ops-state"
+        prefix: "front-{{ ai_ops_component_name }}-"
+      register: __ai_ops_component_snapshot_dir
+
+    - name: Save private pre-operation configuration
+      ansible.builtin.copy:
+        src: "{{ ai_ops_deploy_root }}/{{ item }}"
+        dest: "{{ __ai_ops_component_snapshot_dir.path }}/{{ item }}"
+        remote_src: true
+        mode: '0600'
+      loop: [compose.yaml, compose.override.yaml, .env]
+      no_log: true
+
+    - name: Record guarded rollback set before activation
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/front-{{ ai_ops_component_name }}-last.json"
+        mode: '0600'
+        content: |
+          {{ {'service': ai_ops_component_name, 'snapshot': __ai_ops_component_snapshot_dir.path, 'before_hashes':
+            __ai_ops_component_before_hashes, 'before_runtime': __ai_ops_component_before_runtime, 'candidate_hashes':
+            __ai_ops_component_source_hashes, 'candidate_image_id': __ai_ops_component_candidate_image_id} | to_nice_json }}
+      when: __ai_ops_component_operation == 'deploy'
+      no_log: true
+
+    - name: Verify private snapshot checksums before upload
+      ansible.builtin.stat:
+        path: "{{ __ai_ops_component_snapshot_dir.path }}/{{ item }}"
+        checksum_algorithm: sha256
+      loop: [compose.yaml, compose.override.yaml, .env]
+      register: __ai_ops_component_snapshot_files
+      no_log: true
+
+    - name: Refuse a changed snapshot
+      ansible.builtin.assert:
+        that: item.stat.checksum == __ai_ops_component_before_hashes[item.item]
+        fail_msg: Snapshot changed; no live configuration was uploaded.
+      loop: "{{ __ai_ops_component_snapshot_files.results }}"
+      no_log: true
+
+    - name: Re-read candidate source checksums before upload
+      ansible.builtin.stat:
+        path: "{{ __ai_ops_component_source_root }}/{{ item }}"
+        checksum_algorithm: sha256
+      loop: [compose.yaml, compose.override.yaml, .env]
+      delegate_to: "{{ __ai_ops_component_source_host }}"
+      register: __ai_ops_component_candidate_files
+      no_log: true
+
+    - name: Refuse a changed candidate source
+      ansible.builtin.assert:
+        that: item.stat.checksum == __ai_ops_component_source_hashes[item.item]
+        fail_msg: Candidate changed after planning; no live configuration was uploaded.
+      loop: "{{ __ai_ops_component_candidate_files.results }}"
+      no_log: true
+
+    - name: Re-read state after snapshot and before upload
+      ansible.builtin.include_tasks:
+        file: state.yml
+        apply:
+          tags: [always]
+
+    - name: Refuse changed live state immediately before configuration writes
+      ansible.builtin.assert:
+        that:
+          - __ai_ops_component_live_hashes == __ai_ops_component_before_hashes
+          - __ai_ops_component_runtime.identity == __ai_ops_component_before_runtime.identity
+        fail_msg: CAS failed before configuration upload; private snapshot retained, no live configuration was uploaded.
+
+    - name: Record stage before configuration upload
+      ansible.builtin.include_tasks:
+        file: progress.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_stage: uploading-config
+
+    - name: Upload or restore only reviewed private configuration
+      ansible.builtin.copy:
+        src: "{{ __ai_ops_component_source_root }}/{{ item }}"
+        dest: "{{ ai_ops_deploy_root }}/{{ item }}"
+        remote_src: "{{ __ai_ops_component_operation == 'rollback' }}"
+        mode: '0600'
+      loop: [compose.yaml, compose.override.yaml, .env]
+      no_log: true
+
+    - name: Verify candidate checksums before recreating anything
+      ansible.builtin.include_tasks:
+        file: state.yml
+        apply:
+          tags: [always]
+
+    - name: Refuse changed upload or runtime before activation
+      ansible.builtin.assert:
+        that:
+          - __ai_ops_component_live_hashes == __ai_ops_component_source_hashes
+          - __ai_ops_component_runtime.identity == __ai_ops_component_before_runtime.identity
+          - __ai_ops_component_live_config == __ai_ops_component_source_config
+        fail_msg: CAS failed before activation; private snapshot retained. No recreate performed; inspect before rollback.
+
+    - name: Validate uploaded candidate using the exact apply Compose argv
+      ansible.builtin.command:
+        argv: "{{ ai_ops_compose_argv + ['config', '--quiet'] }}"
+      changed_when: false
+      no_log: true
+
+    - name: Record stage before selected component activation
+      ansible.builtin.include_tasks:
+        file: progress.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_stage: activating
+
+    - name: Recreate only selected front component without builds or implicit pulls
+      ansible.builtin.command:
+        argv: "{{ ai_ops_compose_argv + ['up', '-d', '--force-recreate', '--no-deps', '--no-build', '--pull', 'never', ai_ops_component_name] }}"
+      async: "{{ ai_ops_component_command_timeout }}"
+      poll: 5
+      changed_when: true
+
+    - name: Record activation returned before readiness verification
+      ansible.builtin.include_tasks:
+        file: progress.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_stage: verifying
+
+    - name: Wait for selected component health without touching dependencies
+      ansible.builtin.include_tasks:
+        file: runtime.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_wait: true
+
+    - name: Verify exact image, environment, namespace and protected containers
+      ansible.builtin.assert:
+        that:
+          - __ai_ops_component_runtime.target.image == __ai_ops_component_candidate_image_id
+          - __ai_ops_component_runtime.target.image_ref == __ai_ops_component_scope.image
+          - >-
+              __ai_ops_component_runtime.target.config_env_hash ==
+              __ai_ops_component_source_config.services[ai_ops_component_name].get('environment', {}) | to_json(sort_keys=true) | hash('sha256')
+          - __ai_ops_component_runtime.target.netns == __ai_ops_component_runtime.owner.netns
+          - not __ai_ops_component_shared_namespace or __ai_ops_component_runtime.target.network_mode == 'container:' + __ai_ops_component_runtime.owner.id
+          - __ai_ops_component_runtime.identity.protected == __ai_ops_component_before_runtime.identity.protected
+          - not __ai_ops_component_runtime.target.paused
+          - not __ai_ops_component_runtime.target.restarting
+        fail_msg: Front component verification failed; stop and review the private snapshot before explicit rollback.
+
+    - name: Re-read all configuration after verified activation
+      ansible.builtin.include_tasks:
+        file: state.yml
+        apply:
+          tags: [always]
+
+    - name: Refuse post-activation drift before advancing any baseline
+      ansible.builtin.assert:
+        that:
+          - __ai_ops_component_live_hashes == __ai_ops_component_source_hashes
+          - __ai_ops_component_runtime.target.image == __ai_ops_component_candidate_image_id
+          - __ai_ops_component_runtime.target.ready
+          - __ai_ops_component_runtime.identity.protected == __ai_ops_component_before_runtime.identity.protected
+        fail_msg: Activation verification or group CAS failed; baselines remain unchanged.
+
+    - name: Record stage before committing verified configuration baselines
+      ansible.builtin.include_tasks:
+        file: progress.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_stage: committing-baselines
+
+    - name: Advance baselines only after activation and readback succeed
+      ansible.builtin.copy:
+        src: "{{ ai_ops_deploy_root }}/{{ item }}"
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ item }}.baseline"
+        remote_src: true
+        mode: '0600'
+      loop: [compose.yaml, compose.override.yaml, .env]
+      no_log: true
+
+    - name: Write sanitized successful operation receipt
+      ansible.builtin.copy:
+        dest: "{{ __ai_ops_component_snapshot_dir.path }}/receipt.json"
+        mode: '0600'
+        content: |
+          {{ {'operation': __ai_ops_component_operation, 'service': ai_ops_component_name, 'approval_digest': __ai_ops_component_plan_digest,
+            'before': __ai_ops_component_before_runtime.identity.target, 'after': __ai_ops_component_runtime.identity.target,
+            'namespace_owner': __ai_ops_component_runtime.owner.id, 'health': __ai_ops_component_runtime.target.health, 'config_hashes':
+            __ai_ops_component_source_hashes, 'snapshot': __ai_ops_component_snapshot_dir.path} | to_nice_json }}
+
+    - name: Commit durable success before releasing ownership
+      ansible.builtin.include_tasks:
+        file: progress.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_stage: complete
+        __ai_ops_component_outcome: success
+
+    - name: Show verified front component result
+      ansible.builtin.debug:
+        msg:
+          service: "{{ ai_ops_component_name }}"
+          image_id: "{{ __ai_ops_component_runtime.target.image }}"
+          health: "{{ __ai_ops_component_runtime.target.health }}"
+          env: "{{ __ai_ops_component_scope.env }}"
+          namespace_owner: "{{ __ai_ops_component_runtime.owner.id }}"
+          protected_containers_unchanged: "{{ __ai_ops_component_runtime.identity.protected | length }}"
+          private_snapshot: "{{ __ai_ops_component_snapshot_dir.path }}"
+  rescue:
+    - name: Read stopped component identity for explicit rollback provenance
+      when: __ai_ops_component_snapshot_dir is defined
+      block:
+        - name: Read failed activation runtime without requiring health
+          ansible.builtin.include_tasks:
+            file: runtime.yml
+            apply:
+              tags: [always]
+          vars:
+            __ai_ops_component_wait: false
+        - name: Remember observed failure identity
+          ansible.builtin.set_fact:
+            __ai_ops_component_failure_after: "{{ __ai_ops_component_runtime.identity.target }}"
+      rescue:
+        - name: Leave unreadable failure identity unproven
+          ansible.builtin.set_fact:
+            __ai_ops_component_failure_after: null
+
+    - name: Record sanitized stopped operation without claiming recovery
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/front-{{ ai_ops_component_name }}-failure.json"
+        mode: '0600'
+        content: |
+          {{ {'service': ai_ops_component_name, 'operation': __ai_ops_component_operation, 'approval_digest': __ai_ops_component_plan_digest,
+            'stage': ansible_failed_task.name, 'snapshot': __ai_ops_component_snapshot_dir.path if __ai_ops_component_snapshot_dir is defined
+            else '', 'transaction': __ai_ops_component_transaction, 'after': __ai_ops_component_failure_after | default(none), 'outcome':
+            'recovery-required' if __ai_ops_component_snapshot_dir is defined else 'stopped-before-upload'} | to_nice_json }}
+      when: __ai_ops_component_writer_lock is defined and __ai_ops_component_writer_lock.rc | default(1) == 0
+
+    - name: Persist failed transaction stage without claiming rollback
+      ansible.builtin.include_tasks:
+        file: progress.yml
+        apply:
+          tags: [always]
+      vars:
+        __ai_ops_component_stage: "{{ ansible_failed_task.name }}"
+        __ai_ops_component_outcome: failed
+      when: __ai_ops_component_writer_lock is defined and __ai_ops_component_writer_lock.rc | default(1) == 0
+
+    - name: Stop after failed front operation for explicit reviewed recovery
+      ansible.builtin.fail:
+        msg: Front operation failed; inspect private failure/snapshot receipts and plan explicit rollback. No automatic recovery or success is claimed.
+  always:
+    - name: Release only this operation's front writer lock
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}", release, "{{ ai_ops_deploy_root }}"]
+        stdin: "{{ {'transaction': __ai_ops_component_transaction} | to_json }}"
+      when: __ai_ops_component_writer_lock is defined and __ai_ops_component_writer_lock.rc | default(1) == 0
+      changed_when: true
+      no_log: true

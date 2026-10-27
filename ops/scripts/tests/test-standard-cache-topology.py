@@ -98,14 +98,13 @@ class StandardCacheTopology(unittest.TestCase):
         self.assertIn(f"RESPONSES_WS_SSE_BRIDGE_IMAGE={reference}\n", (ROOT / ".env.example").read_text())
 
     def test_generic_component_prepares_image_before_no_pull_recreate(self):
-        ops = (ROOT / "ops/ansible/ops.yml").read_text()
-        self.assertNotIn('Pull exact image for {{ service }}', ops)
-        self.assertIn("when: service | default('') in ai_ops_profiles", ops)
-        shared = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-component.yml').read_text()
+        deploy = (ROOT / "ops/ansible/playbooks/deploy.yml").read_text()
+        self.assertIn("name: ai_ops_component\n        tasks_from: deploy", deploy)
+        shared = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/transaction.yml').read_text()
         prepare, recreate = shared.split('- name: Recreate only selected front component', 1)
         self.assertIn('Verify exact candidate digest locally', prepare)
-        self.assertIn('argv: ["{{ _runtime }}", pull, "{{ _front_scope.image }}"]', prepare)
-        self.assertIn("ai_ops_profiles[service].get('pull', true)", prepare)
+        self.assertIn('community.docker.docker_image_pull:\n        name: "{{ __ai_ops_component_scope.image }}"\n        pull: always', prepare)
+        self.assertIn("ai_ops_component_profiles[ai_ops_component_name].get('pull', true)", prepare)
         self.assertIn("'--no-deps', '--no-build', '--pull', 'never'", recreate)
 
     def test_published_images_match_gitlinks_and_environment(self):
@@ -172,24 +171,23 @@ class StandardCacheTopology(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(SystemExit):
                 exec(program, {"compose": bad})
 
-    def test_legacy_ansible_tags_fail_before_runtime_or_writes(self):
-        preflight = (ROOT / "ops/ansible/roles/ai_ops/tasks/preflight.yml").read_text()
-        guard = preflight.split("- name: Detect Compose provider", 1)[0]
-        self.assertIn("ansible.builtin.assert:", guard)
+    def test_retired_operations_are_gone(self):
+        # Operations are playbooks now; the retired cache operations have no playbook, tag or task.
         retired = ("deploy-response-keeper", "deploy-responses-path", "restart-response-keeper",
-                   "deploy-standard-cache-path", "restart-openai-api-cache-keeper", "rollback-standard-cache-path")
-        for tag in retired:
-            self.assertIn(tag, guard)
-        self.assertNotIn("ansible.builtin.shell:", guard)
-        self.assertNotIn("ansible.builtin.file:", guard)
-        # Retired tags must not reach any task; only the preflight guard may name them.
+                   "deploy-standard-cache-path", "restart-openai-api-cache-keeper", "rollback-standard-cache-path",
+                   "deploy-ws-keepalive")
+        self.assertFalse((ROOT / "ops/ansible/ops").with_suffix(".yml").exists())  # the retired single entry point
+        playbooks = sorted(p.name for p in (ROOT / "ops/ansible/playbooks").glob("*.yml"))
+        self.assertEqual(playbooks, ["deploy-config.yml", "deploy.yml", "recovery.yml", "rollback-config.yml",
+                                     "rollback.yml", "unlock.yml"])
         for path in (ROOT / "ops/ansible").rglob("*.yml"):
-            if path.name != "preflight.yml":
-                for tag in retired[3:]:
-                    self.assertNotIn(tag, path.read_text(), path)
+            if "collections" in path.parts:
+                continue
+            for tag in retired:
+                self.assertNotIn(tag, path.read_text(), path)
 
     def test_front_profiles_reject_unrelated_or_unpinned_changes(self):
-        tasks = (ROOT / "ops/ansible/roles/ai_ops/tasks/front-component.yml").read_text()
+        tasks = (ROOT / "ops/ansible/roles/ai_ops_component/tasks/transaction.yml").read_text()
         program = textwrap.dedent(tasks.split("      - |\n", 1)[1].split("    stdin:", 1)[0])
         keeper, bridge = "openai-api-cache-keeper", "responses-ws-sse-bridge"
         for service, expected in (
@@ -231,11 +229,13 @@ class StandardCacheTopology(unittest.TestCase):
                     target["cap_add"] = ["NET_ADMIN"]
                 with self.subTest(service=service, fault=fault):
                     check(bad, False)
-        profiles = (ROOT / "ops/ansible/roles/ai_ops/defaults/main.yml").read_text()
+        profiles = (ROOT / "ops/ansible/roles/ai_ops_component/defaults/main.yml").read_text()
         for service in (keeper, bridge):
             self.assertRegex(profiles, rf"\n  {service}:\n    front_cache: true\n")
-        self.assertIn("'--no-deps', '--no-build', '--pull', 'never', service", tasks)
-        self.assertIn("env -i PATH=\"$PATH\"", tasks)
+        self.assertIn("'--no-deps', '--no-build', '--pull', 'never', ai_ops_component_name", tasks)
+        self.assertIn("'env', '-i', 'PATH=' + lookup('ansible.builtin.env', 'PATH')", tasks)
+        self.assertIn("ai_ops_compose_argv + ['config', '--no-path-resolution', '--format', 'json']",
+                      (ROOT / "ops/ansible/roles/ai_ops_component/tasks/state.yml").read_text())
         self.assertLess(tasks.index("Require the exact approved front plan"), tasks.index("Pull only the exact pinned"))
         self.assertLess(tasks.index("Refuse changed live state immediately before"), tasks.index("Upload or restore only"))
         self.assertIn("mode: '0700'", tasks)

@@ -1,0 +1,46 @@
+---
+# Read-only prerequisite checks (design D12, D13). Nothing is installed: a missing
+# prerequisite stops the run so the operator decides about any host package change.
+
+- name: Read the host Compose version
+  ansible.builtin.command:
+    argv: "{{ ai_ops_compose_cmd.split() + ['version', '--short'] }}"
+  register: __ai_ops_host_compose
+  changed_when: false
+  check_mode: false
+
+- name: Check the remote Python can import requests (community.docker API modules)
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default(ansible_facts.discovered_interpreter_python | default('/usr/bin/python3')) }}"
+      - -c
+      - import requests
+  register: __ai_ops_requests
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Require Python requests on the host
+  ansible.builtin.assert:
+    that: __ai_ops_requests.rc == 0
+    fail_msg: >-
+      Missing prerequisite: the remote Python lacks the 'requests' library that the
+      community.docker API modules need. Nothing was installed; ask the operator
+      before any host package change.
+
+- name: Check the Docker daemon API through community.docker
+  community.docker.docker_host_info:
+  register: __ai_ops_docker_host
+
+- name: Fetch and verify the pinned controller Compose renderer
+  ansible.builtin.include_tasks: renderer.yml
+
+- name: Require host and renderer Compose to equal the pin
+  ansible.builtin.assert:
+    that:
+      - (__ai_ops_host_compose.stdout | trim).split('+') | first == ai_ops_compose_renderer_version
+      - __ai_ops_renderer_version.stdout | trim == ai_ops_compose_renderer_version
+    fail_msg: >-
+      Host Compose {{ (__ai_ops_host_compose.stdout | trim).split('+') | first }} (renderer
+      {{ __ai_ops_renderer_version.stdout | trim }}) differs from renderer pin
+      {{ ai_ops_compose_renderer_version }}; update ai_ops_compose_renderer_version and its checksums.

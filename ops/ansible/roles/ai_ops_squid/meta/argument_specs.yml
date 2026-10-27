@@ -1,0 +1,21 @@
+---
+argument_specs:
+  deploy:
+    short_description: Render, validate and deploy the Squid egress policy tree.
+    description:
+      - Renders data/egress-proxy/policy.json locally, validates it with the pinned Squid image,
+        and deploys the tree as one tarball under a manifest drift gate, then restarts egress-proxy.
+      - With ai_ops_squid_source_only, only resynchronizes the source policy.json.
+    options:
+      ai_ops_squid_image:
+        type: str
+        description: Pinned Squid image for the offline parse check.
+      ai_ops_squid_source_only:
+        type: bool
+        description: Only synchronize the source policy.json (no render, upload or activation).
+      ai_ops_squid_staging:
+        type: path
+        description: Controller scratch directory of the render.
+      ai_ops_squid_remote_dir:
+        type: str
+        description: Remote directory of the generated policy tree.

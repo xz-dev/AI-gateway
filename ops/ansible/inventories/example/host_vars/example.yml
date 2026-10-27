@@ -1,0 +1,6 @@
+---
+# Per-host values. Copy to private-config/inventories/production/host_vars/<host>.yml.
+ai_ops_deploy_root: /root/AI-gateway
+ai_ops_compose_project: ai-gateway
+# Small hosts: pin the capacity gate just below the observed memory floor.
+ai_ops_min_mem_mb: 200

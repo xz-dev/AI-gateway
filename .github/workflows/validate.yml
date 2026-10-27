@@ -62,3 +62,57 @@ jobs:
         run: ./ops/scripts/validate.sh .env.example
       - name: Render generic provider-sidecar scaffold
         run: ./ops/scripts/tests/test-provider-sidecar-compose-candidate.sh
+  ansible:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ops/ansible
+    env:
+      COMPOSE_VERSION: 2.40.3
+      COMPOSE_SHA256: dba9d98e1ba5bfe11d88c99b9bd32fc4a0624a30fafe68eea34d61a3e42fd372
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install the pinned controller toolchain and collections
+        run: |
+          python -m pip install -r requirements.txt
+          ansible-galaxy collection install -r requirements.yml -p collections
+          # Fixture hosts run modules with the system interpreter.
+          sudo apt-get install -y --no-install-recommends python3-requests python3-yaml
+      - name: Pin the Docker Compose plugin to the renderer version
+        run: |
+          mkdir -p ~/.docker/cli-plugins
+          curl -fsSL -o ~/.docker/cli-plugins/docker-compose \
+            "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+          echo "${COMPOSE_SHA256}  $HOME/.docker/cli-plugins/docker-compose" | sha256sum -c -
+          chmod +x ~/.docker/cli-plugins/docker-compose
+          docker compose version
+      - name: Lint at the production profile
+        run: ansible-lint
+      - name: Syntax-check every playbook
+        run: |
+          for playbook in playbooks/*.yml; do
+            ansible-playbook -i inventories/example --syntax-check "$playbook"
+          done
+      - name: Ansible fixture and static tests
+        working-directory: .
+        run: |
+          python3 ops/scripts/tests/docker_shim_specs.py
+          python3 ops/scripts/tests/test-ansible-operations.py
+          python3 ops/scripts/tests/test-ansible-preflight.py
+          python3 ops/scripts/tests/test-ansible-managed-file.py
+          python3 ops/scripts/tests/test-ansible-aisix-mode.py
+          ops/scripts/tests/test-ansible-squid-source.sh
+          ops/scripts/tests/test-ansible-model-catalog-config.sh
+          ops/scripts/tests/test-ansible-model-sync.sh
+          python3 ops/scripts/tests/test-component-deploy.py
+          python3 ops/scripts/tests/test-component-apply.py --evidence "$RUNNER_TEMP/component-apply"
+      - name: Compose module parity on the Docker Engine
+        working-directory: .
+        run: |
+          ops/scripts/tests/test-compose-module-parity.sh
+          if PARITY_MUTATION=with-deps ops/scripts/tests/test-compose-module-parity.sh; then
+            echo 'negative control passed unexpectedly' >&2; exit 1
+          fi

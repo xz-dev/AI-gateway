@@ -1,0 +1,44 @@
+---
+# Component profiles of deploy.yml / rollback.yml. The keys must equal the
+# ai_ops_component_name choices in meta/argument_specs.yml (a test checks this).
+ai_ops_component_profiles:
+  cli-proxy-api: {}
+  sub2api: {}
+  aisix: {}
+  # Production uses an archive-preloaded rollback-* image whose config ID differs
+  # from the registry image; bind the local ID and never try to pull the alias.
+  cloudflared:
+    pull: false
+  ai-sse-keepalive-proxy: {}
+  openai-api-cache-keeper:
+    front_cache: true
+    env:
+      LISTEN_ADDR: '127.0.0.1:8085'
+      UPSTREAM_URL: 'http://127.0.0.1:8086'
+      IGNORE_CLIENT_STORE_FALSE: 'true'
+  responses-ws-sse-bridge:
+    front_cache: true
+    env:
+      LISTEN_ADDR: '127.0.0.1:8086'
+      PORT: '8086'
+      UPSTREAM_URL: 'http://sub2api-ai-sse-relay:8080'
+  provider-sidecar: {}
+  aisix-status: {}
+  model-catalog: {}
+  apisix: {}
+  apisix-models: {}
+  # Production uses an archive-preloaded localhost image; component deploy must
+  # not contact a registry for this service.
+  cpa-model-sync:
+    pull: false
+  # Squid is built locally on the host from services/firewall/egress-proxy/; never pulled.
+  egress-proxy:
+    pull: false
+
+# Approval digest printed by a fresh --check --diff run; it binds all three
+# candidate/live file hashes and the container identities. Stale plans fail closed.
+ai_ops_component_approved_digest: ''
+ai_ops_component_verify_retries: 30
+ai_ops_component_verify_delay_seconds: 2
+# Per Docker pull/recreate step. Allow >= 1800 seconds for the whole controller command.
+ai_ops_component_command_timeout: 600

@@ -1,0 +1,12 @@
+---
+- name: Read current cpa-model-sync container
+  community.docker.docker_container_info:
+    name: "{{ ai_ops_compose_project }}-cpa-model-sync-1"
+  register: __ai_ops_model_sync_info
+  failed_when: not __ai_ops_model_sync_info.exists
+  no_log: true  # the container record holds its environment
+
+- name: Record cpa-model-sync identity
+  ansible.builtin.set_fact:
+    __ai_ops_model_sync_container_id: "{{ __ai_ops_model_sync_info.container.Id }}"
+    __ai_ops_model_sync_image_id: "{{ __ai_ops_model_sync_info.container.Image }}"

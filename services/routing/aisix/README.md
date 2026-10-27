@@ -7,5 +7,5 @@
 **How:**
 
 - `./ops/scripts/init.sh` creates the private `config.yaml`, `resources.yaml` and `caller-keys.json` here (gitignored).
-- Edit the private `resources.yaml` with concrete targets and logical routes, then deploy it with `ansible-playbook ops.yml --tags deploy-aisix`.
+- Edit the private `resources.yaml` with concrete targets and logical routes, then deploy it with `ansible-playbook playbooks/deploy-config.yml -e component=aisix` from `ops/ansible/`.
 - Guides: [upstream configuration](../../../docs/upstream-configuration.md), [add an OpenAI-compatible provider](../../../docs/add-openai-compatible-provider.md).

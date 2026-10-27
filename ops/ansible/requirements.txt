@@ -1,0 +1,3 @@
+# Controller toolchain for ops/ansible (pip install -r requirements.txt).
+ansible-core==2.21.3
+ansible-lint==26.10.1

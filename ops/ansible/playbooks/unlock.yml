@@ -1,0 +1,25 @@
+---
+# Release one stale component writer lock; it never changes or activates configuration.
+#   ansible-playbook playbooks/unlock.yml --check          (shows the owner)
+#   ansible-playbook playbooks/unlock.yml -e ai_ops_lock_transaction=<transaction>
+- name: Recover a stale AI-gateway component lock
+  hosts: gateway
+  gather_facts: false
+  module_defaults:
+    community.docker.docker_compose_v2: &ai_ops_compose
+      project_src: "{{ ai_ops_compose_project_src }}"
+      project_name: "{{ ai_ops_compose_project }}"
+      files: "{{ ai_ops_compose_files }}"
+      env_files: "{{ ai_ops_compose_env_files }}"
+    community.docker.docker_compose_v2_exec: *ai_ops_compose
+  vars:
+    ai_ops_state_dir_required: false
+  roles:
+    # Shared preflight; the play-level role also makes its defaults play-wide.
+    - role: ai_ops
+      tags: [always]
+  tasks:
+    - name: Recover the stale lock
+      ansible.builtin.include_role:
+        name: ai_ops_lock
+      tags: [always]

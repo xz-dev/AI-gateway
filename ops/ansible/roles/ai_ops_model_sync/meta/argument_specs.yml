@@ -1,0 +1,27 @@
+---
+argument_specs:
+  deploy:
+    short_description: Preview, approve, deploy and verify the cpa-model-sync policy.
+    description:
+      - Check mode previews every per-channel addition and removal against the live CPA and
+        prints the approval digest; apply requires that digest, recreates only cpa-model-sync
+        and verifies the CPA read-back, restoring the previous policy on failure.
+    options: &ai_ops_model_sync_options
+      ai_ops_model_sync_approved_digest:
+        type: str
+        description: Approval digest printed by the --check --diff preview.
+      ai_ops_model_sync_verify_retries:
+        type: int
+        description: Attempts to find the first synchronization summary.
+      ai_ops_model_sync_verify_delay_seconds:
+        type: int
+        description: Delay between those attempts.
+      ai_ops_model_sync_log_tail:
+        type: int
+        description: Current-container log lines searched for the summary.
+  rollback:
+    short_description: Restore the pre-deploy policy and prove the CPA state recovered.
+    options: *ai_ops_model_sync_options
+  verify:
+    short_description: Verify the running cpa-model-sync against ai_ops_managed_file_verify_expected.
+    options: *ai_ops_model_sync_options

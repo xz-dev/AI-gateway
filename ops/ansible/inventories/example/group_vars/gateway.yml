@@ -1,0 +1,71 @@
+---
+# Operator knobs for the gateway group, with their role defaults.
+# Copy what you need into private-config/inventories/production/ (group_vars/
+# or host_vars/<host>.yml). Every variable is declared once, with a comment, in
+# roles/<role>/defaults/main.yml and in roles/<role>/meta/argument_specs.yml.
+
+# --- ai_ops: locations and runtime ------------------------------------------
+# Private desired state: compose.yaml, compose.override.yaml, .env,
+# services/routing/aisix/resources.yaml, services/cpa/cpa-model-sync/config.json,
+# services/routing/model-catalog/config.yaml, data/egress-proxy/policy.json.
+# Default: ops/ansible/private-config/ (gitignored).
+# ai_ops_config_dir: /some/external/path
+
+# Remote deployment root and Compose project on the gateway host.
+# ai_ops_deploy_root: /root/AI-gateway
+# ai_ops_compose_project: ai-gateway
+
+# Compose provider command; empty auto-detects on the remote
+# (docker compose -> podman compose -> podman-compose).
+# ai_ops_compose_cmd: ""
+# Container runtime override ('docker' or 'podman'); empty auto-detects.
+# ai_ops_runtime: ""
+
+# Capacity gate for component deploys.
+# ai_ops_min_mem_mb: 200
+# ai_ops_min_disk_mb: 1024
+
+# Controller Compose renderer for the drift gate. It must equal the host's
+# Compose version; bump the version and both checksums together.
+# ai_ops_compose_renderer_version: "2.40.3"
+# ai_ops_compose_renderer_dir: /var/tmp/ai-gateway-ops/compose-2.40.3
+
+# --- ai_ops_component: deploy.yml / rollback.yml ---------------------------
+# Approval digest printed by a fresh --check --diff run of the same component.
+# ai_ops_component_approved_digest: ""
+# ai_ops_component_verify_retries: 30
+# ai_ops_component_verify_delay_seconds: 2
+# Per pull/recreate step; allow >= 1800 seconds for the whole controller run.
+# ai_ops_component_command_timeout: 600
+# Keeper/bridge profiles carry front_cache and their topology environment;
+# keep them when overriding the profile map.
+# ai_ops_component_profiles: {...}
+
+# --- ai_ops_lock: unlock.yml -------------------------------------------------
+# Exact owner transaction of the stale lock; the minimum age cannot be lower than 900.
+# ai_ops_lock_transaction: ""
+# ai_ops_lock_min_age_seconds: 900
+
+# --- ai_ops_model_sync: deploy-config.yml -e component=cpa-model-sync -------
+# Approval digest printed by the --check --diff preview; empty until every
+# per-channel addition and removal has been reviewed.
+# ai_ops_model_sync_approved_digest: ""
+# ai_ops_model_sync_verify_retries: 30
+# ai_ops_model_sync_verify_delay_seconds: 2
+# ai_ops_model_sync_log_tail: 200
+
+# --- ai_ops_model_catalog: deploy-config.yml -e component=model-catalog -----
+# ai_ops_model_catalog_verify_retries: 30
+# ai_ops_model_catalog_verify_delay_seconds: 2
+
+# --- ai_ops_squid: deploy-config.yml -e component=egress-proxy --------------
+# Pinned image used for the offline `squid -k parse` validation.
+# ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u3-r1
+# Only resynchronize data/egress-proxy/policy.json, without render or activation.
+# ai_ops_squid_source_only: false
+
+# --- ai_ops_aisix: deploy-config.yml -e component=aisix ---------------------
+# Direct-connect models explicitly adopted into resources.yaml.
+# ai_ops_aisix_adopted_direct_models: []
+# Direct-connect models intentionally kept standalone (never orphan candidates).
+# ai_ops_aisix_standalone_retained: []

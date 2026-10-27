@@ -1,0 +1,92 @@
+---
+# Read-only drift gate and local/remote comparison for one managed file.
+# Outputs: ai_ops_managed_file_differs, ai_ops_managed_file_remote_checksum,
+# ai_ops_managed_file_local_checksum.
+
+- name: Select baseline and pre-deploy copy paths
+  ansible.builtin.set_fact:
+    __ai_ops_managed_file_baseline: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_ops_managed_file_label | replace('/', '__') }}.baseline"
+    __ai_ops_managed_file_predeploy: "{{ ai_ops_deploy_root }}/.ai-ops-state/{{ ai_ops_managed_file_label | replace('/', '__') }}.predeploy"
+    __ai_ops_managed_file_secret: "{{ ai_ops_managed_file_label | basename == '.env' }}"
+
+- name: Read remote current checksum of {{ ai_ops_managed_file_label }}
+  ansible.builtin.stat:
+    path: "{{ ai_ops_managed_file_remote }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_managed_file_remote_stat
+
+- name: Read baseline checksum of {{ ai_ops_managed_file_label }}
+  ansible.builtin.stat:
+    path: "{{ __ai_ops_managed_file_baseline }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_managed_file_baseline_stat
+
+- name: Read local file checksum
+  ansible.builtin.stat:
+    path: "{{ ai_ops_managed_file_local }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  register: __ai_ops_managed_file_local_stat
+  failed_when: not __ai_ops_managed_file_local_stat.stat.exists
+
+- name: Record the comparison result
+  ansible.builtin.set_fact:
+    ai_ops_managed_file_remote_checksum: "{{ __ai_ops_managed_file_remote_stat.stat.checksum | default('') }}"
+    ai_ops_managed_file_local_checksum: "{{ __ai_ops_managed_file_local_stat.stat.checksum }}"
+    ai_ops_managed_file_differs: "{{ __ai_ops_managed_file_remote_stat.stat.checksum | default('') != __ai_ops_managed_file_local_stat.stat.checksum }}"
+
+- name: Drift gate for {{ ai_ops_managed_file_label }}
+  ansible.builtin.fail:
+    msg: >-
+      Remote {{ ai_ops_managed_file_label }} changed since last deploy
+      (remote={{ __ai_ops_managed_file_remote_stat.stat.checksum }} baseline={{ __ai_ops_managed_file_baseline_stat.stat.checksum }}).
+      Show the diff, adopt changes into the local file, or reconcile manually. Nothing was uploaded.
+  when:
+    - __ai_ops_managed_file_remote_stat.stat.exists
+    - __ai_ops_managed_file_baseline_stat.stat.exists
+    - __ai_ops_managed_file_remote_stat.stat.checksum != __ai_ops_managed_file_baseline_stat.stat.checksum
+    # remote matches local file = operator already adopted it; refresh baseline on deploy
+    - __ai_ops_managed_file_remote_stat.stat.checksum != __ai_ops_managed_file_local_stat.stat.checksum
+
+- name: Fetch remote copy for diff when content differs
+  ansible.builtin.slurp:
+    src: "{{ ai_ops_managed_file_remote }}"
+  register: __ai_ops_managed_file_remote_slurp
+  no_log: true
+  when:
+    - __ai_ops_managed_file_remote_stat.stat.exists
+    - ai_ops_managed_file_differs
+
+- name: Show effective diff (local vs remote)
+  ansible.builtin.command:
+    argv:
+      - diff
+      - -u
+      - "-"
+      - "{{ ai_ops_managed_file_local }}"
+    stdin: "{{ (__ai_ops_managed_file_remote_slurp.content | default('') | b64decode) if __ai_ops_managed_file_remote_stat.stat.exists else '' }}"
+    stdin_add_newline: false
+  delegate_to: localhost
+  register: __ai_ops_managed_file_diff
+  changed_when: false
+  failed_when: __ai_ops_managed_file_diff.rc > 1
+  check_mode: false
+  no_log: "{{ __ai_ops_managed_file_secret }}"
+  when: ai_ops_managed_file_differs
+
+- name: Diff output
+  ansible.builtin.debug:
+    var: __ai_ops_managed_file_diff.stdout_lines
+  when:
+    - not __ai_ops_managed_file_secret
+    - __ai_ops_managed_file_diff.rc is defined
+    - __ai_ops_managed_file_diff.rc == 1
+
+- name: No effective change for {{ ai_ops_managed_file_label }}
+  ansible.builtin.debug:
+    msg: "{{ ai_ops_managed_file_label }}: no effective change"
+  when:
+    - __ai_ops_managed_file_remote_stat.stat.exists
+    - not ai_ops_managed_file_differs
+    - __ai_ops_managed_file_baseline_stat.stat.exists
+    - __ai_ops_managed_file_local_stat.stat.checksum == __ai_ops_managed_file_baseline_stat.stat.checksum

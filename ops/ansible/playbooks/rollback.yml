@@ -1,0 +1,38 @@
+---
+# Roll one Compose component back to its last guarded snapshot, approval-bound.
+#   ansible-playbook playbooks/rollback.yml -e component=<name> --check --diff
+#   ansible-playbook playbooks/rollback.yml -e component=<name> -e ai_ops_component_approved_digest=<digest>
+- name: Roll back one AI-gateway component
+  hosts: gateway
+  gather_facts: false
+  module_defaults:
+    community.docker.docker_compose_v2: &ai_ops_compose
+      project_src: "{{ ai_ops_compose_project_src }}"
+      project_name: "{{ ai_ops_compose_project }}"
+      files: "{{ ai_ops_compose_files }}"
+      env_files: "{{ ai_ops_compose_env_files }}"
+    community.docker.docker_compose_v2_exec: *ai_ops_compose
+  vars:
+    ai_ops_state_dir_required: false
+  pre_tasks:
+    # Runs on the controller before any connection; the message lists the choices.
+    - name: Validate the component against the role argument spec
+      ansible.builtin.validate_argument_spec:
+        argument_spec: >-
+          {{ (lookup('ansible.builtin.file', playbook_dir ~ '/../roles/ai_ops_component/meta/argument_specs.yml') |
+          from_yaml).argument_specs.rollback.options }}
+        provided_arguments:
+          ai_ops_component_name: "{{ component | default(omit) }}"
+      tags: [always]
+  roles:
+    # Shared preflight; the play-level role also makes its defaults play-wide.
+    - role: ai_ops
+      tags: [always]
+  tasks:
+    - name: Run the component rollback transaction
+      ansible.builtin.include_role:
+        name: ai_ops_component
+        tasks_from: rollback
+      vars:
+        ai_ops_component_name: "{{ component }}"
+      tags: [always]

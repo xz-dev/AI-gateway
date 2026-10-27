@@ -8,7 +8,7 @@
 
 - Configuration: start from [`config.yaml`](config.yaml) and keep production policy in the private config (`ops/ansible/private-config/services/routing/model-catalog/config.yaml`).
 - Check a config: `/model-catalog validate-config -`.
-- Deploy: `ansible-playbook ops.yml --tags deploy-model-catalog-config`.
+- Deploy: `ansible-playbook playbooks/deploy-config.yml -e component=model-catalog` from `ops/ansible/`.
 - Diagnose: `http://127.0.0.1:9083/models-table`, and use its refresh button for a full-chain rebuild.
 - Develop: `npm ci && npm run typecheck && npm test && npm run build`.
 

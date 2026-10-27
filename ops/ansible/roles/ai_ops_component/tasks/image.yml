@@ -1,0 +1,20 @@
+---
+- name: Verify exact candidate image presence or read-only pullability
+  ansible.builtin.command:
+    argv:
+      - python3
+      - '-c'
+      - "{{ lookup('file', ai_ops_scripts_dir + '/host/component-image.py', rstrip=false) }}"
+      - "{{ ai_ops_runtime_cli }}"
+      - "{{ __ai_ops_component_scope.image }}"
+      - "{{ __ai_ops_component_image_mode }}"
+      - "{{ 'true' if not ai_ops_component_profiles[ai_ops_component_name].get('pull', true) else 'false' }}"
+  register: __ai_ops_component_image_raw
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Parse candidate image proof
+  ansible.builtin.set_fact:
+    __ai_ops_component_image: "{{ __ai_ops_component_image_raw.stdout | from_json }}"
+  no_log: true

@@ -1,0 +1,10 @@
+---
+# deploy.yml -e component=<profile>: approval-bound image/config transaction.
+- name: Select the deploy operation
+  ansible.builtin.set_fact:
+    __ai_ops_component_operation: deploy
+  tags: [always]
+
+- name: Run the guarded component deploy
+  ansible.builtin.include_tasks: transaction.yml
+  tags: [always]

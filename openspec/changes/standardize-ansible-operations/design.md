@@ -13,6 +13,7 @@ See proposal.md for the motivation. Current state:
 - **Activation**: activations run inside `block`/`rescue` with verification. A failed verification restores the pre-deploy copy in the same play.
 - **Remote state keys**: they are file labels and component names, never tags:
   - `.ai-ops-state/<label with / → __>.baseline|.predeploy`, for example `model-catalog__config.yaml.baseline`;
+    `.predeploy` is rewritten only when a real upload happens, so a no-op deploy reports no change and keeps the last rollback point (before, every deploy overwrote it);
   - `front-<component>-last.json` and its snapshots;
   - `model-sync-transition.json`;
   - receipts.
@@ -256,6 +257,7 @@ Principle: use a module wherever it keeps every current guarantee; keep `command
 - `docker_compose_v2*`: Docker CLI with the Compose plugin 2.18.0 or later.
 - API modules (`*_info`, `docker_image_pull`): Python `requests` for the remote interpreter, Docker API 1.25 or later. The collection vendors its Docker client, so the Docker SDK for Python is **not** needed; `paramiko` and `pyOpenSSL` are needed only for SSH or TLS daemon transports, which are not used (local Unix socket).
 - Production, read-only check on 2026-10-27: Python 3.14.4 with `requests` 2.32.5, Docker 29.1.3 (API 1.52), Compose 2.40.3 (`2.40.3+ds1-0ubuntu1`), no Docker SDK. All present.
+  - Task 1.3 repeated it read-only over `ssh` (wrapped in `timeout`, nothing written or installed) on 2026-10-27, with the same result: Docker CLI with the Compose plugin `2.40.3+ds1-0ubuntu1` (at least 2.18, and equal to the D13 pin before the `+` suffix), Docker 29.1.3 with API 1.52 (at least 1.25), the remote `python3` 3.14.4 importing `requests` 2.32.5, no Docker SDK (not needed), `x86_64`. No prerequisite is missing.
 - `ai_ops` preflight asserts them read-only on every run (`docker compose version --short`, `python3 -c 'import requests'`, `docker_host_info` API version) and stops with the missing item. It installs nothing; a missing prerequisite is reported to the user before any host package change.
 
 ### D13 Pinned controller Compose renderer

@@ -80,6 +80,8 @@ if grep -Eq '(^|[^0-9.])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-
   echo 'compose.yaml must not contain a literal Tailscale address; use the TAILSCALE_IP variable' >&2
   exit 1
 fi
+# The production inventory is private; tracked Ansible files carry only the example.
+python3 ops/scripts/check-tracked-inventory.py .
 
 cpa_config=services/cpa/config/config.example.yaml
 [ "$runtime_mode" = 0 ] || cpa_config=data/cpa/conf/config.yaml

@@ -1,0 +1,10 @@
+---
+- name: Persist component transaction stage before proceeding
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file', ai_ops_scripts_dir + '/host/component-lock.py', rstrip=false) }}", progress, "{{ ai_ops_deploy_root }}"]
+    stdin: >-
+      {{ {'transaction': __ai_ops_component_transaction, 'stage': __ai_ops_component_stage, 'outcome': __ai_ops_component_outcome |
+      default('in-progress'), 'snapshot': __ai_ops_component_snapshot_dir.path | default('')} | to_json }}
+    stdin_add_newline: false
+  changed_when: false
+  no_log: true

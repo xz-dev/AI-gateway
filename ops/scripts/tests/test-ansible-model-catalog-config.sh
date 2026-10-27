@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fixture rehearsal for deploy-model-catalog-config / rollback-model-catalog-config.
+# Fixture rehearsal for deploy-config.yml / rollback-config.yml -e component=model-catalog.
 # Uses a fake compose/runtime harness; exercises drift gate, candidate validation,
 # force-recreate scope, digest/readiness verification, recovery, and rollback.
 set -euo pipefail
@@ -49,6 +49,9 @@ args = sys.argv[1:]
 with (state / "compose-calls").open("a") as out:
     out.write(f"mode={mode} " + " ".join(args) + "\n")
 
+if args[:2] == ["version", "--short"]:
+    print("2.40.3")
+    raise SystemExit(0)
 for i, arg in enumerate(args):
     if arg in {"ps", "exec", "up", "logs", "config"}:
         command = arg
@@ -159,16 +162,21 @@ assert_no_match() {
     fi
 }
 
+eval "$(python3 "$root/ops/scripts/tests/fixture_env.py" shell "$tmp")"
+export AI_OPS_SHIM_COMPOSE="$tmp/fake-compose" AI_OPS_SHIM_RUNTIME="$tmp/fake-runtime"
+
 playbook() {
-    local tag=$1 mode_value=$2 output=$3
+    local operation=$1 mode_value=$2 output=$3 check=()
     shift 3
+    [[ $mode_value == plan ]] && check=(--check --diff)
     FAKE_STATE="$state" FAKE_DEPLOY_ROOT="$deploy" FAKE_MODE="${FAKE_MODE:-success}" \
-    ansible-playbook "$root/ops/ansible/ops.yml" -i "$tmp/inventory" --tags "$tag" \
+    ansible-playbook "$root/ops/ansible/playbooks/$operation.yml" -i "$tmp/inventory" "${check[@]}" \
+      -e component=model-catalog \
+      -e @"$tmp/fixture-vars.json" \
       -e "ai_ops_config_dir=$private" \
       -e "ai_ops_deploy_root=$deploy" \
       -e "ai_ops_compose_cmd=$tmp/fake-compose" \
-      -e "ai_ops_runtime=$tmp/fake-runtime" \
-      -e "ai_ops_mode=$mode_value" \
+      -e ai_ops_runtime=docker \
       -e ai_ops_model_catalog_verify_retries=2 \
       -e ai_ops_model_catalog_verify_delay_seconds=0 \
       "$@" >"$output" 2>&1
@@ -179,7 +187,7 @@ write_old
 write_new_local
 set_baseline_old
 clear_calls
-playbook deploy-model-catalog-config plan "$tmp/plan.out"
+playbook deploy-config plan "$tmp/plan.out"
 grep -q 'NEW-CONFIG' "$tmp/plan.out"           # diff shown
 grep -q 'config_digest' "$tmp/plan.out"         # validation digest shown
 cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
@@ -187,7 +195,7 @@ assert_no_match ' up ' "$state/compose-calls"
 
 # --- Approved apply: upload, recreate only model-catalog, verify ---
 clear_calls
-playbook deploy-model-catalog-config apply "$tmp/apply.out"
+playbook deploy-config apply "$tmp/apply.out"
 cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$new_cfg")
 cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$new_cfg")
 grep -q 'up -d --force-recreate --no-deps --no-build model-catalog' "$state/compose-calls"
@@ -202,7 +210,7 @@ test "$(stat -c %a "$deploy/services/routing/model-catalog/config.yaml")" = 644
 
 # --- No-op: matching local/remote/baseline skips everything ---
 clear_calls
-playbook deploy-model-catalog-config apply "$tmp/noop.out"
+playbook deploy-config apply "$tmp/noop.out"
 assert_no_match 'exec -T model-catalog' "$state/compose-calls"
 assert_no_match ' up ' "$state/compose-calls"
 
@@ -211,7 +219,7 @@ write_old
 printf '%s' "$old_cfg" >"$private/services/routing/model-catalog/config.yaml"
 rm -f "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline"
 clear_calls
-playbook deploy-model-catalog-config apply "$tmp/adopt.out"
+playbook deploy-config apply "$tmp/adopt.out"
 cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$old_cfg")
 assert_no_match 'exec -T model-catalog' "$state/compose-calls"
 assert_no_match ' up ' "$state/compose-calls"
@@ -221,7 +229,7 @@ write_old
 set_baseline_old
 printf '%s' "$bad_cfg" >"$private/services/routing/model-catalog/config.yaml"
 clear_calls
-if playbook deploy-model-catalog-config apply "$tmp/invalid.out"; then
+if playbook deploy-config apply "$tmp/invalid.out"; then
     echo 'invalid config unexpectedly succeeded' >&2
     exit 1
 fi
@@ -235,7 +243,7 @@ set_baseline_old
 clear_calls
 rm -f "$deploy/.ai-ops-state"/receipt-model-catalog-failed-*.txt
 export FAKE_MODE=candidate-unready
-if playbook deploy-model-catalog-config apply "$tmp/fail.out"; then
+if playbook deploy-config apply "$tmp/fail.out"; then
     echo 'unready candidate unexpectedly succeeded' >&2
     exit 1
 fi
@@ -255,7 +263,7 @@ set_baseline_old
 clear_calls
 rm -f "$deploy/.ai-ops-state"/receipt-model-catalog-failed-*.txt
 export FAKE_MODE=recovery-fails
-if playbook deploy-model-catalog-config apply "$tmp/recfail.out"; then
+if playbook deploy-config apply "$tmp/recfail.out"; then
     echo 'recovery-fails unexpectedly succeeded' >&2
     exit 1
 fi
@@ -270,7 +278,7 @@ write_new_local
 set_baseline_old
 clear_calls
 export FAKE_MODE=protected-drift
-if playbook deploy-model-catalog-config apply "$tmp/drift.out"; then
+if playbook deploy-config apply "$tmp/drift.out"; then
     echo 'protected-drift unexpectedly succeeded' >&2
     exit 1
 fi
@@ -283,7 +291,7 @@ printf '%s' "$new_cfg" >"$deploy/.ai-ops-state/model-catalog__config.yaml.baseli
 printf '%s' "$old_cfg" >"$deploy/.ai-ops-state/model-catalog__config.yaml.predeploy"
 printf '%s' "$old_cfg" >"$private/services/routing/model-catalog/config.yaml"
 clear_calls
-playbook rollback-model-catalog-config apply "$tmp/rollback.out"
+playbook rollback-config apply "$tmp/rollback.out"
 cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
 cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$old_cfg")
 rollback_receipt=$(find "$deploy/.ai-ops-state" -name 'receipt-model-catalog-rollback-*.txt' | head -1)
@@ -293,7 +301,7 @@ grep -q 'outcome=success' "$rollback_receipt"
 printf '%s' "$new_cfg" >"$deploy/.ai-ops-state/model-catalog__config.yaml.baseline"
 printf 'cpa_base_url: http://drifted\n' >"$deploy/services/routing/model-catalog/config.yaml"
 clear_calls
-if playbook rollback-model-catalog-config apply "$tmp/rollback-drift.out"; then
+if playbook rollback-config apply "$tmp/rollback-drift.out"; then
     echo 'rollback over independent drift unexpectedly succeeded' >&2
     exit 1
 fi
