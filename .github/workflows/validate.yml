@@ -11,7 +11,7 @@ jobs:
   model-sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.96.0
@@ -37,7 +37,7 @@ jobs:
       run:
         working-directory: services/routing/model-catalog
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - uses: actions/setup-node@v4
@@ -53,7 +53,7 @@ jobs:
   template:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Validate reusable Compose and runtime boundaries
@@ -71,7 +71,7 @@ jobs:
       COMPOSE_VERSION: 2.40.3
       COMPOSE_SHA256: dba9d98e1ba5bfe11d88c99b9bd32fc4a0624a30fafe68eea34d61a3e42fd372
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
