@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parents[3]
 play = yaml.safe_load((ROOT / "ops/ansible/ops.yml").read_text())[0]
 task = next(t for t in play["tasks"] if t.get("name") == "Deploy resources.yaml")
 mode = task["vars"]["ai_file_mode"]
+normalize_task = next(t for t in play["pre_tasks"] if t.get("name") == "Normalize max_fallbacks from targets count")
+validate_task = next(t for t in play["pre_tasks"] if t.get("name") == "Validate fallback-status contract")
+assert normalize_task["changed_when"] == "_aisix_normalize.stdout != 'normalized 0'"
+assert validate_task["changed_when"] is False
 with tempfile.TemporaryDirectory(prefix="aisix-mode-", dir="/var/tmp") as temp:
     root = Path(temp)
     (root / ".ai-ops-state").mkdir()

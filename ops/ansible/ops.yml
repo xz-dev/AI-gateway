@@ -123,6 +123,8 @@
         python3 {{ playbook_dir }}/../scripts/host/normalize-aisix-resources.py
         {{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml
       delegate_to: localhost
+      register: _aisix_normalize
+      changed_when: _aisix_normalize.stdout != 'normalized 0'
       tags: [deploy-aisix]
 
     - name: Validate fallback-status contract
@@ -130,6 +132,7 @@
         python3 {{ playbook_dir }}/../scripts/check-aisix-resource-policy.py
         --yaml {{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml
       delegate_to: localhost
+      changed_when: false
       tags: [deploy-aisix]
 
     - name: Reject unverified literal retries=-1
