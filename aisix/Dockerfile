@@ -4,7 +4,7 @@
 # developer-role compatibility backport from api7/aisix#1047. Keep the
 # upstream commits and patch bytes immutable until an official release
 # contains both fixes.
-FROM docker.io/library/rust:1.93-trixie AS builder
+FROM docker.io/library/rust:1.99-trixie AS builder
 
 ARG AISIX_BASE_SHA=adcf0523b9f84deed64fbdea311df292c5bc541b
 ARG AISIX_PATCH_SHA=7d6d14bbf5f5ec4577466da48ce7763d519d81bb
