@@ -156,7 +156,7 @@ services:
     cap_add: [DAC_OVERRIDE]
     logging: *default-logging
     security_opt: [no-new-privileges:true]
-    tmpfs: ["/tmp:rw,nosuid,nodev,size=64m"]
+    tmpfs: ["/tmp:rw,exec,nosuid,nodev,size=64m"]
     environment:
       GOMEMLIMIT: 700MiB
       DEPLOY: docker-compose
