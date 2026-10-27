@@ -37,106 +37,32 @@ The sidecar SHALL discover all enabled non-OAuth key-type channels from the CPA 
 
 ### Requirement: Per-channel models fetch via CPA api-call
 
-For each discovered channel, the sidecar SHALL fetch the live model list through CPA's `POST /v0/management/api-call` using the channel credential (`$TOKEN$` substitution), with a per-channel configurable request path (default `/v1/models?client_version=<incoming client_version value>`), and SHALL tolerate individual channel failures without failing the whole response.
+The sidecar SHALL read a channel's upstream model rows only to serve the `@cpa-upstream` record source. It SHALL perform that read only when at least one model of the current compile set from that channel has an effective chain containing `@cpa-upstream`. The read SHALL go through CPA's `POST /v0/management/api-call` with the channel credential (`$TOKEN$` substitution). Each channel MAY configure its request path; the default is `/v1/models?client_version=<incoming client_version value>`.
+
+For channels configured with an Ollama native base, the `@cpa-upstream` row of a model SHALL come from Ollama `/api/show` through the same api-call. Requests are deduplicated per channel and lookup ID.
+
+Individual channel or model read failures SHALL NOT fail the whole response. A failed read only removes that record source's contribution, subject to the cached-response fallback.
 
 #### Scenario: Channel path override
 
-- **WHEN** the sidecar YAML sets a channel's models path to `/v1/models`
+- **WHEN** the sidecar YAML sets a channel's models path to `/v1/models` and a kept model of that channel has `@cpa-upstream` in its effective chain
 - **THEN** the api-call for that channel uses exactly that path
 
 #### Scenario: Partial failure tolerated
 
 - **WHEN** one channel's api-call fails or times out
-- **THEN** the manifest still returns, containing the remaining channels' models, and the failure is logged with the channel identity
+- **THEN** the catalog still returns, containing every admitted model, and the failure is logged with the channel identity
+- **AND** models of the failed channel receive their remaining chain sources' fields
 
-### Requirement: Metadata fallback with cached data sources
+#### Scenario: No channel read without @cpa-upstream
 
-When a model's metadata fields are missing from the channel response, the sidecar SHALL look them up from the configured models.dev and/or modelparams.dev sources. Validated successful enrichment inputs, including read-only channel metadata responses and configured per-model metadata lookups, SHALL be cached as API responses rather than as final model catalogs. Ordinary reads SHALL reuse fresh responses for five minutes; expiry SHALL make an input eligible for refresh without deleting its last successful response or imposing a maximum fallback age. After a failed metadata refresh, the sidecar SHALL reuse that request's last successful cached response when present and SHALL NOT replace or invalidate it because the refresh failed. Metadata failures include timeouts, connection failures, non-success HTTP statuses including 401/403, and invalid response bodies. A client disconnecting from a catalog or table request SHALL only stop that client's wait; the shared build and snapshot refresh SHALL continue within their existing deadlines and publish successful inputs to the cache. An enrichment stage whose deadline is already exhausted SHALL still use the retained last successful input. Without a usable cached input, the sidecar SHALL retain its existing affected-channel baseline or error behavior rather than fabricate metadata. These rules SHALL NOT relax membership, authorization, or routing authority.
+- **WHEN** no kept or referenced model of a channel has `@cpa-upstream` in its effective chain
+- **THEN** the sidecar sends no api-call for that channel's upstream models
 
-#### Scenario: Missing max_tokens filled
+#### Scenario: Ollama show folded into @cpa-upstream
 
-- **WHEN** a channel model lacks `max_tokens` and a data source knows the model's max output tokens
-- **THEN** the emitted entry carries that value
-
-#### Scenario: Source cache honored
-
-- **WHEN** two ordinary enrichment runs request the same successful metadata input within five minutes
-- **THEN** that metadata endpoint is fetched at most once in the freshness window
-
-#### Scenario: Expired input survives a source outage
-
-- **GIVEN** a successful metadata input remains cached after its five-minute freshness period, even after a prolonged outage
-- **WHEN** refreshing that input times out, loses its connection, or returns a non-success HTTP status
-- **THEN** enrichment reuses that input's last successful response without an age-based cutoff
-- **AND** the failed attempt does not advance its last-successful-refresh time
-
-#### Scenario: Metadata rejection or malformed response retains last-good data
-
-- **GIVEN** a metadata-only request has a validated successful cached response
-- **WHEN** a refresh returns 401, 403, malformed JSON, or a response that fails the endpoint's required validation
-- **THEN** the sidecar preserves and reuses the previous validated response for metadata
-- **AND** neither the rejected response nor the invalid body replaces the cached success
-
-#### Scenario: Successful empty input replaces old metadata
-
-- **GIVEN** an endpoint has a previously populated cached response
-- **WHEN** it successfully returns a valid empty response under that endpoint's contract
-- **THEN** the sidecar replaces the previous response with the valid empty response
-- **AND** it does not resurrect old metadata merely because the new response is empty
-
-#### Scenario: Client disconnect does not abort the shared build
-
-- **WHEN** a client disconnects while a shared catalog or table build is fetching metadata
-- **THEN** that client stops waiting, while the build continues within its existing deadline and stores successful metadata responses
-- **AND** a later request uses the stored metadata without another successful upstream fetch
-
-#### Scenario: Cancellation does not delete cached metadata
-
-- **WHEN** an individual metadata read is cancelled
-- **THEN** that read returns cancellation rather than reporting a successful refresh
-- **AND** the last successful cached metadata input remains stored
-
-### Requirement: Overrides and model filtering
-
-The sidecar SHALL apply per-channel, per-model field overrides from its YAML configuration (overrides win over both upstream and data-source values), and SHALL apply per-channel include/exclude regex lists to filter which models appear.
-
-#### Scenario: Explicit override wins
-
-- **WHEN** YAML declares channel A's model B has `max_tokens: 1000000`
-- **THEN** the emitted entry for B reports 1000000 regardless of upstream or data-source values
-
-#### Scenario: Exclude regex
-
-- **WHEN** a channel has an exclude regex matching `^gemini-.*-image$`
-- **THEN** matching models are omitted from that channel's contribution
-
-### Requirement: Merge semantics with CPA native manifest
-
-The sidecar SHALL merge discovered channel models with CPA's native Codex manifest: CPA-native fields are preserved, missing fields are filled from channel fetch and data sources, and only explicit YAML overrides may replace existing values. Discovered models SHALL be emitted with CPA's provider-prefix slug convention (`<prefix>/<model>`).
-
-#### Scenario: Fill gaps only by default
-
-- **WHEN** CPA's native manifest already provides `context_window` for a model
-- **THEN** the sidecar keeps CPA's value unless a YAML override exists
-
-#### Scenario: Undeclared channel models appear
-
-- **WHEN** an enabled channel has no models array in CPA config but its live models endpoint returns models
-- **THEN** those models appear in the manifest with the channel's prefix
-
-### Requirement: Unprefixed model exclusion
-
-CPA's model routing is abandoned: CPA is treated purely as a provider of prefix-qualified models. The emitted manifest SHALL exclude every entry whose slug has no channel prefix (e.g. bare `gpt-5.6-sol`), keeping only prefix-qualified slugs (e.g. `codex/gpt-5.6-sol`). This is a models-list filtering rule only; the sidecar and gateway SHALL NOT intercept or block inference requests for unprefixed model IDs.
-
-#### Scenario: Bare slug dropped
-
-- **WHEN** CPA's native manifest (or a channel fetch) yields both `gpt-5.6-sol` and `codex/gpt-5.6-sol`
-- **THEN** the emitted manifest contains only `codex/gpt-5.6-sol`
-
-#### Scenario: No request interception
-
-- **WHEN** a client sends an inference request naming a bare model id
-- **THEN** it passes through untouched; the exclusion applies to the models manifest only
+- **WHEN** an Ollama channel's model chain contains `@cpa-upstream`
+- **THEN** that model's `@cpa-upstream` row is built from `/api/show` read through the CPA api-call, and two models sharing one lookup ID cause one read
 
 ### Requirement: Secret custody
 
@@ -147,103 +73,36 @@ The sidecar SHALL obtain the CPA management key only from its configured environ
 - **WHEN** any channel fetch fails or the sidecar errors
 - **THEN** logs and responses contain channel names and status codes only, never credential material
 
-### Requirement: Routing snapshot retains distinct raw memberships
-
-The sidecar SHALL retain, alongside the enriched manifest, the distinct raw memberships captured for routing: the complete CPA raw inventory (manifest inputs captured before CPA-local identity filtering) and the complete AISIX raw inventory. Raw memberships SHALL NOT be derived from the enriched output union. The sidecar SHALL expose a bounded internal routing-index view (`GET /routing-index?model=<exact ID>`) returning exactly one of `cpa`, `aisix`, `not_found`, or `unavailable` plus generation, where `not_found` requires both memberships authoritative and the ID absent from both. The routing-index view SHALL be internal-only: unauthenticated external callers cannot read it, and it never returns full catalog contents.
-
-#### Scenario: Raw memberships are independent of the enriched union
-- **WHEN** an AISIX-only or alias ID appears in the enriched manifest through supplementation
-- **THEN** the CPA raw membership does not contain it
-- **AND** the routing index treats it as AISIX-only
-
-#### Scenario: Routing index stays bounded
-- **WHEN** the entrance performs a per-request classification lookup
-- **THEN** the index view answers one of the four outcomes for the requested ID without returning full catalog contents
-
-#### Scenario: Authoritative absence versus unavailable source
-- **WHEN** the index is queried for an ID absent from both memberships under an authoritative generation
-- **THEN** it returns `not_found`
-- **WHEN** the same ID is queried while a membership required to decide it is failed
-- **THEN** it returns `unavailable`, not `not_found`
-
-### Requirement: Snapshot lifecycle is initialized and refreshed independently of catalog traffic
-
-The sidecar SHALL initialize the routing snapshot at startup and refresh it on a bounded periodic cadence aligned with the existing cache TTL, reusing the existing collector and singleflight discipline, independent of any catalog-client or lookup traffic. Failed periodic refreshes SHALL retry on the same bounded cadence without tight-looping. Assembled routing snapshots SHALL remain process-local; the persistent enrichment-input cache SHALL NOT restore routing authority at startup. Collection SHALL keep the CPA mandatory phase and optional AISIX phase isolated, with their existing authority-specific eligible last-good policy, so a failed optional AISIX collection preserves successful CPA output and known CPA routing decisions. Publication SHALL be an immutable raw-membership/source-availability generation: known CPA decisions are preserved when only AISIX collection fails, and no hot-path lookup triggers upstream collection. Catalog projection caches SHALL key each cached body to the raw generation plus client_version/format: a completed projection of a stale generation cannot be served as current, and a late old-generation build cannot overwrite the current entry; in-flight readers may finish serving their pinned generation, with no global simultaneous multi-request guarantee. Cold readiness is truthful: before the first successful authority snapshot the index returns `unavailable`, and recovery occurs via the bounded retry cadence even when only inference traffic exists.
-
-The diagnostic force-refresh action SHALL be the sole exception to request-independent collection: it SHALL explicitly initiate a bounded, singleflight refresh of raw memberships and catalog inputs and bypass freshness reuse for that network attempt. Bypassing freshness SHALL NOT disable last-successful-input fallback for metadata. The action SHALL publish a new generation only according to the same source-authority and atomic-publication rules and SHALL rebuild its diagnostic output using those authority inputs and the newly fetched or eligible cached enrichment responses. It SHALL NOT return an old rendered table or final models catalog as the fallback for a failed refresh. Normal `GET /models-table`, catalog requests, and routing-index lookups SHALL retain their existing non-forcing behavior.
-
-#### Scenario: Startup initialization without catalog traffic
-
-- **WHEN** the sidecar starts and no client requests any catalog
-- **THEN** the routing snapshot is initialized and refreshed on the bounded cadence
-- **AND** inference classification does not depend on a catalog request having occurred
-
-#### Scenario: Optional AISIX failure preserves CPA decisions
-
-- **WHEN** an AISIX collection attempt fails while CPA collection succeeds
-- **THEN** the published generation preserves known CPA membership decisions
-- **AND** IDs decidable only with AISIX membership return `unavailable`
-
-#### Scenario: Generation-pinned projection caching
-
-- **WHEN** a new raw generation is published while a catalog projection build is in flight
-- **THEN** the in-flight build may complete for readers pinned to its generation
-- **AND** its result does not overwrite the current entry, and stale completed projections are not served as current
-
-#### Scenario: Inference-only cold start and recovery
-
-- **WHEN** the sidecar restarts and only inference (routing-index) traffic arrives
-- **THEN** lookups return `unavailable` until the first successful bounded-cadence authority collection completes, then answer per membership
-- **AND** refresh retries observe the bounded cadence without a tight loop
-- **AND** persisted metadata alone does not make routing ready
-
-#### Scenario: Hot-path lookup never collects
-
-- **WHEN** a routing-index lookup arrives between refreshes
-- **THEN** it is answered from the published generation without triggering upstream collection
-
-#### Scenario: Normal catalog and table reads do not force collection
-
-- **WHEN** a client requests `GET /v1/models` or `GET /models-table`
-- **THEN** the request uses the current generation and eligible caches without bypassing the periodic refresh cadence
-
-#### Scenario: Diagnostic force refresh uses existing publication rules
-
-- **WHEN** an operator submits the diagnostic force-refresh action
-- **THEN** the sidecar performs one bounded refresh attempt that bypasses input freshness reuse
-- **AND** concurrent force-refresh submissions share the active attempt
-- **AND** any newly published generation follows the existing atomic source-authority rules
-
-#### Scenario: Forced refresh recomposes from cached API inputs
-
-- **GIVEN** CPA successfully publishes a new model and a metadata source has an older successful cached response
-- **WHEN** the operator forces refresh and that metadata source fails
-- **THEN** the rebuilt table includes the newly published eligible CPA model and uses the cached API response for matching models' metadata
-- **AND** it reports cached metadata fallback through the diagnostic warning rather than labeling the inputs as freshly fetched
-- **AND** it does not replay the old table or final model list
-
-#### Scenario: Missing mandatory authority is not hidden by a saved table
-
-- **WHEN** a forced refresh cannot obtain usable mandatory CPA authority under the existing authority policy
-- **THEN** the diagnostic request reports the existing unavailable/error outcome
-- **AND** it does not substitute a previously rendered table or treat metadata cache contents as authority
-
 ### Requirement: Enrichment inputs survive sidecar restart on a dedicated volume
 
-The sidecar SHALL retain its validated successful enrichment API responses on a dedicated Docker data volume mounted as its cache path. Normal process restart and container recreation with the same volume SHALL preserve cached payloads, last-successful-refresh times, capacity accounting, and FIFO order. Cache age alone SHALL NOT remove persisted inputs, and startup SHALL NOT pretend recovered stale data was newly fetched. Persistent cache contents SHALL consist of metadata API inputs and their cache metadata, not assembled models catalogs, rendered tables, authority reads (native inventory, management discovery/identity, AISIX membership), or authorization snapshots; authority reads SHALL remain process-local. Cache request identities SHALL isolate method, destination, relevant authentication and headers, and any inner read request body; stored keys, logs, and diagnostics SHALL NOT expose credentials.
+The sidecar SHALL retain its validated successful `@cpa-upstream` responses on a dedicated Docker data volume mounted as its cache path. Normal process restart and container recreation with the same volume SHALL preserve cached payloads, last-successful-refresh times, capacity accounting, and FIFO order. Cache age alone SHALL NOT remove persisted inputs, and startup SHALL NOT pretend recovered stale data was newly fetched.
+
+Persistent cache contents SHALL consist of `@cpa-upstream` responses and their cache metadata only. They SHALL NOT include:
+- assembled model catalogs or rendered tables;
+- authority reads: native inventory, management discovery and identity, AISIX membership;
+- authorization snapshots.
+
+Authority reads SHALL remain process-local.
+
+Cache request identities SHALL isolate method, destination, relevant authentication and headers, and any inner read request body. Stored keys, logs, and diagnostics SHALL NOT expose credentials. Cache files from an earlier, incompatible storage format SHALL be ignored without failing startup.
 
 #### Scenario: Restart during an external metadata outage
 
-- **GIVEN** the sidecar has successfully cached metadata and its dedicated data volume is retained
-- **WHEN** the sidecar restarts or is recreated and the metadata endpoint remains unavailable
-- **THEN** a catalog build with usable current CPA authority reuses the recovered API response for metadata
+- **GIVEN** the sidecar has successfully cached `@cpa-upstream` responses and its dedicated data volume is retained
+- **WHEN** the sidecar restarts or is recreated and the channel upstream remains unavailable
+- **THEN** a catalog build with usable current CPA authority reuses the recovered response for `@cpa-upstream` fields
 - **AND** recovery preserves the input's original freshness age rather than resetting it at startup
 
 #### Scenario: Separate requests cannot borrow another request's cache
 
-- **WHEN** otherwise similar metadata requests differ in authenticated identity, target, method, relevant headers, or inner request body
+- **WHEN** otherwise similar `@cpa-upstream` requests differ in authenticated identity, target, method, relevant headers, or inner request body
 - **THEN** their successful responses are isolated
 - **AND** one request's failure cannot return another request identity's cached response
+
+#### Scenario: Old cache format is ignored
+
+- **WHEN** the volume still holds a cache file written by the previous implementation
+- **THEN** the sidecar starts with an empty cache in its own format and reports no cache-recovery error as fatal
 
 ### Requirement: Persistent enrichment cache has a 100 MB FIFO payload budget
 
@@ -297,3 +156,247 @@ For every newly built catalog, the sidecar SHALL compose output from the pinned 
 - **WHEN** an authority read returns an authentication denial or invalid authority response, or a user is not entitled to the model
 - **THEN** the existing authority failure or entitlement rejection behavior remains in force
 - **AND** cached metadata does not grant catalog visibility or routing readiness
+
+### Requirement: Chain-based metadata selection
+
+The shared keys `chain`, `models` and `include_models` SHALL live under the gateway YAML's `metadata` block. Scenarios in this capability write them without that prefix. Configuration errors SHALL report paths with the prefix, for example `metadata.models[0].chain`.
+
+The sidecar SHALL select model metadata with the shared chain semantics of openai-api-pi-extension:
+- `metadata.chain`;
+- ordered `models[].match` rules with standard glob matching;
+- `@default`, `@creator` and literal fourth segments;
+- first-valid-value-per-field selection in chain order.
+
+The sidecar SHALL register exactly two record-source keywords:
+- `@self`: the model's CPA native manifest row.
+- `@cpa-upstream`: the model's rich row from its channel upstream.
+
+External `models.dev/...` and `modelparams.dev/...` entries SHALL read the data versions bundled into the running image, without network requests. An absent `metadata.chain` SHALL use the shared default chain. Any other `@`-prefixed entry, a wildcard entry, or an empty chain SHALL be a configuration error.
+
+Rule `overrides` SHALL apply as RFC 7396 merge patches, in rule order, to the emitted catalog entry using catalog field names. Overrides SHALL NOT change `slug` or `id`. Gateway-only post-processing SHALL run after chain selection and overrides.
+
+#### Scenario: CPA value kept when @self is first
+
+- **WHEN** the chain is `["@self", "models.dev/@creator/api_key"]` and CPA's native row has `context_window` 200000 while models.dev has 400000
+- **THEN** the emitted entry reports 200000
+
+#### Scenario: Explicit override wins
+
+- **WHEN** a rule `match: "codexA/modelB"` declares `overrides: {max_tokens: 1000000}`
+- **THEN** the emitted entry for `codexA/modelB` reports 1000000 regardless of chain values
+
+#### Scenario: Missing max_tokens filled
+
+- **WHEN** CPA's native row lacks `max_tokens` and a later chain entry knows the model's max output tokens
+- **THEN** the emitted entry carries that value
+
+#### Scenario: Unknown record keyword rejected
+
+- **WHEN** the configuration contains the chain entry `@ollama_cloud`
+- **THEN** configuration validation fails, names the entry path and lists `@self` and `@cpa-upstream`
+
+#### Scenario: Image output by rule
+
+- **WHEN** a rule `match: "**/gpt-image-*"` declares `overrides: {output_modalities: ["image"]}`
+- **THEN** matching entries report image output, and no built-in special case applies to other models
+
+### Requirement: Cached @cpa-upstream responses keep last-good fallback
+
+Validated successful `@cpa-upstream` responses SHALL be cached as API responses, not as final catalogs:
+- Ordinary reads SHALL reuse fresh responses for five minutes.
+- Expiry SHALL make a response eligible for refresh without deleting it and without a maximum fallback age.
+- After a failed refresh, the sidecar SHALL reuse that request's last successful response when present, and SHALL NOT replace or invalidate it. Failures include timeouts, connection failures, non-success HTTP statuses including 401/403, and invalid bodies.
+- A successful valid empty response SHALL replace an older populated one.
+
+A client disconnecting SHALL stop only that client's wait. The shared build SHALL continue within its deadline and store successful responses. Cancellation of an individual read SHALL return cancellation rather than success and SHALL keep the stored response. Without a usable cached response, the `@cpa-upstream` node contributes no fields. None of these rules SHALL relax membership, authorization or authority policy.
+
+#### Scenario: Source cache honored
+
+- **WHEN** two ordinary builds request the same `@cpa-upstream` input within five minutes
+- **THEN** that input is fetched at most once in the freshness window
+
+#### Scenario: Expired input survives a source outage
+
+- **GIVEN** a successful `@cpa-upstream` response is older than five minutes
+- **WHEN** its refresh times out, loses its connection or returns a non-success status
+- **THEN** the build reuses the last successful response without an age cutoff
+- **AND** the failed attempt does not advance its last-successful-refresh time
+
+#### Scenario: Rejection or malformed response retains last-good data
+
+- **WHEN** a refresh returns 401, 403, malformed JSON or a body failing validation
+- **THEN** the previous validated response is kept and reused
+
+#### Scenario: Successful empty input replaces old data
+
+- **WHEN** a previously populated input successfully returns a valid empty response
+- **THEN** the empty response replaces the old one and old rows are not resurrected
+
+#### Scenario: Client disconnect does not abort the shared build
+
+- **WHEN** a client disconnects while a shared build reads `@cpa-upstream`
+- **THEN** the build continues within its deadline and stores successful responses for later requests
+
+### Requirement: Model selection with include_models
+
+The sidecar SHALL apply the shared `include_models` selection to admitted catalog IDs, using exact-byte, case-sensitive glob matching:
+- The last matching entry decides.
+- A `!` prefix hides.
+- Unmatched models are hidden.
+- Absence of the field keeps all models.
+- An empty list is a configuration error.
+
+Both the Codex manifest and the standard list SHALL contain only kept models.
+
+The compile set SHALL be the kept models plus every model they transitively reference through `static_models[].inherit` or the gateway `metadata_from` map. Hidden models outside the compile set SHALL NOT be compiled and SHALL NOT trigger `@cpa-upstream` reads. Selection SHALL NOT intercept or block inference requests for hidden IDs.
+
+#### Scenario: Hide unprefixed models
+
+- **WHEN** `include_models: ["*/**"]` and CPA admits `gpt-5.6-sol` and `codex/gpt-5.6-sol`
+- **THEN** the catalogs list only `codex/gpt-5.6-sol`
+
+#### Scenario: Referenced hidden model still provides metadata
+
+- **WHEN** kept model `pool/x` has `metadata_from: {"pool/x": "vendor/y"}` and `vendor/y` is hidden
+- **THEN** `vendor/y` is compiled for `pool/x`'s metadata but is absent from the catalogs
+
+#### Scenario: Hidden model is not processed
+
+- **WHEN** a hidden, unreferenced model's chain contains `@cpa-upstream`
+- **THEN** no api-call is made on its behalf
+
+#### Scenario: No request interception
+
+- **WHEN** a client sends an inference request naming a hidden model ID
+- **THEN** it passes through untouched; selection applies to model lists only
+
+### Requirement: Catalog membership comes from authority sources only
+
+Catalog membership SHALL be the union of the following, before `include_models` selection:
+- CPA native manifest models admitted by CPA identity rules, including unprefixed models that CPA identity admits;
+- the AISIX supplement;
+- configured gateway static models.
+
+`@cpa-upstream` rows and bundled metadata SHALL only contribute fields. A model present only in a channel's upstream list SHALL NOT appear.
+
+#### Scenario: Channel-only model does not appear
+
+- **WHEN** a channel's upstream list contains `m-new` but CPA's native manifest does not
+- **THEN** no catalog lists `<prefix>/m-new`
+
+#### Scenario: Admitted unprefixed model listed
+
+- **WHEN** CPA identity admits an operator-configured unprefixed model `my-alias` and `include_models` is absent
+- **THEN** the catalogs list `my-alias` with chain-selected metadata
+
+### Requirement: Gateway-only catalog post-processing is preserved
+
+After chain selection and overrides, the sidecar SHALL apply the following gateway-only post-processing:
+- static models with an ordered `inherit` list;
+- the root `metadata_from` map, from a full output slug to the full output slug whose metadata it copies;
+- `custom_channels` pools;
+- `sync_max_context_window`, selected per model (see below);
+- removal of a `default_reasoning_level` that is not among the model's supported reasoning levels, unless an override sets it explicitly.
+
+These features SHALL be configured only in the gateway YAML and SHALL NOT change shared chain semantics.
+
+`sync_max_context_window` SHALL accept either a boolean or an ordered glob list:
+- `true` selects every non-native entry.
+- `false`, or an absent field, selects none.
+- A list uses the `include_models` matching rules: `!` excludes, the last matching entry decides, and unmatched models are not selected. An empty list is a configuration error.
+
+For a selected model, `max_context_window` SHALL equal `context_window`. For an unselected model, `max_context_window` SHALL only be raised to `context_window` when it is missing or smaller. In both cases an override that sets `max_context_window` explicitly SHALL win. Rows emitted unchanged as CPA-native SHALL NOT be touched.
+
+#### Scenario: Static model inherits compiled metadata
+
+- **WHEN** static model `alias/a` declares `inherit: ["codex/gpt-5.6-sol"]` with an override of `display_name`
+- **THEN** `alias/a` carries `codex/gpt-5.6-sol`'s compiled fields plus the override
+
+#### Scenario: Conflicting reasoning default removed
+
+- **WHEN** a model's selected `default_reasoning_level` is `xhigh`, its supported levels are `low` and `high`, and no override sets the default
+- **THEN** the emitted entry omits the conflicting default
+
+#### Scenario: Context window synchronized
+
+- **WHEN** `sync_max_context_window` is enabled and a model has `context_window` 200000 and `max_context_window` 1000000
+- **THEN** the emitted `max_context_window` is 200000
+
+#### Scenario: Context window synchronized per model
+
+- **WHEN** `sync_max_context_window: ["xl/**", "!xl/keep-*"]`, and models `xl/a`, `xl/keep-b` and `aihub/c` each have `context_window` 200000 and `max_context_window` 872000
+- **THEN** `xl/a` reports 200000, while `xl/keep-b` and `aihub/c` keep 872000
+
+#### Scenario: Synchronization off leaves larger upper bounds
+
+- **WHEN** `sync_max_context_window` is absent and a model has `context_window` 500000 and `max_context_window` 872000
+- **THEN** the emitted `max_context_window` is 872000
+- **AND** a model whose `max_context_window` is missing or 128000 is raised to 500000
+
+### Requirement: Legacy configuration fields are rejected
+
+The following legacy fields SHALL be configuration errors that name the field path and a migration hint:
+- `source_priority`, `provider_prefix_map`, `lookup_ids`, `global_fallback`, `exclude_models`, `fetch_models` and `bare_models_takeover`;
+- channel-level `include`, `exclude`, `overrides` and `models`.
+
+The hint for channel `models.<name>.metadata_from` SHALL point to the root `metadata_from` map. The hints for channel overrides and model overrides SHALL point to `models[].match` rules.
+
+#### Scenario: Old private config detected before cutover
+
+- **WHEN** `validate-config` runs on a YAML containing `source_priority`
+- **THEN** it exits non-zero, names `source_priority` and suggests `chain`
+
+#### Scenario: Startup with legacy config fails closed
+
+- **WHEN** the sidecar starts with a YAML containing `exclude_models`
+- **THEN** it exits non-zero before listening and does not serve a catalog built from partially understood config
+
+### Requirement: Authority snapshot lifecycle and generation-pinned projections
+
+The sidecar SHALL collect the CPA authority snapshot at startup and refresh it on a bounded periodic cadence, independent of catalog traffic. The CPA authority snapshot covers the native inventory captured before identity filtering, management discovery and identity, and the optional AISIX membership.
+
+Collection SHALL keep the mandatory CPA phase and optional AISIX phase isolated. A failed AISIX collection SHALL preserve successful CPA output. Each publication SHALL be an immutable generation.
+
+Catalog projection caches SHALL key each body to generation plus client_version and format:
+- A stale generation's projection SHALL NOT be served as current.
+- A late old-generation build SHALL NOT overwrite the current entry.
+- Concurrent builds of one generation SHALL be coalesced.
+
+`/readyz` SHALL report not ready until the first successful CPA authority generation is published. Failed refreshes SHALL retry on the bounded cadence without tight-looping.
+
+The diagnostic force refresh SHALL be the only traffic-triggered collection. It SHALL bypass freshness reuse for one bounded, coalesced attempt, SHALL publish only under the same authority rules, and SHALL NOT disable last-good fallback for `@cpa-upstream` responses.
+
+#### Scenario: Startup initialization without catalog traffic
+
+- **WHEN** the sidecar starts and no client requests a catalog
+- **THEN** the authority snapshot is collected and refreshed on the bounded cadence
+
+#### Scenario: Optional AISIX failure preserves CPA output
+
+- **WHEN** AISIX collection fails while CPA collection succeeds
+- **THEN** the published generation keeps CPA membership and omits only the AISIX supplement
+
+#### Scenario: Generation-pinned projection caching
+
+- **WHEN** a new generation is published while a projection build for the previous one is in flight
+- **THEN** the in-flight result is not stored as the current entry
+
+#### Scenario: Readiness before first authority
+
+- **WHEN** the sidecar has not yet published a CPA authority generation
+- **THEN** `/readyz` reports not ready, and becomes ready after the first successful collection
+
+#### Scenario: Normal catalog and table reads do not force collection
+
+- **WHEN** a client requests `GET /v1/models` or `GET /models-table`
+- **THEN** the request uses the current generation and eligible caches without triggering authority collection
+
+#### Scenario: Missing mandatory authority is not hidden by a saved table
+
+- **WHEN** a forced refresh cannot obtain usable CPA authority
+- **THEN** the diagnostic request reports the unavailable/error outcome and does not substitute a previously rendered table
+
+#### Scenario: Routing index no longer served
+
+- **WHEN** a client requests `GET /routing-index?model=x`
+- **THEN** the sidecar returns 404
