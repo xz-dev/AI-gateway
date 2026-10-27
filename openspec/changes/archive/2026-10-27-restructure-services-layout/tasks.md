@@ -30,11 +30,11 @@
 
 ## 5. Production migration
 
-- [ ] 5.1 Run the migration script in plan mode, then apply it on the host and in the local private config; rewrite the installed recovery unit path and run `systemctl daemon-reload`. Verify: the receipt lists every moved path, the backup tree exists, `docker compose config -q` passes on the host, and `systemctl cat ai-gateway-recovery.service` shows `ops/scripts/host/`.
-- [ ] 5.2 Batch 1 (catalog), per design Migration Plan step 2: copy the volume, bring up `model-catalog`, recreate `apisix-models` and the front door, remove the sidecar and the old enricher. Verify:
+- [x] 5.1 Run the migration script in plan mode, then apply it on the host and in the local private config; rewrite the installed recovery unit path and run `systemctl daemon-reload`. Verify: the receipt lists every moved path, the backup tree exists, `docker compose config -q` passes on the host, and `systemctl cat ai-gateway-recovery.service` shows `ops/scripts/host/`.
+- [x] 5.2 Batch 1 (catalog), per design Migration Plan step 2: copy the volume, bring up `model-catalog`, recreate `apisix-models` and the front door, remove the sidecar and the old enricher. Verify:
   - public `/v1/models` intersection for a test key;
   - Sub2API's catalog count is unchanged;
   - `:9083/models-table` renders and refresh works;
   - the Codex manifest is byte-identical to the pre-migration capture.
-- [ ] 5.3 Batch 2 (routing): rename the AISIX caller label `enricher_catalog` to `model_catalog` in the host `caller-keys.json` (value unchanged), then recreate `aisix`, `aisix-status` and `cpa-model-sync` from their new paths. Install the recovery unit from `ops/scripts/host/`, then run `--finalize`. Verify: the `:3001/status` page works, one AISIX-routed and one CPA-routed inference succeed, cpa-model-sync completes a cycle, no old-path symlink remains, and the recovery timer's next run passes.
-- [ ] 5.4 Re-adopt the Ansible baselines, then run a plan for every deploy tag. Verify: each plan reports no change. After one scheduled catalog refresh, remove `models-enricher-cache` and the backup tree, and verify that `docker volume ls` and the host tree no longer contain the old names.
+- [x] 5.3 Batch 2 (routing): rename the AISIX caller label `enricher_catalog` to `model_catalog` in the host `caller-keys.json` (value unchanged), then recreate `aisix`, `aisix-status` and `cpa-model-sync` from their new paths. Install the recovery unit from `ops/scripts/host/`, then run `--finalize`. Verify: the `:3001/status` page works, one AISIX-routed and one CPA-routed inference succeed, cpa-model-sync completes a cycle, no old-path symlink remains, and the recovery timer's next run passes.
+- [x] 5.4 Re-adopt the Ansible baselines, then run a plan for every deploy tag. Verify: each plan reports no change. After one scheduled catalog refresh, remove `models-enricher-cache` and the backup tree, and verify that `docker volume ls` and the host tree no longer contain the old names.
