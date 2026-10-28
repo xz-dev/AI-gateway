@@ -14,10 +14,7 @@ A CPA native-manifest ID that matches none of these SHALL NOT appear, including:
 
 When an ID is admitted from CPA, its CPA native row SHALL be its base record, even if AISIX or a static model also lists it. A CPA row for an ID that is not admitted from CPA SHALL NOT be used as that ID's `@self` record.
 
-Members SHALL be ordered as follows:
-- CPA-admitted IDs in native-manifest order;
-- then the remaining AISIX IDs in AISIX order;
-- then the remaining static models.
+Source precedence on a duplicate SHALL be CPA-admitted, then AISIX, then static. Member output order SHALL follow "Catalog output order and Codex priority" and SHALL NOT depend on source order.
 
 `@cpa-upstream` rows and bundled metadata SHALL only contribute fields. A model present only in a channel's upstream list SHALL NOT appear.
 
@@ -59,7 +56,7 @@ Members SHALL be ordered as follows:
 #### Scenario: ID listed by both CPA and AISIX
 
 - **WHEN** CPA admits `codex/gpt-5.3-codex-spark` and AISIX also lists it
-- **THEN** it appears once, in CPA order, with the CPA native row as its base record
+- **THEN** it appears once, with the CPA native row as its base record
 
 ### Requirement: Model selection with include_models
 
@@ -149,6 +146,38 @@ The diagnostic force refresh SHALL be the only traffic-triggered collection. It 
 
 ## ADDED Requirements
 
+### Requirement: Catalog output order and Codex priority
+
+Every catalog list that model-catalog emits SHALL use one fixed order of the kept members:
+1. IDs without `/`, sorted by Unicode code point;
+2. then every other ID, sorted by Unicode code point.
+
+Comparison SHALL be exact and case-sensitive, with no locale or case folding. The order SHALL apply to the standard list, every Codex manifest and the `/models-table` rows, and SHALL NOT depend on source order, CPA native order or CPA `priority`.
+
+In every Codex manifest the sidecar SHALL set each row's `priority` to its 1-based position in that order. This SHALL apply to every row, including rows emitted as CPA returned them, and SHALL replace any `priority` that CPA or a metadata source supplied. `priority` SHALL be the only field changed on such rows, and the existing field order of a CPA row SHALL be kept.
+
+The unparameterized front-door `/v1/models` answered by Sub2API is outside this requirement.
+
+#### Scenario: Bare IDs first, code-point order
+
+- **WHEN** the kept members are `z/a`, `b`, `A/b`, `B`, `a` and `a/b`
+- **THEN** both the standard list and the Codex manifest list `B`, `a`, `b`, `A/b`, `a/b`, `z/a`
+
+#### Scenario: Priority follows the output order
+
+- **WHEN** CPA returns `codex/m` with `priority: 7` and `devin/x` with `priority: 343`, and the Codex manifest lists them at positions 6 and 7
+- **THEN** their `priority` values are 6 and 7
+
+#### Scenario: Passthrough row changes only priority
+
+- **WHEN** a CPA row is emitted as CPA returned it
+- **THEN** every field except `priority` equals the CPA row, in CPA's field order, and the generation's copy of the CPA row is not modified
+
+#### Scenario: Order does not change membership
+
+- **WHEN** the same authority inputs are collected
+- **THEN** the member set and passthrough set equal those produced without the ordering rule
+
 ### Requirement: CPA prefixes come from CPA management data
 
 The sidecar SHALL take the CPA prefix set from the CPA Management API only:
@@ -157,9 +186,9 @@ The sidecar SHALL take the CPA prefix set from the CPA Management API only:
 
 The sidecar SHALL NOT download authentication files, read OAuth model definitions or OAuth model aliases for membership, or accept an operator-written prefix list.
 
-A CPA-admitted ID SHALL be emitted exactly as CPA returned it, without compile, resolution or post-processing, when an OAuth account registers it under an inferred prefix and no static model has that slug. IDs admitted through a key-channel prefix or through `membership.cpa_include` SHALL be compiled normally.
+A CPA-admitted ID SHALL be emitted as CPA returned it, without compile, resolution or post-processing and with only `priority` replaced (see "Catalog output order and Codex priority"), when an OAuth account registers it under an inferred prefix and no static model has that slug. IDs admitted through a key-channel prefix or through `membership.cpa_include` SHALL be compiled normally.
 
-If prefix discovery is incomplete because a management read failed with no eligible cached response, the sidecar SHALL log a warning. It SHALL admit every CPA native-manifest ID containing `/`, emitting it exactly as CPA returned it, plus the IDs matched by `membership.cpa_include`. It SHALL NOT admit any other CPA ID without `/` on this path.
+If prefix discovery is incomplete because a management read failed with no eligible cached response, the sidecar SHALL log a warning. It SHALL admit every CPA native-manifest ID containing `/`, emitting it as CPA returned it with only `priority` replaced, plus the IDs matched by `membership.cpa_include`. It SHALL NOT admit any other CPA ID without `/` on this path.
 
 #### Scenario: OAuth prefix inferred from paired registrations
 
@@ -210,7 +239,7 @@ When the field is absent, no exception applies. These SHALL be configuration err
 
 On every authority collection the sidecar SHALL read CPA's `force-model-prefix` setting from the Management API. While CPA reports `true`, CPA lists no bare copies, so OAuth prefixes cannot be inferred. In that state the sidecar SHALL:
 - admit every CPA native-manifest ID containing `/`, plus the IDs matched by `membership.cpa_include`;
-- emit an ID exactly as CPA returned it when an OAuth account registers it and `membership.cpa_include` does not match it.
+- emit an ID as CPA returned it, with only `priority` replaced, when an OAuth account registers it and `membership.cpa_include` does not match it.
 
 A failed read of the setting SHALL count as incomplete prefix discovery.
 

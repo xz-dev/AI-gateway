@@ -1,7 +1,7 @@
 // Output projections: Codex manifest and standard list bodies, and the server-rendered models
 // table (no JavaScript, refresh is a plain POST form). Bodies are published as files (outputs.ts);
 // the table rows are one file, the page head and tail are rendered per request.
-import type { PreparedGeneration, Projection } from "./build.ts";
+import { compareCatalogIDs, type PreparedGeneration, type Projection } from "./build.ts";
 import type { Row } from "./json.ts";
 
 export function codexBody(projection: Projection): string {
@@ -67,12 +67,8 @@ function hiddenReason(prepared: PreparedGeneration, id: string): string {
   return `hidden by include_models[${hidden.ruleIndex}] ${hidden.pattern ?? ""}`.trimEnd();
 }
 
-// Unprefixed models first, then slug order.
-const slugOrder = (a: TableRow, b: TableRow) => {
-  const aBare = !a.slug.includes("/");
-  const bBare = !b.slug.includes("/");
-  return aBare !== bBare ? (aBare ? -1 : 1) : a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
-};
+// Catalog output order; referenced-only pool rows are appended to the members, so the table re-sorts.
+const slugOrder = (a: TableRow, b: TableRow) => compareCatalogIDs(a.slug, b.slug);
 
 /** Compact table rows: kept, hidden (with the deciding rule) and referenced-only entries. */
 export function tableData(prepared: PreparedGeneration, projection: Projection, clientVersion: string): TableData {

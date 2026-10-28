@@ -23,6 +23,11 @@ Gateway routing and catalog membership SHALL NOT depend on that setting:
 - **WHEN** a client requests `devin/claude-opus-5-5`, which only the Devin account registers
 - **THEN** CPA serves it with that account, as before the setting change
 
+#### Scenario: AISIX target no longer registered by CPA
+
+- **WHEN** a CPA image change stops registering an unprefixed slash ID that an AISIX direct model names, such as `devin/deepseek-v4-1-flash` in v8.0.45
+- **THEN** that direct model and every logical-route target naming it are removed from the AISIX resources in the same deployment window, and no AISIX direct model or route target names an ID that CPA does not register
+
 #### Scenario: Setting drift is visible
 
 - **WHEN** an operator inspects CPA's `force-model-prefix` setting after deployment

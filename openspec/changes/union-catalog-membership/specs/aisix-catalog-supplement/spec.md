@@ -2,7 +2,7 @@
 
 ### Requirement: AISIX contributes its complete inventory
 
-The catalog SHALL add every unique ID listed by the AISIX models API to catalog membership, whether or not CPA also lists it. Comparison SHALL be exact and case-sensitive. Accepted IDs SHALL keep their complete bytes and first-seen order.
+The catalog SHALL add every unique ID listed by the AISIX models API to catalog membership, whether or not CPA also lists it. Comparison SHALL be exact and case-sensitive. Accepted IDs SHALL keep their complete bytes. Output order follows the catalog output order in `codex-models-enricher`, not AISIX order.
 
 #### Scenario: Router ID that CPA also lists bare
 

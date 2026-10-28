@@ -96,7 +96,7 @@ static_models:
   assert.match(page.text, /@opencode-ai\/models 0\.0\.test \(snapshot 2026-10-01T00:00:00\.000Z\) · modelparams 0\.0\.mp/);
   assert.match(page.text, /kept 2 · hidden 2 · referenced-only 1/);
   const catalog = JSON.parse((await call("/v1/models?client_version=1")).text).models.map((m: Row) => m.slug);
-  assert.deepEqual(catalog, ["codex/a", "alias/x"], "table markings never change JSON contents");
+  assert.deepEqual(catalog, ["alias/x", "codex/a"], "table markings never change JSON contents");
   void h;
 });
 

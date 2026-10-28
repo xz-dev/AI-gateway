@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { Row } from "../src/json.ts";
 import { nativeRows } from "../src/authority.ts";
+import { compareCatalogIDs } from "../src/build.ts";
 import { bySlug, channels, codex, harness, replyText } from "./catalog-harness.ts";
 import { json, serve, tempDir } from "./helpers.ts";
 
@@ -120,7 +121,7 @@ static_models:
 `,
   });
   const models = bySlug(await codex(h));
-  assert.deepEqual([...models.keys()], ["codex/gpt-5.6-sol", "codex/gpt-image-2", "codex/conflict", "alias/a", "claude"]);
+  assert.deepEqual([...models.keys()], ["claude", "alias/a", "codex/conflict", "codex/gpt-5.6-sol", "codex/gpt-image-2"]);
   assert.deepEqual(models.get("codex/gpt-image-2")!.output_modalities, ["image"]);
   assert.equal(models.get("codex/gpt-5.6-sol")!.output_modalities, undefined, "no built-in image special case");
   assert.equal("default_reasoning_level" in models.get("codex/conflict")!, false);
@@ -179,7 +180,12 @@ test("membership comes from authority only; fallback rows are emitted unchanged 
   assert.ok(!slugs.includes("my-alias"), "fallback admits no bare CPA ID");
   assert.ok(!slugs.includes("codex/m-new"), "channel-only models never appear");
   const preserved = models.find((model) => model.slug === "oauth/route");
-  assert.deepEqual(preserved, conflictRow, "preserveNative rows keep CPA content as-is");
+  const priority = slugs.indexOf("oauth/route") + 1;
+  assert.deepEqual(preserved, { ...conflictRow, priority }, "preserveNative rows keep CPA content as-is except priority");
+  assert.deepEqual(Object.keys(preserved!), [...Object.keys(conflictRow), "priority"], "CPA field order is kept");
+  // The generation's native row is shared by every projection and is never mutated.
+  assert.equal((await codex(h, "2.0.0")).find((model) => model.slug === "oauth/route")!.priority, priority);
+  assert.equal("priority" in nativeRows(h.owner.current())[2]!, false);
 });
 
 test("D1 order and D5: CPA rows win over AISIX; an AISIX bare ID never takes CPA's bare row", async (t) => {
@@ -193,7 +199,7 @@ test("D1 order and D5: CPA rows win over AISIX; an AISIX bare ID never takes CPA
     yaml: `metadata:\n  chain: ["@self"]\nstatic_models:\n  - slug: alias/a\n    inherit: [codex/m]\n  - slug: codex/m\n`,
   });
   const models = bySlug(await codex(h));
-  assert.deepEqual([...models.keys()], ["codex/m", "codex/gpt-6.1-sol", "gpt-6.1-sol", "Router/Only", "router/only", "alias/a"]);
+  assert.deepEqual([...models.keys()], ["gpt-6.1-sol", "Router/Only", "alias/a", "codex/gpt-6.1-sol", "codex/m", "router/only"]);
   assert.equal(models.get("codex/m")!.context_window, 1000, "the CPA-admitted row is the base for an ID in both sources");
   assert.equal(models.get("gpt-6.1-sol")!.context_window, undefined, "CPA's non-admitted bare row is never @self");
   assert.equal(models.get("gpt-6.1-sol")!.display_name, undefined);
@@ -201,7 +207,29 @@ test("D1 order and D5: CPA rows win over AISIX; an AISIX bare ID never takes CPA
   // An AISIX failure removes only AISIX members.
   status = 401;
   await h.owner.refresh({ bypass: true });
-  assert.deepEqual([...bySlug(await codex(h)).keys()], ["codex/m", "codex/gpt-6.1-sol", "alias/a"]);
+  assert.deepEqual([...bySlug(await codex(h)).keys()], ["alias/a", "codex/gpt-6.1-sol", "codex/m"]);
+});
+
+test("output order is bare IDs first, then the rest, each in code-point order", () => {
+  const ids = ["z/a", "b", "\u{1F600}/x", "\uFFFD/x", "B", "A/b", "a", "a/b", "\u00E9"];
+  assert.deepEqual(ids.sort(compareCatalogIDs), ["B", "a", "b", "\u00E9", "A/b", "a/b", "z/a", "\uFFFD/x", "\u{1F600}/x"]);
+});
+
+test("standard list and Codex manifest share the order; priority follows it on every row; members are unchanged", async (t) => {
+  const aisix = await serve((_req, res) => json(res, { data: [{ id: "zeta" }, { id: "Alpha" }, { id: "codex/m" }] }));
+  t.after(() => aisix.close());
+  const h = await harness(t, {
+    channels: channels([{ prefix: "codex", models: ["m", "a"] }]),
+    native: [native("codex/m", { priority: 7 }), native("devin/x", { priority: 343 }), native("codex/a")],
+    aisix: aisix.url,
+    yaml: `metadata:\n  chain: ["@self"]\nmembership:\n  cpa_include: ["devin/*"]\nstatic_models:\n  - slug: alias/a\n    inherit: [codex/m]\n  - slug: beta\n    inherit: [codex/a]\n`,
+  });
+  const expected = ["Alpha", "beta", "zeta", "alias/a", "codex/a", "codex/m", "devin/x"];
+  const models = await codex(h);
+  assert.deepEqual(models.map((model) => model.slug), expected);
+  assert.deepEqual(models.map((model) => model.priority), [1, 2, 3, 4, 5, 6, 7], "CPA priorities are replaced, gaps-free");
+  const reply = await h.service.catalog("");
+  assert.deepEqual(JSON.parse(await replyText(reply)).data.map((entry: Row) => entry.id), expected);
 });
 
 test("@cpa-upstream reads only channels whose kept models need it; Ollama rows come from /api/show", async (t) => {

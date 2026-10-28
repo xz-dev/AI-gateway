@@ -32,6 +32,11 @@
   - `podman build` succeeds;
   - `ops/scripts/validate.sh .env.example` passes, with `compose.override.yaml` moved to `/var/tmp` and restored.
 
+- [x] 1.6 Output order and Codex priority (D7): sort members once per generation in `prepare()` (bare IDs first, then the rest, each in code-point order); set Codex `priority` to the 1-based output position on every row, with a shallow copy for passthrough rows; `/models-table` uses the same comparator. Update `docs/model-catalog.md`. Verify:
+  - `tests/catalog.test.ts` covers the comparator (bare first, case, code point beyond the BMP), the standard list and Codex manifest sharing the order, `priority` on compiled and passthrough rows replacing CPA's value, passthrough rows equal to CPA's except `priority` with CPA field order kept, and the generation's native row left unmodified;
+  - the parity test still gives equal member and passthrough sets;
+  - `npm ci && npm run typecheck && npm test && npm run build` and `podman build` pass.
+
 ## 2. CPA pin and docs
 
 - [x] 2.1 Re-resolve the latest official CPA release and its index digest (`eceasy/cli-proxy-api`). Pin it in `compose.yaml`, `.env.example` and the private `.env`, and record the old digest for rollback. Verify:
@@ -47,36 +52,51 @@
 
   Verify: the local link check reports 0 broken links, and `git grep -nE 'supplementalIDs|oauth-model-alias|force-model-prefix: true'` hits only `docs/records` and `openspec/changes/archive`.
 - [x] 2.3 Commit unsigned and push, then publish the model-catalog image with the current publish workflow and pin its digest. Verify: CI is green for the commit, the publish run succeeds, and the image pulls by digest.
+- [ ] 2.4 Commit 1.6 unsigned with explicit pathspecs and push, publish the model-catalog image again and pin its digest in `compose.yaml`, `.env.example` and the private `.env`. Verify: CI is green for the commit, the publish run succeeds, the image pulls by digest, and `ops/scripts/validate.sh .env.example` passes (with `compose.override.yaml` moved to `/var/tmp` and restored).
 
 ## 3. Production
 
 Run every step on an `openai/*` model, using the Ansible playbooks current at apply time (`standardize-ansible-operations` may have replaced `ops.yml`).
 
-- [ ] 3.1 Pre-capture, read-only, to `/var/tmp`:
+- [x] 3.1 Pre-capture, read-only, to `/var/tmp`:
   - native manifest IDs, AISIX IDs, catalog IDs (standard list and Codex manifest bytes);
   - public `/v1/models` for a test key, Sub2API count, `:9083/models-table` status;
   - `GET /v0/management/force-model-prefix`, and CPA plugin log lines.
 
   Verify: every capture is non-empty and the setting reads `true`.
-- [ ] 3.2 Batch A: deploy the new model-catalog image with its private config. Verify:
+- [x] 3.2 Batch A: deploy the new model-catalog image with its private config. Verify:
   - healthy, restarts=0;
   - the member set and passthrough set equal the pre-capture, and Codex manifest rows match row for row;
   - public and Sub2API counts are unchanged;
   - logs report compatibility mode.
-- [ ] 3.3 Batch B: recreate CPA on the official image with `stream-bootstrap-buffering: true` (D6), the setting still `true`. Verify:
+
+  Done 2026-10-28 with `v1.1.0-548d855`; 3.2.1 repeats it with the 1.6 image.
+- [ ] 3.2.1 Batch A re-run: refresh the pre-capture (3.1 list), then deploy the 2.4 model-catalog image. Verify:
+  - healthy, restarts=0, logs report compatibility mode;
+  - the member set and passthrough set equal the pre-capture, and every Codex row equals its pre-capture row in every field except `priority`;
+  - the standard list and Codex manifest follow the D7 order, and every Codex `priority` equals its 1-based position;
+  - public and Sub2API counts are unchanged.
+- [ ] 3.3 Batch B: recreate CPA on the official image with `stream-bootstrap-buffering: true` (D6), the setting still `true`. Right after the image switch, deploy the D9 AISIX change with `deploy-config.yml -e component=aisix` (`--check --diff` first; the diff removes only `devin/deepseek-v4-1-flash` and its route target). The first attempt on 2026-10-28 was rolled back on the old "catalog unchanged" gate. Verify:
   - CPA reports `stream-bootstrap-buffering` on;
-  - CPA healthy; one CPA-routed and one AISIX-routed inference succeed;
-  - the catalog is unchanged;
+  - CPA healthy; one CPA-routed and one AISIX-routed inference succeed, and the `deepseek-v4.1-flash` route still answers;
+  - D8 ledger:
+    - the native Devin difference equals the embedded `devin_models.json` difference between the old and new tags exactly (+7/-17 for v8.0.38 → v8.0.45);
+    - the catalog difference is +7/-16 before the AISIX deploy and +7/-17 after it, and no AISIX direct model or route target names an ID that CPA does not register;
+    - every other member, the passthrough set and every non-`priority` field of every other Codex row equal the pre-capture;
+    - the order and `priority` follow D7;
+    - a model missing from CPA's available list but still registered is re-sampled after the authority cache refresh before it counts as a difference;
+  - public and Sub2API counts change only by ledger IDs;
   - a `supergrok/grok-imagine-image` images request reaches the xAI upstream, with no CPA `not supported`/`unknown provider` error. Use the cheapest request that proves routing;
   - both `cpa-quota-estimator` and `codex-auto-reset` log `plugin loaded` (a load failure is a regression: roll back);
   - the D6 SSE framing gate passes on the CPA operator port and on the public chain.
 
-  If the gate fails with buffering on, roll back to the previous CPA digest and stop for a user decision.
+  If the SSE gate fails with buffering on, or any difference is not explained by the ledger, roll back to the previous CPA digest (and `rollback-config.yml -e component=aisix` if it was deployed) and stop for a user decision.
 - [ ] 3.4 Batch C: `PUT /v0/management/force-model-prefix {"value": false}`, then `POST :9083/models-table/refresh`. Verify:
   - the setting reads `false` and `config.yaml` persists it;
   - the native manifest now contains bare IDs;
-  - the catalog ID set equals the pre-capture, and any difference is listed and explained;
-  - Codex rows are equal, and public and Sub2API counts are unchanged;
+  - the catalog member and passthrough sets equal the post-3.3 capture, with any difference listed and explained;
+  - every Codex row equals its post-3.3 row in every field except `priority`, and the order and `priority` follow D7;
+  - public and Sub2API counts are unchanged;
   - CPA logs show the same credential for one prefixed ID and one `devin/*` ID as before;
   - a bare ID request reaches AISIX.
-- [ ] 3.5 Write `docs/records/cpa-default-prefix-deployment-<date>.md` with the captures summary, digests, timings and rollback commands. Commit unsigned and push. Verify: CI is green, and `openspec validate --all --strict` passes.
+- [ ] 3.5 Write `docs/records/cpa-default-prefix-deployment-<date>.md` with the captures summary, digests, timings, the D8 ledger, the D9 removal, the first batch B rollback and rollback commands. Delete the temporary test key with proof, and confirm `--check --diff` reports changed=0 for cli-proxy-api, model-catalog and the configs. Commit unsigned and push. Verify: CI is green, and `openspec validate --all --strict` passes.

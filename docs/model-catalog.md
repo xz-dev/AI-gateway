@@ -97,11 +97,13 @@ The dedicated `apisix-models` instance remains for catalog and protocol compatib
 
 ### Membership
 
-Each authority collection builds the member list from three sources, deduplicated by exact, case-sensitive ID; the first source wins the position:
+Each authority collection builds the member list from three sources, deduplicated by exact, case-sensitive ID; on a duplicate the earlier source supplies the base row:
 
-1. **CPA-admitted IDs** (native-manifest order): an ID that starts with `P/` for a CPA prefix `P`, or that `membership.cpa_include` matches.
-2. **Every AISIX ID** (AISIX order). An AISIX ID that CPA also admits keeps CPA's row; an AISIX ID that CPA lists only bare (for example `gpt-6.1-sol`) has no `@self` row.
-3. **`static_models`** (config order).
+1. **CPA-admitted IDs**: an ID that starts with `P/` for a CPA prefix `P`, or that `membership.cpa_include` matches.
+2. **Every AISIX ID**. An AISIX ID that CPA also admits keeps CPA's row; an AISIX ID that CPA lists only bare (for example `gpt-6.1-sol`) has no `@self` row.
+3. **`static_models`**.
+
+**Output order** is fixed and independent of source order: IDs without `/` first, then every other ID, each group sorted by Unicode code point (case-sensitive, so `B` sorts before `a`). The standard list, the Codex manifest and `/models-table` use it. In the Codex manifest model-catalog sets `priority` to the 1-based output position on every row, passthrough rows included; Codex lists lower values first. Front-door unparameterized `/v1/models` is answered by Sub2API and keeps Sub2API's order.
 
 `metadata.include_models` then hides members; `membership.cpa_include` only adds CPA IDs and cannot hide prefixed ones.
 
@@ -112,7 +114,7 @@ Each authority collection builds the member list from three sources, deduplicate
 
 An account without a prefix (Devin registers `devin/<model>` only) contributes no prefix; admit its IDs with `membership.cpa_include: ["devin/*"]`. Upstream originals with `/` that CPA lists bare (`deepseek/…`) are not members. A channel whose own originals start with its prefix (`openrouter/auto` under `openrouter`) also has its bare original admitted; both IDs route to the same channel, and `include_models` can hide one.
 
-**Passthrough**: an ID that an OAuth account registers under an inferred prefix is emitted exactly as CPA returned it (no compile, resolution or post-processing), unless a static model owns the slug. Key-channel and `cpa_include` IDs are compiled normally.
+**Passthrough**: an ID that an OAuth account registers under an inferred prefix is emitted exactly as CPA returned it (no compile, resolution or post-processing) except for `priority`, unless a static model owns the slug. Key-channel and `cpa_include` IDs are compiled normally.
 
 **Compatibility mode**: every collection reads `GET /v0/management/force-model-prefix`. While it is `true`, CPA lists no bare copies, so the catalog admits every CPA slash ID plus `cpa_include` matches, and OAuth registrations outside `cpa_include` pass through. The log names the mode when it changes.
 
