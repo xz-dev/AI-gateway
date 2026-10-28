@@ -432,7 +432,7 @@ def private_host_binding(port, target_port, published_port=None):
         return False
 
 for port, expected in (
-    ("127.0.0.1:9083:9083", True), ("100.94.238.35:9083:9083", True),
+    ("127.0.0.1:9083:9083", True), ("100.64.0.2:9083:9083", True),
     ("[::1]:9083:9083", True), ("0.0.0.0:9083:9083", False),
     ("[::]:9083:9083", False), ("9083:9083", False),
     ({"host_ip": "0.0.0.0", "published": "9083", "target": 9083}, False),

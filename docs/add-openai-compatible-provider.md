@@ -1,6 +1,6 @@
 # 新增 OpenAI 兼容来源（provider channel）操作手册
 
-通用流程：把一个新的 OpenAI 兼容商家（如 AIHub、Zakk 类）接入 AI-gateway 生产栈。目标主机 `root@rainyun-la` (100.94.238.35)，工作目录 `/root/AI-gateway`。
+通用流程：把一个新的 OpenAI 兼容商家（如 AIHub、Zakk 类）接入 AI-gateway 生产栈。目标主机是私有 inventory 里的生产主机，工作目录 `/root/AI-gateway`。
 
 涉及四层，顺序固定：**Squid 出口放行 → CPA 渠道注册（含模型列表）→ AISIX 路由 → 验证**。缺任何一层都会无声失败。
 
