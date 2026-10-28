@@ -139,7 +139,7 @@ Run every step on an `openai/*` model. The cutover itself (5.3) is a one-time re
   - the table differs only by `catalog.lua`-rejected rows, the hide reason text and the new count.
   - If the native or AISIX captures changed between 5.2 and 5.5, stop and explain the diff from them before continuing.
   - If the catalog bytes differ for any other reason, roll back with the manual steps of Migration Plan step 8 and stop for a user decision.
-- [ ] 5.6 Write `docs/records/lua-catalog-membership-deployment-<date>.md` with digests, timings, the diff summary, the 1.6 memory numbers and the rollback commands (Migration Plan step 8), without private values or the public hostname. Commit unsigned and push. Verify: CI is green, and `git grep` of the record finds no private hostnames or keys.
+- [x] 5.6 Write `docs/records/lua-catalog-membership-deployment-<date>.md` with digests, timings, the diff summary, the 1.6 memory numbers and the rollback commands (Migration Plan step 8), without private values or the public hostname. Commit unsigned and push. Verify: CI is green, and `git grep` of the record finds no private hostnames or keys.
 
 ### Production evidence (2026-10-28)
 
@@ -147,4 +147,4 @@ Run every step on an `openai/*` model. The cutover itself (5.3) is a one-time re
 - 5.2/5.5: successful retry pre/post native 556, AISIX 76, internal standard/Codex 344, public standard 344/Codex 335, Sub2API 344, passthrough 47. Internal standard and Codex `cmp` passed; public/Sub2API body hashes also identical. Table row changes limited to 210 newly displayed rejects plus 10 hide-reason changes.
 - 5.3: first attempt rolled back after native availability changed one Codex row; exact-image identical-input A/B proved parity with that model absent and present. Supervisor approved retry. Successful retry 13:09:24–13:10:21 UTC passed original strict comparisons without an exception; only model-catalog recreated, healthy/restarts 0, script loaded, no WARN.
 - 5.4: config baseline adoption changed only two baseline files; final config and component `--check --diff` both changed=0 failed=0. Production cgroup peak 241,070,080 bytes under 384 MiB, oom/oom_kill 0. Keys 37 and 38 each DELETE 200 / GET 404 / file absent.
-- Full evidence: `docs/records/lua-catalog-membership-deployment-2026-10-28.md`; private scratch `/var/tmp/ai-lua-window/`. Section 5.6 awaits record-commit CI.
+- Full evidence: `docs/records/lua-catalog-membership-deployment-2026-10-28.md`; private scratch `/var/tmp/ai-lua-window/`. 5.6: record/evidence commit `1da435f` passed Validate run `40696698601` (all four jobs); private-value scan and diff checks passed. No private paths staged.
