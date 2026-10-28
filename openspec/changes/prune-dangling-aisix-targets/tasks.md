@@ -49,7 +49,7 @@ This change does not depend on union-catalog-membership (design D6), so it has n
 - [x] 3.3 Run `--check --diff` for `deploy-config.yml -e component=aisix` and `-e component=model-catalog`, and `deploy.yml -e component=aisix`. Delete the temporary key. Verify:
   - every run reports changed=0 failed=0;
   - the key DELETE returns 200, a following GET returns 404, and the local key file is gone.
-- [ ] 3.4 Write `docs/records/prune-dangling-aisix-targets-<date>.md`, using model IDs and route names only. It covers:
+- [x] 3.4 Write `docs/records/prune-dangling-aisix-targets-<date>.md`, using model IDs and route names only. It covers:
   - the before and after counts;
   - the removed IDs with their old route positions, for restore;
   - the `axis/*` diagnosis and decision;
@@ -57,3 +57,5 @@ This change does not depend on union-catalog-membership (design D6), so it has n
   - the rollback procedure: restore the backup, then run `deploy-config.yml -e component=aisix`, `--check --diff` first.
 
   Commit unsigned with explicit pathspecs and push. Verify: CI is green, and `openspec validate prune-dangling-aisix-targets --strict` passes.
+
+  Evidence: implementation/record commit `346bb86`; Validate run `40661127131` passed all four jobs. Strict change validation and `git diff --check` passed. Production plan/apply, pre/post captures, route probes, key deletion and zero-drift checks are recorded in `docs/records/prune-dangling-aisix-targets-2026-10-28.md`.
