@@ -114,7 +114,7 @@
 
 Run every step on an `openai/*` model. The cutover itself (5.3) is a one-time reviewed manual window, because it couples the image, the Compose definition and the profile (design D11, Migration Plan step 4). Playbooks are used afterwards, `--check --diff` first.
 
-- [ ] 5.1 Private profile (local only):
+- [x] 5.1 Private profile (local only):
   - write the private `catalog.lua` per Migration Plan step 2, and delete `membership` and `metadata.include_models` from the private `config.yaml`;
   - copy into `HIDE` only the `include_models` hides that still match a live candidate at migration time; a hide that matches nothing (such as `!xl/grok-imagine-image-2.0` once `prune-dangling-aisix-targets` has removed that AISIX entry) is dropped and listed in the record;
   - re-check with the real matcher that no hide matches a static slug or an `inherit`/`metadata_from` target.
@@ -123,16 +123,16 @@ Run every step on an `openai/*` model. The cutover itself (5.3) is a one-time re
   - `podman run --rm --network none --read-only -v <private dir>:/candidate:ro <pinned image> validate-config /candidate/config.yaml --script /candidate/catalog.lua` exits 0;
   - a local run of the 1.5 harness on the private profile and a capture of the live native manifest and AISIX IDs gives the live member set;
   - the matcher check reports 0 conflicts.
-- [ ] 5.2 Pre-capture, read-only, to `/var/tmp`: native manifest IDs, AISIX IDs, standard list bytes, Codex manifest bytes for the pinned client versions, member and passthrough sets, public `/v1/models` count for a test key, Sub2API count, `:9083/models-table` summary. Verify: every capture is non-empty, and the catalog count is recorded.
-- [ ] 5.3 Manual window (Migration Plan step 4): back up the host `compose.yaml`, `.env`, `config.yaml` and any `catalog.lua`; pull the new image by digest and validate the private pair with a throwaway container of it; pause the recovery timer; upload the private `config.yaml`, `catalog.lua`, `compose.yaml` (mount and `CATALOG_SCRIPT_PATH`) and the `.env` image pin; `docker compose config -q`; one `docker compose up -d --no-deps --no-build model-catalog`; `POST :9083/models-table/refresh`; restart the recovery timer. Verify:
+- [x] 5.2 Pre-capture, read-only, to `/var/tmp`: native manifest IDs, AISIX IDs, standard list bytes, Codex manifest bytes for the pinned client versions, member and passthrough sets, public `/v1/models` count for a test key, Sub2API count, `:9083/models-table` summary. Verify: every capture is non-empty, and the catalog count is recorded.
+- [x] 5.3 Manual window (Migration Plan step 4): back up the host `compose.yaml`, `.env`, `config.yaml` and any `catalog.lua`; pull the new image by digest and validate the private pair with a throwaway container of it; pause the recovery timer; upload the private `config.yaml`, `catalog.lua`, `compose.yaml` (mount and `CATALOG_SCRIPT_PATH`) and the `.env` image pin; `docker compose config -q`; one `docker compose up -d --no-deps --no-build model-catalog`; `POST :9083/models-table/refresh`; restart the recovery timer. Verify:
   - the uploaded `compose.yaml` differs from the backup only by this change's lines;
   - `model-catalog` is recreated once and no other container ID changes;
   - healthy, restarts=0;
   - logs show the script loaded and no WARN;
   - in-container `validate-config /app/config.yaml --script /app/catalog.lua` exits 0;
   - the window start, recreate and ready times are recorded.
-- [ ] 5.4 Adopt baselines: run `deploy-config.yml -e component=model-catalog --check --diff` and `deploy.yml -e component=model-catalog --check --diff`. Verify: both report `changed=0 failed=0`; any stale baseline is re-adopted through the documented first-adoption path and the checks are rerun.
-- [ ] 5.5 Post-capture and diff: repeat the 5.2 captures. Verify:
+- [x] 5.4 Adopt baselines: run `deploy-config.yml -e component=model-catalog --check --diff` and `deploy.yml -e component=model-catalog --check --diff`. Verify: both report `changed=0 failed=0`; any stale baseline is re-adopted through the documented first-adoption path and the checks are rerun.
+- [x] 5.5 Post-capture and diff: repeat the 5.2 captures. Verify:
   - standard list bytes and Codex manifest bytes are byte-identical to the pre-capture (`cmp`);
   - the member and passthrough sets are equal;
   - the public and Sub2API counts are equal;
@@ -140,3 +140,11 @@ Run every step on an `openai/*` model. The cutover itself (5.3) is a one-time re
   - If the native or AISIX captures changed between 5.2 and 5.5, stop and explain the diff from them before continuing.
   - If the catalog bytes differ for any other reason, roll back with the manual steps of Migration Plan step 8 and stop for a user decision.
 - [ ] 5.6 Write `docs/records/lua-catalog-membership-deployment-<date>.md` with digests, timings, the diff summary, the 1.6 memory numbers and the rollback commands (Migration Plan step 8), without private values or the public hostname. Commit unsigned and push. Verify: CI is green, and `git grep` of the record finds no private hostnames or keys.
+
+### Production evidence (2026-10-28)
+
+- 5.1: pinned-image validation passed locally and on host; config digest `84e9159384c2377ef64eca3fffaeafe822699a80c13a09e79b716ae42c857b12`, script digest `fa9a93cbe04726d15dabfe6224f4aac5de68a0546e2f9c2634ddd7dbbf7354db`. Captured-authority harness reproduced all 344 live members, real matcher conflicts 0; 10 live hides migrated and dead `xl/grok-imagine-image-2.0` dropped.
+- 5.2/5.5: successful retry pre/post native 556, AISIX 76, internal standard/Codex 344, public standard 344/Codex 335, Sub2API 344, passthrough 47. Internal standard and Codex `cmp` passed; public/Sub2API body hashes also identical. Table row changes limited to 210 newly displayed rejects plus 10 hide-reason changes.
+- 5.3: first attempt rolled back after native availability changed one Codex row; exact-image identical-input A/B proved parity with that model absent and present. Supervisor approved retry. Successful retry 13:09:24–13:10:21 UTC passed original strict comparisons without an exception; only model-catalog recreated, healthy/restarts 0, script loaded, no WARN.
+- 5.4: config baseline adoption changed only two baseline files; final config and component `--check --diff` both changed=0 failed=0. Production cgroup peak 241,070,080 bytes under 384 MiB, oom/oom_kill 0. Keys 37 and 38 each DELETE 200 / GET 404 / file absent.
+- Full evidence: `docs/records/lua-catalog-membership-deployment-2026-10-28.md`; private scratch `/var/tmp/ai-lua-window/`. Section 5.6 awaits record-commit CI.
