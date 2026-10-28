@@ -7,10 +7,11 @@ Production runs the ordered model-catalog image and official CPA v8.0.45.
 `upstream.codex.stream-bootstrap-buffering` remains true. Both services are
 healthy with zero restarts. Recovery timer is active and model-sync is unpaused.
 
-**Not complete:** tasks 3.3 and 3.4 retain one explicit open check: a successful
-200 Devin inference after its daily quota reset. No successful inference is
-claimed from a cooldown response. The supervisor approved continuing the prefix
-switch with that check pending; this change must not be archived yet.
+**Production verification complete:** the successful Devin inference deferred
+under tasks 3.3 and 3.4 passed after the daily reset at 08:06:46 UTC. The earlier
+cooldown responses were not counted as success. The fresh probe and credential
+identity evidence are recorded under "Devin success after reset" below.
+Archiving remains a separate supervisor action.
 
 ## Immutable images and repository evidence
 
@@ -121,7 +122,7 @@ The final catalog delta is exactly +7/-17. No replacement alias was added.
 - Worker-owned CPA YAML differs from the pre-B backup only at
   `routing.force-model-prefix`; buffering and plugin configuration are unchanged.
 
-### Pending Devin success and retry deadline
+### Earlier pending Devin success and retry deadline
 
 The sole enabled Devin credential remains registered with the same identity
 before and after C. Probes for `devin/glm-5-3-flash` and `devin/kimi-k2-7` returned
@@ -139,7 +140,27 @@ The first B attempt on the same official v8.0.45 digest successfully served
 `devin/glm-5-3-flash` (200): private evidence
 `/var/tmp/ai-union-20261028/batch-b/route-results.json` and its matching response
 and credential-selection logs. A fresh successful 200 probe after the retry
-deadline remains required for tasks 3.3 and 3.4; it needs a new temporary key.
+deadline was required for tasks 3.3 and 3.4; it completed as recorded below.
+
+### Devin success after reset
+
+At 08:05 UTC, a read-only Management API check showed the sole enabled Devin
+credential active, available and without cooldown signals. The persisted
+prefix setting still read false. No production configuration, quota/reset
+setting or account was changed.
+
+At **2026-10-28 08:06:46 UTC**, one minimal public-chain Responses request for
+`devin/kimi-k2-7` returned **HTTP 200** with three characters of output text.
+CPA's `session-affinity` selector log names this model and selects the same
+credential as the pre-B, B and C captures; its private identity hash matches
+all those captures. This verifies successful routing on official v8.0.45 with
+force-model-prefix=false and closes the deferred checks in 3.3 and 3.4.
+
+Fresh temporary normal-client key **35** (group 15) was removed immediately:
+DELETE **200**, subsequent GET **404**, credential file absent at 08:06:51 UTC.
+Private evidence is retained in
+`/var/tmp/ai-union-20261028/devin-after-reset/` (`result.json`, response, headers
+and selector log) and the key lifecycle in `timeline.jsonl`.
 
 ## Pre-existing findings (not caused by this change)
 

@@ -76,7 +76,7 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - the member set and passthrough set equal the pre-capture, and every Codex row equals its pre-capture row in every field except `priority`;
   - the standard list and Codex manifest follow the D7 order, and every Codex `priority` equals its 1-based position;
   - public and Sub2API counts are unchanged.
-- [ ] 3.3 Batch B: recreate CPA on the official image with `stream-bootstrap-buffering: true` (D6), the setting still `true`. Right after the image switch, deploy the D9 AISIX change with `deploy-config.yml -e component=aisix` (`--check --diff` first; the diff removes only `devin/deepseek-v4-1-flash` and its route target). The first attempt on 2026-10-28 was rolled back on the old "catalog unchanged" gate. Verify:
+- [x] 3.3 Batch B: recreate CPA on the official image with `stream-bootstrap-buffering: true` (D6), the setting still `true`. Right after the image switch, deploy the D9 AISIX change with `deploy-config.yml -e component=aisix` (`--check --diff` first; the diff removes only `devin/deepseek-v4-1-flash` and its route target). The first attempt on 2026-10-28 was rolled back on the old "catalog unchanged" gate. Verify:
   - CPA reports `stream-bootstrap-buffering` on;
   - CPA healthy; one CPA-routed and one AISIX-routed inference succeed, and the `deepseek-v4.1-flash` route still answers;
   - D8 ledger:
@@ -91,10 +91,10 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - the D6 SSE framing gate passes on the CPA operator port and on the public chain.
 
   - [x] Re-run evidence (2026-10-28): official image healthy/restarts=0; buffering true; both plugins loaded; native +7/-17 ledger, catalog +7/-16 then +7/-17; unchanged passthrough and all other non-priority fields; D7 order; no new dangling AISIX targets; CPA, AISIX and DeepSeek route probes 200; xAI image request 200; operator/public SSE 11/10 valid frames. Devin credential remains registered and returns its upstream quota failure, not a successful inference.
-  - [ ] Pending: one 200 Devin inference after the daily quota reset. The current upstream `failed_precondition` daily-quota error propagates as 429 `model_cooldown`; the registered credential's retry deadline is 2026-10-28 08:00 UTC. This is not a successful inference. The supervisor approved continuing to C with this explicit open gate and the successful first-attempt evidence on the same official digest.
+  - [x] Devin success after reset: at 2026-10-28 08:06:46 UTC, `devin/kimi-k2-7` returned 200 with content through the public chain. CPA's selector log identifies the same sole Devin credential as the pre-B, B and C captures. The earlier 429 quota responses were not counted as success; this fresh probe closes the explicitly deferred gate. Temporary key 35 was deleted (DELETE 200, GET 404, credential file absent).
 
   If the SSE gate fails with buffering on, or any difference is not explained by the ledger, roll back to the previous CPA digest (and `rollback-config.yml -e component=aisix` if it was deployed) and stop for a user decision.
-- [ ] 3.4 Batch C: `PUT /v0/management/force-model-prefix {"value": false}`, then `POST :9083/models-table/refresh`. Verify:
+- [x] 3.4 Batch C: `PUT /v0/management/force-model-prefix {"value": false}`, then `POST :9083/models-table/refresh`. Verify:
   - the setting reads `false` and `config.yaml` persists it;
   - the native manifest now contains bare IDs;
   - the catalog member and passthrough sets equal the post-3.3 capture, with any difference listed and explained;
@@ -103,5 +103,5 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - CPA logs show the same credential for one prefixed ID and one `devin/*` ID as before;
   - a bare ID request reaches AISIX.
   - [x] Re-run evidence (2026-10-28): setting false through API and persisted config; native 554 IDs including 157 bare; catalog 357, public standard/Sub2API 357 and public Codex 348; member/passthrough sets and all non-priority fields unchanged; D7 order/priority; prefixed credential identity unchanged, Devin registered identity unchanged with the same quota failure, and bare request logged by AISIX.
-  - [ ] Pending: one 200 Devin inference after the daily quota reset, using a fresh temporary normal-client key. Credential registration and the unchanged upstream quota failure do not count as successful inference.
+  - [x] Devin success after reset: the fresh temporary normal-client key 35 served `devin/kimi-k2-7` with 200 and content at 2026-10-28 08:06:46 UTC, with force-model-prefix=false. CPA's selector log matches the original Devin credential identity. Key deletion was verified; see the record's "Devin success after reset" section.
 - [x] 3.5 Write `docs/records/union-catalog-membership-2026-10-28.md` with the captures summary, digests, timings, the D8 ledger, the D9 removal, the first batch B rollback and rollback commands. Delete the temporary test key with proof, and confirm `--check --diff` reports changed=0 for cli-proxy-api, model-catalog and the configs. Commit unsigned and push. Verify: CI is green, and `openspec validate --all --strict` passes.
