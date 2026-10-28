@@ -52,7 +52,7 @@
 
   Verify: the local link check reports 0 broken links, and `git grep -nE 'supplementalIDs|oauth-model-alias|force-model-prefix: true'` hits only `docs/records` and `openspec/changes/archive`.
 - [x] 2.3 Commit unsigned and push, then publish the model-catalog image with the current publish workflow and pin its digest. Verify: CI is green for the commit, the publish run succeeds, and the image pulls by digest.
-- [ ] 2.4 Commit 1.6 unsigned with explicit pathspecs and push, publish the model-catalog image again and pin its digest in `compose.yaml`, `.env.example` and the private `.env`. Verify: CI is green for the commit, the publish run succeeds, the image pulls by digest, and `ops/scripts/validate.sh .env.example` passes (with `compose.override.yaml` moved to `/var/tmp` and restored).
+- [x] 2.4 Commit 1.6 unsigned with explicit pathspecs and push, publish the model-catalog image again and pin its digest in `compose.yaml`, `.env.example` and the private `.env`. Verify: CI is green for the commit, the publish run succeeds, the image pulls by digest, and `ops/scripts/validate.sh .env.example` passes (with `compose.override.yaml` moved to `/var/tmp` and restored).
 
 ## 3. Production
 
@@ -71,7 +71,7 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - logs report compatibility mode.
 
   Done 2026-10-28 with `v1.1.0-548d855`; 3.2.1 repeats it with the 1.6 image.
-- [ ] 3.2.1 Batch A re-run: refresh the pre-capture (3.1 list), then deploy the 2.4 model-catalog image. Verify:
+- [x] 3.2.1 Batch A re-run: refresh the pre-capture (3.1 list), then deploy the 2.4 model-catalog image. Verify:
   - healthy, restarts=0, logs report compatibility mode;
   - the member set and passthrough set equal the pre-capture, and every Codex row equals its pre-capture row in every field except `priority`;
   - the standard list and Codex manifest follow the D7 order, and every Codex `priority` equals its 1-based position;
@@ -81,7 +81,7 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - CPA healthy; one CPA-routed and one AISIX-routed inference succeed, and the `deepseek-v4.1-flash` route still answers;
   - D8 ledger:
     - the native Devin difference equals the embedded `devin_models.json` difference between the old and new tags exactly (+7/-17 for v8.0.38 → v8.0.45);
-    - the catalog difference is +7/-16 before the AISIX deploy and +7/-17 after it, and no AISIX direct model or route target names an ID that CPA does not register;
+    - the catalog difference is +7/-16 before the AISIX deploy and +7/-17 after it; every AISIX target registered by CPA at pre-capture remains registered after B except the accepted ledger removals handled by D9, and no new unregistered target appears. Record pre-existing unregistered targets separately; this change does not delete unrelated stale or disabled-channel targets;
     - every other member, the passthrough set and every non-`priority` field of every other Codex row equal the pre-capture;
     - the order and `priority` follow D7;
     - a model missing from CPA's available list but still registered is re-sampled after the authority cache refresh before it counts as a difference;
@@ -89,6 +89,9 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - a `supergrok/grok-imagine-image` images request reaches the xAI upstream, with no CPA `not supported`/`unknown provider` error. Use the cheapest request that proves routing;
   - both `cpa-quota-estimator` and `codex-auto-reset` log `plugin loaded` (a load failure is a regression: roll back);
   - the D6 SSE framing gate passes on the CPA operator port and on the public chain.
+
+  - [x] Re-run evidence (2026-10-28): official image healthy/restarts=0; buffering true; both plugins loaded; native +7/-17 ledger, catalog +7/-16 then +7/-17; unchanged passthrough and all other non-priority fields; D7 order; no new dangling AISIX targets; CPA, AISIX and DeepSeek route probes 200; xAI image request 200; operator/public SSE 11/10 valid frames. Devin credential remains registered and returns its upstream quota failure, not a successful inference.
+  - [ ] Pending: one 200 Devin inference after the daily quota reset. The current upstream `failed_precondition` daily-quota error propagates as 429 `model_cooldown`; the registered credential's retry deadline is 2026-10-28 08:00 UTC. This is not a successful inference. The supervisor approved continuing to C with this explicit open gate and the successful first-attempt evidence on the same official digest.
 
   If the SSE gate fails with buffering on, or any difference is not explained by the ledger, roll back to the previous CPA digest (and `rollback-config.yml -e component=aisix` if it was deployed) and stop for a user decision.
 - [ ] 3.4 Batch C: `PUT /v0/management/force-model-prefix {"value": false}`, then `POST :9083/models-table/refresh`. Verify:
@@ -99,4 +102,6 @@ Run every step on an `openai/*` model, using the Ansible playbooks current at ap
   - public and Sub2API counts are unchanged;
   - CPA logs show the same credential for one prefixed ID and one `devin/*` ID as before;
   - a bare ID request reaches AISIX.
-- [ ] 3.5 Write `docs/records/cpa-default-prefix-deployment-<date>.md` with the captures summary, digests, timings, the D8 ledger, the D9 removal, the first batch B rollback and rollback commands. Delete the temporary test key with proof, and confirm `--check --diff` reports changed=0 for cli-proxy-api, model-catalog and the configs. Commit unsigned and push. Verify: CI is green, and `openspec validate --all --strict` passes.
+  - [x] Re-run evidence (2026-10-28): setting false through API and persisted config; native 554 IDs including 157 bare; catalog 357, public standard/Sub2API 357 and public Codex 348; member/passthrough sets and all non-priority fields unchanged; D7 order/priority; prefixed credential identity unchanged, Devin registered identity unchanged with the same quota failure, and bare request logged by AISIX.
+  - [ ] Pending: one 200 Devin inference after the daily quota reset, using a fresh temporary normal-client key. Credential registration and the unchanged upstream quota failure do not count as successful inference.
+- [ ] 3.5 Write `docs/records/union-catalog-membership-2026-10-28.md` with the captures summary, digests, timings, the D8 ledger, the D9 removal, the first batch B rollback and rollback commands. Delete the temporary test key with proof, and confirm `--check --diff` reports changed=0 for cli-proxy-api, model-catalog and the configs. Commit unsigned and push. Verify: CI is green, and `openspec validate --all --strict` passes.

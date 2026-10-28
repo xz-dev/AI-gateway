@@ -26,7 +26,9 @@ Gateway routing and catalog membership SHALL NOT depend on that setting:
 #### Scenario: AISIX target no longer registered by CPA
 
 - **WHEN** a CPA image change stops registering an unprefixed slash ID that an AISIX direct model names, such as `devin/deepseek-v4-1-flash` in v8.0.45
-- **THEN** that direct model and every logical-route target naming it are removed from the AISIX resources in the same deployment window, and no AISIX direct model or route target names an ID that CPA does not register
+- **THEN** that direct model and every logical-route target naming it are removed from the AISIX resources in the same deployment window
+- **AND** every AISIX target that CPA registered at pre-capture remains registered, except accepted upstream removals removed from AISIX in that window; no new unregistered target appears
+- **AND** pre-existing targets absent from CPA registration are recorded separately, not deleted as part of this change
 
 #### Scenario: Setting drift is visible
 

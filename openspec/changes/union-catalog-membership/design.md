@@ -152,6 +152,7 @@ CPA-admitted(id) =
 - **User decision**: delete the AISIX direct model `devin/deepseek-v4-1-flash` from the private `services/routing/aisix/resources.yaml`. CPA v8.0.45 no longer registers it, so requests to it would fail.
 - Removed: the direct model `devin/deepseek-v4-1-flash`, and its target in the logical route `deepseek-v4.1-flash`, whose `max_fallbacks` drops from 5 to 4 (the file's `targets − 1` convention, confirmed idempotent by the role's normalizer). The route keeps its other five targets. No replacement target (`devin/deepseek-v4-1-flash-1017`) is added.
 - **Deployment**: `deploy-config.yml -e component=aisix` (`--check --diff` first) in the batch B window, right after the CPA image switch and before the ledger comparison. Rollback: `rollback-config.yml -e component=aisix`, together with the CPA rollback.
+- **Registration gate is a delta** (supervisor clarification during the re-run): every target registered at pre-capture remains registered except accepted ledger removals handled here; no new unregistered target appears. Pre-existing unavailable, disabled-channel or stale targets are recorded separately, not deleted by this change.
 
 ## Risks / Trade-offs
 
