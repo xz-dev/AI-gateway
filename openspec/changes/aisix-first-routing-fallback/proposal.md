@@ -1,23 +1,21 @@
 ## Why
 
-`apisix-models` chooses CPA for IDs containing `/`, and AISIX for other IDs. The operator wants priority-based routing: prefer AISIX, use CPA only when AISIX does not define the model, and allow a later backend as another ordered entry rather than a naming convention. The operator also proposed checking AISIX's model list on every request and asked for measured latency versus error-based fallback.
+`apisix-models` currently selects CPA for IDs containing `/` and AISIX otherwise. The operator approved priority-based routing: try AISIX first for every classified inference request, then CPA only when AISIX itself proves the model is undefined. This removes backend-specific naming conventions and permits later components through another ordered backend entry.
+
+The operator also requested comparison with per-request AISIX model-list lookup. Research found that listing is permission-filtered and omits wildcard definitions, so list omission is not an authoritative existence signal. The operator selected error-based fallback, pure priority for slash IDs, and authorized fallback for CPA-only bare IDs.
 
 ## What Changes
 
-**Planning only. Implementation is blocked on user decisions A–D in `design.md`. No mechanism, slash-ID exception, bare-ID policy or relaxation of the existing no-lookup/cache rule has been approved by these artifacts.**
+**Planning only. User policy decisions are resolved; runtime implementation remains gated on a local APISIX 3.19 prototype.**
 
-- **BREAKING (proposed routing rule):** replace the literal slash selector with one ordered backend list, initially AISIX then terminal CPA. Advance only on established model absence, never on auth, quota, target, transport or stream failure.
-- Compare three mechanisms, not three runtime switches:
-  - **L, recommended subject to approval:** direct AISIX `GET /v1/models` for every classified request, then native APISIX inference proxying. Saved measurements: 1.122/63.357/86.513 ms p50/p95/p99 for the reused-connection list round trip, plus separate 0.116/0.645/1.422 ms decode/set measurements. The list is 6,567 bytes with 76 IDs.
-  - **T:** a bounded, per-caller/per-worker 1–5 s membership cache. It trades freshness and cache complexity for fewer lookups; cache performance has not been measured.
-  - **E:** actual AISIX request first, then replay to CPA only for pre-commit 404 JSON with `error.type = "model_not_found"`. Measured AISIX miss round trip is 1.409/100.123/115.721 ms p50/p95/p99; full replay/streaming-relay overhead is unmeasured.
-- AISIX list membership is **key-filtered** and excludes wildcard definitions. Current managed keys have full access and current definitions are concrete; list rollout must verify those live invariants or obtain a separately approved safe policy. A missing ACL entry is not evidence of nonexistence. Failure/timeout must not fail open to CPA.
-- Required routing decisions:
-  - **B:** pure priority changes 53 AISIX-defined slash IDs from direct CPA to AISIX. Alternative: retain an explicit slash→CPA compatibility exception. Inventory and credential/accounting/session effects are in the design.
-  - **C:** permit or reject CPA-only bare IDs, which CPA's default prefix behavior registers but the catalog omits. Any permitted invocation must retain Sub2API authorization; visibility is not authority.
-  - Unknown-everywhere IDs can return CPA's final 400 instead of AISIX's 404 if eligible for terminal fallback; preserve current downstream safe-error handling.
-  - **D:** explicitly revise the current no-lookup/index/cache and no-cross-backend-retry rules to match the selected mechanism. Do not silently choose an exception.
-- Preserve classified paths (`POST /v1/responses`, `/v1/chat/completions`, `/v1/images/generations`), body limits/validation and `prompt_cache_retention` stripping, multipart edits→AISIX, catch-all/direct WS→CPA, and catalog routing/membership/order/priority. No Sub2API or AISIX retry-policy change.
+- **BREAKING:** replace literal slash selection with one Lua backend list: AISIX (caller credential, exact local-miss predicate) → terminal CPA (`CPA_API_KEY`, never advances).
+- Send every classified JSON inference request to AISIX first, regardless of slash or bare ID. Fall back at most once, only before response commitment, for HTTP 404 with a complete JSON body whose top-level `error.type` is exactly `model_not_found`.
+- Pass all other AISIX responses through unchanged at the inner seam, including `upstream_error` with `error.code=model_not_found`, other 404s, auth/permission errors, 429 and 5xx. Transport errors/timeouts retain existing client-visible failure semantics and do not retry. CPA's response, including unknown-model errors, is terminal and unchanged.
+- No model-list lookup, routing index, membership cache or last-known-good state. Retain the documentation prohibition on indexes/caches and document this one narrow cross-backend retry exception.
+- Buffer a replayable validated request within existing bounds: 64 MiB for Responses, 16 MiB for other classified JSON. Preserve bytes across both attempts after the existing `prompt_cache_retention` removal, without decode/re-encode between attempts. Preserve file-backed handling; reject over-limit requests before any attempt.
+- Log each actual AISIX→CPA fallback once at INFO with bounded, escaped model ID and request ID; no credentials or bodies in logs.
+- The 53 AISIX-defined slash direct models now enter AISIX, adding its accounting and CPA-pool credential hop. Preserve `session_id` and verify error/credential boundaries. CPA-only bare IDs can fall back when authorized; catalog membership remains unchanged and Sub2API authorization still applies.
+- Keep the classified seam: `POST /v1/responses`, `/v1/chat/completions`, `/v1/images/generations`. Preserve multipart edits→AISIX, messages/direct WS/catch-all→CPA, catalog routing/order/priority, validation and downstream safe-error handling.
 
 ## Capabilities
 
@@ -27,16 +25,14 @@ None.
 
 ### Modified Capabilities
 
-- `cpa-first-catalog-routing`: decision-gated priority selection and absence evidence, while preserving credential and retry boundaries, default CPA prefix registration, and the existing WS chain.
-- `apisix-cpa-gateway`: replace slash-rule passthrough with priority passthrough at the same HTTP seam.
-
-The deltas describe common guarantees and explicitly conditional alternatives. Task 0 must replace those alternatives with the operator-selected contract before apply or archive.
+- `cpa-first-catalog-routing`: ordered AISIX-first routing, exact pre-stream miss predicate, terminal CPA fallback, credential and retry boundaries; preserve default CPA prefix registration and existing WS chain.
+- `apisix-cpa-gateway`: priority passthrough at the existing classified HTTP seam, bounded replay and incremental SSE.
 
 ## Impact
 
-- Selector and unit tests: `services/routing/apisix-models/routing_selector.lua` and `routing_selector_test.lua`.
-- A local APISIX 3.19 stub-backend harness and integration into `ops/scripts/validate.sh`; exact source/config/startup changes depend on A. L can retain native upstream proxying and current credential injection; E needs a separately verified streaming relay lifecycle.
-- Documentation: keep the service README short; put policy, latency limits, authorization and activation details in `docs/model-routing.md`.
-- Runtime: L adds one local list request per classified inference (observed peak 5 requests/s, about 32.1 KiB/s list body traffic); T adds bounded cache state; E adds replay and streaming-relay responsibility. None of those costs is approved yet.
-- Deployment: existing `deploy.yml -e component=apisix-models` handles guarded image/env transactions, not tracked Lua files. Plan one reviewed manual source-file activation/recreate with saved-file rollback; do not overlap other production windows.
-- No implementation, secret/config mutation, production deployment, git staging or commit is part of this planning task.
+- Selector/tests: `services/routing/apisix-models/routing_selector.lua`, `routing_selector_test.lua`, and a local APISIX 3.19 stub harness wired into `ops/scripts/validate.sh`.
+- Prototype must prove byte-identical replay, incremental SSE/timing, credential swap, non-miss error boundaries, and large/over-limit bodies before the relay mechanism is locked. A Lua `resty.http` streaming relay is the candidate; native status-only interception is insufficient.
+- Documentation: short service README; policy, rejected list/cache alternatives, measured latency, deployment and rollback details in `docs/model-routing.md` during implementation.
+- Runtime: no discovery round trip on AISIX hits; misses add a measured 1.409/100.123/115.721 ms p50/p95/p99 AISIX miss round trip, plus unmeasured replay overhead. All successful streams acquire relay responsibility; no zero-overhead claim is made.
+- Deployment: existing `deploy.yml -e component=apisix-models` handles guarded image/env transactions, not tracked source-file installation. Use one reviewed manual source-file activation and component-only recreate, with saved-file rollback; do not overlap catalog Lua or public-list production windows.
+- This planning update changes no code, production state, secrets, staging or commits. All implementation tasks remain unchecked.
