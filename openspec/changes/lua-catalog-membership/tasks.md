@@ -1,11 +1,11 @@
 ## 0. Gate
 
-- [ ] 0.1 Start only after `union-catalog-membership` has finished its production tasks (3.2–3.5) and is archived. Then rebase this change's MODIFIED requirements on the archived main specs. Verify: `openspec list` no longer shows `union-catalog-membership`; `openspec/specs/codex-models-enricher/spec.md` contains "Membership exception list"; `openspec validate lua-catalog-membership --strict` passes.
+- [x] 0.1 Start only after `union-catalog-membership` has finished its production tasks (3.2–3.5) and is archived. Then rebase this change's MODIFIED requirements on the archived main specs. Verify: `openspec list` no longer shows `union-catalog-membership`; `openspec/specs/codex-models-enricher/spec.md` contains "Membership exception list"; `openspec validate lua-catalog-membership --strict` passes.
 
 ## 1. model-catalog code and tests
 
-- [ ] 1.1 Golden parity output (design Risks): before any code change, run the union parity fixture (`tests/parity.test.ts`, forced-prefix and default variants, plus a fallback variant), with `cpa_include: ["devin/*"]` and an `include_models` hide list. Write the member list (id, origin, preserveNative), the standard list bytes and the Codex manifest bytes to `tests/fixtures/membership-golden.json`. Verify: the file is committed with the test, and regenerating it from the union code gives no diff.
-- [ ] 1.2 Runtime and sandbox (D5, D6, D7):
+- [x] 1.1 Golden parity output (design Risks): before any code change, run the union parity fixture (`tests/parity.test.ts`, forced-prefix and default variants, plus a fallback variant), with `cpa_include: ["devin/*"]` and an `include_models` hide list. Write the member list (id, origin, preserveNative), the standard list bytes and the Codex manifest bytes to `tests/fixtures/membership-golden.json`. Verify: the file is committed with the test, and regenerating it from the union code gives no diff.
+- [x] 1.2 Runtime and sandbox (D5, D6, D7):
   - add `wasmoon@1.16.0` as an exact pin;
   - add `src/membership-worker.ts` (prelude, count hook, removed globals, `setMemoryMax(16 MiB)` with `traceAllocations: true`, `glob`) and `src/membership.ts` (host: candidate build, worker with `maxOldGenerationSizeMb: 32`, 2 s termination, return validation);
   - the bundle emits the worker and copies `glue.wasm`; the Dockerfile copies them and `catalog.lua` to `/app/`.
@@ -19,11 +19,11 @@
   - each invalid return shape is rejected (nil, number, string, unknown opts key, source not listed);
   - a reason is cut at 200 bytes;
   - JS objects are not reachable.
-- [ ] 1.3 Default script (D3): add `services/routing/model-catalog/catalog.lua` exactly as in D3. Verify:
+- [x] 1.3 Default script (D3): add `services/routing/model-catalog/catalog.lua` exactly as in D3. Verify:
   - a property test feeds 10,000 random candidates (random sources, modes, prefixes, native flags) and every return is valid;
   - instruction use per call and per production-sized collection is logged by the test and stays under 1% of each bound;
   - the numbers are written into design D6.
-- [ ] 1.4 Membership stage (D2, D4):
+- [x] 1.4 Membership stage (D2, D4):
   - `AuthorityOwner.#collect` builds candidates and runs the script;
   - the generation carries `members` and `rejected`;
   - `prepare()` takes members from the generation;
@@ -40,8 +40,8 @@
   - `source` not listed is an error;
   - `glob` segment semantics;
   - `membership.cpa_include` rejected with the hint.
-- [ ] 1.5 Default-script parity: run the 1.1 fixture through the Lua path with the default script, with `EXTRA_CPA = { "devin/*" }` and the hides moved into the script. Verify: members (id, origin, preserveNative), the standard list bytes and the Codex manifest bytes equal `membership-golden.json` in all three prefix modes.
-- [ ] 1.6 Failure fallback and memory (D7, D8):
+- [x] 1.5 Default-script parity: run the 1.1 fixture through the Lua path with the default script, with `EXTRA_CPA = { "devin/*" }` and the hides moved into the script. Verify: members (id, origin, preserveNative), the standard list bytes and the Codex manifest bytes equal `membership-golden.json` in all three prefix modes.
+- [x] 1.6 Failure fallback and memory (D7, D8):
   - a load error, a runtime error, an invalid return, a bound hit and a worker exit each keep the previous generation;
   - each logs one WARN with class and candidate ID and without script text;
   - each marks the table attempt failed;
@@ -53,7 +53,7 @@
   - a test with a reject-all script shows the empty catalog is published (an empty `data` list, ready), the INFO line, and no failed attempt in the table;
   - a measurement script runs 50 forced refreshes on the production-shaped fixture, with a build overlapping one collection;
   - it records peak and settled RSS in design D7: peak under 384 MiB, and no upward trend over the last 10 refreshes.
-- [ ] 1.7 `validate-config --script` and startup (D9): add the option, the synthetic dry-run set, `script_digest`, the two-`-` usage error, `CATALOG_SCRIPT_PATH`, and the startup dry-run. Verify:
+- [x] 1.7 `validate-config --script` and startup (D9): add the option, the synthetic dry-run set, `script_digest`, the two-`-` usage error, `CATALOG_SCRIPT_PATH`, and the startup dry-run. Verify:
   - tests for exit 0/1/2;
   - `script_digest` equals `sha256sum`;
   - stderr carries no script text;
@@ -61,8 +61,8 @@
   - startup with a script without `select` exits non-zero before listening;
   - a script that rejects every synthetic candidate exits 0 with the digest JSON and one WARN with the rejected count on stderr;
   - output without `--script` is byte-identical to today's.
-- [ ] 1.8 Models table (D10): rejected rows `hidden by catalog.lua: <reason>`, the `rejected` summary count, `include_models` text unchanged. Verify: render tests for every scenario of the models-table-force-refresh delta (including the empty-catalog one), and a JSON-catalog comparison shows the markings do not change catalog bytes.
-- [ ] 1.9 Full suite and image. Verify:
+- [x] 1.8 Models table (D10): rejected rows `hidden by catalog.lua: <reason>`, the `rejected` summary count, `include_models` text unchanged. Verify: render tests for every scenario of the models-table-force-refresh delta (including the empty-catalog one), and a JSON-catalog comparison shows the markings do not change catalog bytes.
+- [x] 1.9 Full suite and image. Verify:
   - `npm ci && npm run typecheck && npm test && npm run build` pass in `services/routing/model-catalog`;
   - `podman build` succeeds;
   - in the built image, `/model-catalog validate-config /app/config.yaml --script /app/catalog.lua` exits 0 with `--read-only --network none`;
@@ -70,7 +70,7 @@
 
 ## 2. Compose, publish and pin
 
-- [ ] 2.1 `compose.yaml`: mount `./services/routing/model-catalog/catalog.lua:/app/catalog.lua:ro,Z` and set `CATALOG_SCRIPT_PATH: /app/catalog.lua`. `ops/scripts/validate.sh` checks the tracked sample exists and is a file. Verify: `ops/scripts/validate.sh .env.example` passes, with `compose.override.yaml` moved to `/var/tmp` and restored; deleting the sample makes it fail.
+- [x] 2.1 `compose.yaml`: mount `./services/routing/model-catalog/catalog.lua:/app/catalog.lua:ro,Z` and set `CATALOG_SCRIPT_PATH: /app/catalog.lua`. `ops/scripts/validate.sh` checks the tracked sample exists and is a file. Verify: `ops/scripts/validate.sh .env.example` passes, with `compose.override.yaml` moved to `/var/tmp` and restored; deleting the sample makes it fail.
 - [ ] 2.2 Commit unsigned (`git -c commit.gpgsign=false`) and push, then publish `ai-gateway-model-catalog` with the current publish workflow. Pin the digest in `compose.yaml` and `.env.example`. Verify: CI is green for the commit, the publish run succeeds, and `podman pull` of the pinned digest works.
 
 ## 3. Ansible
@@ -111,6 +111,7 @@ Run every step on an `openai/*` model. The cutover itself (5.3) is a one-time re
 
 - [ ] 5.1 Private profile (local only):
   - write the private `catalog.lua` per Migration Plan step 2, and delete `membership` and `metadata.include_models` from the private `config.yaml`;
+  - copy into `HIDE` only the `include_models` hides that still match a live candidate at migration time; a hide that matches nothing (such as `!xl/grok-imagine-image-2.0` once `prune-dangling-aisix-targets` has removed that AISIX entry) is dropped and listed in the record;
   - re-check with the real matcher that no hide matches a static slug or an `inherit`/`metadata_from` target.
 
   Verify:

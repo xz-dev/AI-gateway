@@ -50,7 +50,7 @@ test("@self first keeps CPA values; later entries fill gaps; rule overrides win;
   assert.equal(six.max_output_tokens, 64000);
   // The authority snapshot is never mutated by projections.
   const authority = h.owner.current();
-  const row = nativeRows(authority)[authority.admitted.find((model) => model.id === "codex/gpt-6")!.index]!;
+  const row = nativeRows(authority)[authority.members.find((model) => model.id === "codex/gpt-6")!.index!]!;
   assert.equal(row.max_tokens, undefined);
 });
 
@@ -222,7 +222,8 @@ test("standard list and Codex manifest share the order; priority follows it on e
     channels: channels([{ prefix: "codex", models: ["m", "a"] }]),
     native: [native("codex/m", { priority: 7 }), native("devin/x", { priority: 343 }), native("codex/a")],
     aisix: aisix.url,
-    yaml: `metadata:\n  chain: ["@self"]\nmembership:\n  cpa_include: ["devin/*"]\nstatic_models:\n  - slug: alias/a\n    inherit: [codex/m]\n  - slug: beta\n    inherit: [codex/a]\n`,
+    extraCpa: ["devin/*"],
+    yaml: `metadata:\n  chain: ["@self"]\nstatic_models:\n  - slug: alias/a\n    inherit: [codex/m]\n  - slug: beta\n    inherit: [codex/a]\n`,
   });
   const expected = ["Alpha", "beta", "zeta", "alias/a", "codex/a", "codex/m", "devin/x"];
   const models = await codex(h);
@@ -298,7 +299,7 @@ test("worker crash keeps serving the previous generation; a later good build rec
   assert.deepEqual([...bySlug(await codex(h)).keys()], ["codex/a", "codex/b"]);
 });
 
-test("the compile worker has exited after a generation build", async (t) => {
+test("the membership and compile workers have exited after a generation build", async (t) => {
   const h = await harness(t, {
     channels: channels([{ prefix: "codex", models: ["a"] }]),
     native: [native("codex/a")],
@@ -315,8 +316,9 @@ test("the compile worker has exited after a generation build", async (t) => {
   t.after(() => process.off("worker", onWorker));
   assert.equal(bySlug(await codex(h)).get("codex/a")!.context_window, 1);
   for (let i = 0; i < 50 && exited < created; i++) await new Promise((r) => setTimeout(r, 20));
-  assert.equal(created, 1);
-  assert.equal(exited, 1);
+  // One membership worker for the collection, one compile worker for the build.
+  assert.equal(created, 2);
+  assert.equal(exited, 2);
 });
 
 test("generation pinning: a new generation never serves a previous projection", async (t) => {

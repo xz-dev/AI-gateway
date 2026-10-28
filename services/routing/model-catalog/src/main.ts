@@ -13,6 +13,7 @@ import { parseMetadataConfigValue, runCompileWorker } from "./core.ts";
 import { CpaClient } from "./cpa.ts";
 import { DiskCache } from "./disk-cache.ts";
 import { HttpPool } from "./http.ts";
+import { dryRun, LIMITS, membershipScript, MembershipScriptError, readMembershipScript, type MembershipScript } from "./membership.ts";
 import { OutputStore } from "./outputs.ts";
 import { errorMessage, jsonLogger } from "./log.ts";
 import { ReadCache } from "./read-cache.ts";
@@ -39,10 +40,24 @@ async function readStdin(limit: number): Promise<Buffer> {
   return Buffer.concat(chunks, size);
 }
 
-/** Prints only a schema version and the input digest; never YAML contents or secrets. */
-export async function validateConfig(path: string | undefined): Promise<number> {
-  if (!path) {
-    process.stderr.write("usage: model-catalog validate-config <path|->\n");
+export const DEFAULT_SCRIPT_PATH = "/app/catalog.lua";
+
+/** Loads `catalog.lua` and dry-runs it (design D9); warns when it rejects every synthetic candidate. */
+async function checkScript(script: MembershipScript, config: GatewayConfig, warn: (text: string) => void): Promise<void> {
+  const result = await dryRun(script, config.staticModels.map((model) => model.slug));
+  if (result.rejected === result.candidates) warn(`catalog.lua rejected all ${result.rejected} synthetic dry-run candidates; a real collection may publish an empty catalog`);
+}
+
+const scriptFailure = (error: unknown) => (error instanceof MembershipScriptError ? error.message : `membership script worker_exit: ${errorMessage(error)}`);
+
+/**
+ * `validate-config <config|-> [--script <path|->]`: prints only a schema version and the input
+ * digests; never YAML contents, script text or secrets.
+ */
+export async function validateConfig(args: readonly string[]): Promise<number> {
+  const [path, flag, scriptPath, ...rest] = args;
+  if (!path || rest.length > 0 || (flag !== undefined && (flag !== "--script" || !scriptPath)) || (path === "-" && scriptPath === "-")) {
+    process.stderr.write("usage: model-catalog validate-config <config|-> [--script <path|->] (at most one -)\n");
     return 2;
   }
   let raw: Buffer;
@@ -52,13 +67,31 @@ export async function validateConfig(path: string | undefined): Promise<number> 
     process.stderr.write(`read config: ${errorMessage(error)}\n`);
     return 1;
   }
+  let config: GatewayConfig;
   try {
-    parseConfig(raw.toString("utf8"));
+    config = parseConfig(raw.toString("utf8"));
   } catch (error) {
     process.stderr.write(`invalid config: ${error instanceof ConfigError ? error.message : errorMessage(error)}\n`);
     return 1;
   }
-  process.stdout.write(`${JSON.stringify({ version: VALIDATE_CONFIG_VERSION, config_digest: createHash("sha256").update(raw).digest("hex") })}\n`);
+  const output: Record<string, unknown> = { version: VALIDATE_CONFIG_VERSION, config_digest: createHash("sha256").update(raw).digest("hex") };
+  if (scriptPath) {
+    let script: MembershipScript;
+    try {
+      script = scriptPath === "-" ? membershipScript(await readStdin(LIMITS.scriptBytes)) : await readMembershipScript(scriptPath);
+    } catch (error) {
+      process.stderr.write(`read script: ${errorMessage(error)}\n`);
+      return 1;
+    }
+    try {
+      await checkScript(script, config, (text) => process.stderr.write(`WARN ${text}\n`));
+    } catch (error) {
+      process.stderr.write(`invalid script: ${scriptFailure(error)}\n`);
+      return 1;
+    }
+    output.script_digest = script.digest;
+  }
+  process.stdout.write(`${JSON.stringify(output)}\n`);
   return 0;
 }
 
@@ -78,10 +111,11 @@ function workerLimits(): BuildDeps["resourceLimits"] {
   return Number.isFinite(mb) && mb > 0 ? { maxOldGenerationSizeMb: mb } : undefined;
 }
 
-/** Loads both bundles (server and worker) once so NODE_COMPILE_CACHE holds their code. */
+/** Loads every bundle (server, compile and membership workers) once so NODE_COMPILE_CACHE holds their code. */
 async function warmCompileCache(): Promise<number> {
   const config = parseMetadataConfigValue({ chain: ["models.dev/@creator/api_key", "modelparams.dev/@creator/api_key", "@self"] }, { recordSources: ["@self"] });
   await runCompileWorker({ workerFile: WORKER_FILE, config, publicIds: ["openai/gpt-5"], tablesPath: env("TABLES_PATH", DEFAULT_TABLES_PATH) });
+  await dryRun(await readMembershipScript(env("CATALOG_SCRIPT_PATH", DEFAULT_SCRIPT_PATH)), []);
   flushCompileCache();
   return 0;
 }
@@ -95,6 +129,15 @@ async function serve(): Promise<number> {
     log.error("config", { err: errorMessage(error) });
     return 1;
   }
+  let script: MembershipScript;
+  try {
+    script = await readMembershipScript(env("CATALOG_SCRIPT_PATH", DEFAULT_SCRIPT_PATH));
+    await checkScript(script, config, (text) => log.warn(text));
+  } catch (error) {
+    log.error("membership script", { err: scriptFailure(error) });
+    return 1;
+  }
+  log.info("membership script loaded", { script_digest: script.digest });
   const managementKey = env("CPA_MANAGEMENT_KEY");
   const clientKey = env("CPA_CLIENT_KEY", env("CPA_API_KEY"));
   if (!managementKey || !clientKey) {
@@ -121,8 +164,8 @@ async function serve(): Promise<number> {
   const owner = new AuthorityOwner({
     cpa,
     aisix,
-    staticSlugs: new Set(config.staticModels.map((model) => model.slug)),
-    cpaInclude: config.cpaInclude,
+    staticSlugs: config.staticModels.map((model) => model.slug),
+    script,
     cpaTimeoutMs: deadlineMs,
     aisixTimeoutMs: config.aisixTimeoutMs,
     log,
@@ -156,10 +199,10 @@ async function serve(): Promise<number> {
 export async function main(argv: readonly string[]): Promise<number> {
   const [command, ...args] = argv;
   if (command === "healthcheck" && args.length === 0) return healthcheck();
-  if (command === "validate-config") return args.length === 1 ? validateConfig(args[0]) : validateConfig(undefined);
+  if (command === "validate-config") return validateConfig(args);
   if (command === "warm-compile-cache" && args.length === 0) return warmCompileCache();
   if (command === undefined) return serve();
-  process.stderr.write("usage: model-catalog [healthcheck | validate-config <path|-> | warm-compile-cache]\n");
+  process.stderr.write("usage: model-catalog [healthcheck | validate-config <config|-> [--script <path|->] | warm-compile-cache]\n");
   return 2;
 }
 

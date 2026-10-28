@@ -2,11 +2,11 @@
 
 See proposal.md for the motivation. This change starts after `union-catalog-membership` has landed in production and is archived. Its code is the baseline:
 - `authority.ts` `admitModels(rows, prefixes, cpaInclude, staticSlugs)` decides CPA admission during authority collection on the main thread (`AuthorityOwner.#collect`). The prefix mode is `prefix`, `forced` or `fallback`. `preserveNative` marks rows emitted as CPA returned them.
-- `build.ts` `prepare()` adds every AISIX ID and every static model, deduplicated in CPA, AISIX, static order. It then applies `include_models`, builds the compile set and compiles in a short-lived worker (`runCompileWorker`, 160 MiB heap).
+- `build.ts` `prepare()` adds every AISIX ID and every static model, deduplicated in CPA, AISIX, static order (source precedence), and sorts the members once into the catalog output order: bare IDs first, then the rest, each in code-point order. Codex `priority` is the 1-based output position, also on passthrough rows (requirement "Catalog output order and Codex priority"). It then applies `include_models`, builds the compile set and compiles in a short-lived worker (`runCompileWorker`, 160 MiB heap).
 - `config.ts` holds the root `membership.cpa_include` list, compiled with `readGlobList`/`compileModelPattern`, the standard-glob matcher shared with openai-api-pi-extension.
 - Memory discipline: main heap 96 MiB, build worker 160 MiB, container `mem_limit: 384m`, `MALLOC_ARENA_MAX=2`; measured build peak 256 MiB. The main thread holds no metadata tables.
 - There is no metrics endpoint. Operators see state in logs and on `/models-table`.
-- Production after union: 367 catalog entries, Codex manifest 358. CPA lists 331 IDs (274 prefixed, 57 `devin/*`); AISIX lists 92, 46 shared with CPA. The private config has `membership.cpa_include: ["devin/*"]` and an `include_models` list of `"**"` plus 11 `!` hides (image models). No hide matches a static slug or an `inherit` target, and `metadata_from` is empty.
+- Production after union (2026-10-28 record): 357 catalog entries, Codex manifest 348, 47 passthrough rows, `force-model-prefix: false`. CPA lists 554 native IDs, 157 of them bare; AISIX lists 91. The private config has `membership.cpa_include: ["devin/*"]` and an `include_models` list of `"**"` plus 11 `!` hides (image models). No hide matches a static slug or an `inherit` target, and `metadata_from` is empty. The queued `prune-dangling-aisix-targets` change removes `xl/grok-imagine-image-2.0` from AISIX, which leaves its hide matching nothing.
 
 ## Goals / Non-Goals
 
@@ -52,7 +52,7 @@ Return values:
 - `false, reason`: reject. The reason is cut at 200 bytes; missing → `rejected by catalog.lua`.
 - Anything else is a script error.
 
-The script only sees a copy of each candidate and returns a decision for it. Extra IDs it builds go nowhere, so it cannot invent members. Order stays the host's.
+The script only sees a copy of each candidate and returns a decision for it. Extra IDs it builds go nowhere, so it cannot invent members. The call order only fixes the default source; output order stays the host's fixed catalog order, and Codex `priority` stays the output position.
 
 `glob(pattern, id)` calls `compileModelPattern` with exact-byte, case-sensitive matching. Compiled patterns are cached per collection (at most 256 entries, then compiled per call). There is no `!` in `glob`. Lists with negation are three lines of Lua (D3), so `glob` keeps one meaning.
 
@@ -143,7 +143,7 @@ A host prelude runs first in each Lua state:
 - It sets these globals to `nil`: `io`, `os`, `package`, `require`, `load`, `loadstring`, `loadfile`, `dofile`, `debug`, `coroutine`, `collectgarbage` and `print`.
 - It returns a wrapper function to the host. The wrapper installs a count hook (every 1,000 instructions), calls the target under `pcall`, then removes the hook.
 
-What remains: `string`, `table`, `math`, `utf8`, `pairs`/`ipairs`/`next`/`type`/`tostring`/`tonumber`/`error`/`pcall`/`assert`/`setmetatable`/`getmetatable`/`rawget`/`rawset`/`rawequal`/`rawlen`, Lua's `select` until the script replaces it, and `glob`.
+What remains: `string`, `table`, `math`, `utf8`, `pairs`/`ipairs`/`next`/`type`/`tostring`/`tonumber`/`error`/`pcall`/`assert`/`setmetatable`/`getmetatable`/`rawget`/`rawset`/`rawequal`/`rawlen`, and `glob`. Lua's own vararg `select` is removed too, so a script that defines no `select(m)` fails with `missing_select` instead of calling the builtin.
 
 - The engine uses `injectObjects: false` and `enableProxy: false`, so Lua sees only copied tables, never JS objects.
 - `coroutine` is removed because Lua hooks are per-coroutine: a coroutine would run without the count hook.
@@ -160,7 +160,7 @@ What remains: `string`, `table`, `math`, `utf8`, `pairs`/`ipairs`/`next`/`type`/
 
 The count hook cannot interrupt one long C call, such as a pathological `string.find` on a large string. The wall-time bound covers that case. It is the reason the script cannot run on the main thread (D7).
 
-The per-call budget is about 100 times what the default script uses for one candidate. 20,000,000 per collection allows around 200 calls at the full per-call budget, and production has about 470 candidates using a few hundred instructions each. Task 1.3 measures the default script and records the margin.
+The per-call budget is about 100 times what the default script uses for one candidate. 20,000,000 per collection allows around 200 calls at the full per-call budget, and production has about 470 candidates using a few hundred instructions each. Task 1.3 measured the default script with an exact per-instruction hook on a production-sized collection (554 CPA + 91 AISIX = 645 candidates): load 15 instructions, at most 71 per call, 34,421 per collection. That is under 0.1% of the load bound, 0.07% of the per-call bound and 0.17% of the collection bound. The hook runs every 1,000 instructions in production, so a bound trips at most 1,000 instructions late.
 
 ### D7 Thread placement and memory
 
@@ -171,7 +171,7 @@ The per-call budget is about 100 times what the default script uses for one cand
 - **Memory budget**: about 25 MiB worker RSS (isolate plus up to 16 MiB Lua memory plus the WASM module). This sits above the 256 MiB measured build peak when a collection overlaps a build: about 281 MiB, under 384 MiB. The main 96 MiB and worker 160 MiB heaps are unchanged.
 - WASM linear memory is one `ArrayBuffer` mapping, not malloc arenas, so `MALLOC_ARENA_MAX=2` is unaffected.
 - No per-call host allocation beyond the small `m` table and the decision. Decisions are collected into one preallocated array.
-- Task 1.6 measures peak and steady RSS on the production-shaped fixture with a collection and a build overlapping, and records the numbers.
+- Task 1.6 measured with `tests/measure-memory.ts` (bundled workers, real metadata tables, the tracked `config.yaml` chains, `MALLOC_ARENA_MAX=2 node --max-old-space-size=96 --expose-gc`): 50 forced refreshes on the production-shaped fixture (390 members), each overlapping a Codex build with the next collection (median overlap 98 ms). Peak process RSS 216.5 MiB; settled RSS after the first round 178.7 MiB and over the last 10 rounds 159.1–176.9 MiB, slope −1.4 MiB per round (no upward trend). The image grows by 0.83 MiB (259,051,104 → 259,924,557 bytes).
 - `glue.wasm` ships next to `dist/` (bundle step copies it; `LuaFactory` gets its file URL) so the read-only container needs no runtime fetch.
 
 ### D8 Failure fallback
@@ -204,7 +204,7 @@ Startup loads and dry-runs the script (D9) and exits non-zero before listening o
 
 ### D10 Models table
 
-- Rejected candidates become hidden rows with `hidden by catalog.lua: <reason>` and no metadata, after the `include_models` hidden rows.
+- Rejected candidates become hidden rows with `hidden by catalog.lua: <reason>` and no metadata. Like every other row they follow the catalog output order.
 - The summary adds a `rejected` count next to kept, hidden and referenced-only.
 - `project.ts` keeps the `include_models[i]` text for include hides.
 - With the default script in production, the table gains a few hundred rejected rows, mostly CPA bare copies of prefixed IDs. Rows are small: ID, sources and reason.
@@ -253,7 +253,7 @@ Startup loads and dry-runs the script (D9) and exits non-zero before listening o
 All production steps run on an `openai/*` model with the playbooks current at apply time. `--check --diff` runs first for every playbook.
 
 1. **Repository**: implement D1–D10 with tests. Publish the image and pin its digest. Implement D11 with tests. Write the docs. CI green.
-2. **Private profile** (local): write the private `catalog.lua` as the default script with `EXTRA_CPA = { "devin/*" }` and a `HIDE` list holding the 11 `include_models` hide patterns. Rejections use the reason `hidden by profile`. Delete `membership` and `metadata.include_models` from the private `config.yaml`. Check with the new image locally: `validate-config` and a dry-run.
+2. **Private profile** (local): write the private `catalog.lua` as the default script with `EXTRA_CPA = { "devin/*" }` and a `HIDE` list holding the `include_models` hide patterns that still match a live candidate at migration time (a hide that matches nothing is dropped and listed in the record). Rejections use the reason `hidden by profile`. Delete `membership` and `metadata.include_models` from the private `config.yaml`. Check with the new image locally: `validate-config` and a dry-run.
 3. **Pre-capture** (read-only, `/var/tmp`): native manifest IDs, AISIX IDs, the standard list bytes, Codex manifest bytes for the pinned client versions, member and passthrough sets, public `/v1/models` count for a test key, the Sub2API count, `:9083/models-table` summary.
 4. **Manual window** (reviewed, one recreate). The Compose change (mount and `CATALOG_SCRIPT_PATH`) is a structure change that the component gate rejects, and the old and new images need different profiles, so this cutover does not use the deploy playbooks:
    1. Before the window: back up the host `compose.yaml`, `.env`, `config.yaml` and any `catalog.lua`; pull the new image by digest; validate the private pair with a throwaway container of the new image (`--rm --network none --read-only`, `validate-config /candidate/config.yaml --script /candidate/catalog.lua`).

@@ -3,7 +3,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AisixClient, AuthorityOwner } from "../src/authority.ts";
+import { AisixClient, AuthorityOwner, type AuthorityOwnerOptions } from "../src/authority.ts";
 import type { BuildDeps } from "../src/build.ts";
 import { parseConfig } from "../src/config.ts";
 import { DiskCache } from "../src/disk-cache.ts";
@@ -13,6 +13,7 @@ import { ReadCache } from "../src/read-cache.ts";
 import { CatalogService, PINNED_KEYS, type Reply } from "../src/service.ts";
 import { cpaClient, fakeCPA, serveCPA, type FakeCPA } from "./fake-cpa.ts";
 import { captureLog, tempDir, type CapturedLog } from "./helpers.ts";
+import { defaultScriptText, script } from "./scripts.ts";
 
 export const WORKER = fileURLToPath(new URL("../src/worker.ts", import.meta.url));
 
@@ -60,6 +61,12 @@ export interface HarnessOptions {
   /** Inner api-call responses by inner URL. */
   upstream?: Record<string, unknown>;
   aisix?: string;
+  /** `catalog.lua` text; default: the tracked default script with `extraCpa`. */
+  script?: string;
+  /** The default script's EXTRA_CPA list. */
+  extraCpa?: string[];
+  /** Membership worker overrides (bounds). */
+  membership?: AuthorityOwnerOptions["membership"];
 }
 
 export async function harness(t: { after(fn: () => unknown): void }, options: HarnessOptions): Promise<Harness> {
@@ -84,7 +91,17 @@ export async function harness(t: { after(fn: () => unknown): void }, options: Ha
   const { client } = cpaClient(server.url, { cache, log });
   const config = parseConfig(`cpa_base_url: ${server.url}\n${options.yaml}`);
   const aisix = options.aisix ? new AisixClient(options.aisix, "", client.pool, cache) : undefined;
-  const owner = new AuthorityOwner({ cpa: client, aisix, staticSlugs: new Set(config.staticModels.map((m) => m.slug)), cpaInclude: config.cpaInclude, cpaTimeoutMs: 5_000, aisixTimeoutMs: 5_000, log });
+  const owner = new AuthorityOwner({
+    cpa: client,
+    aisix,
+    staticSlugs: config.staticModels.map((m) => m.slug),
+    script: script(options.script ?? defaultScriptText(options.extraCpa)),
+    membership: options.membership,
+    cpaTimeoutMs: 5_000,
+    aisixTimeoutMs: 5_000,
+    log,
+    clock,
+  });
   const deps = { config, cpa: client, workerFile: WORKER, tablesPath: await writeTables(dir, options.providers ?? {}), log };
   const outputs = await OutputStore.open(join(dir, "cache", "out"), PINNED_KEYS);
   const service = new CatalogService({ build: deps, owner, outputs, log, clock });

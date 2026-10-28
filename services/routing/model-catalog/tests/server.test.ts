@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -94,7 +94,7 @@ static_models:
   assert.match(page.text, /hidden by include_models\[1\] !\*\*\/image-\*<\/td><td colspan="9">not processed/);
   assert.match(page.text, /hidden by include_models\[2\] !codex\/b · referenced by alias\/x<\/td><td>codex\/b<\/td>/);
   assert.match(page.text, /@opencode-ai\/models 0\.0\.test \(snapshot 2026-10-01T00:00:00\.000Z\) · modelparams 0\.0\.mp/);
-  assert.match(page.text, /kept 2 · hidden 2 · referenced-only 1/);
+  assert.match(page.text, /kept 2 · hidden 2 · rejected by catalog.lua 0 · referenced-only 1/);
   const catalog = JSON.parse((await call("/v1/models?client_version=1")).text).models.map((m: Row) => m.slug);
   assert.deepEqual(catalog, ["alias/x", "codex/a"], "table markings never change JSON contents");
   void h;
@@ -172,6 +172,7 @@ test("start/stop: startup job runs, schedule shows, shutdown cancels and later t
 // CLI
 
 const MAIN = fileURLToPath(new URL("../src/main.ts", import.meta.url));
+const DEFAULT_SCRIPT = fileURLToPath(new URL("../catalog.lua", import.meta.url));
 const cli = (args: string[], input?: string) => spawnSync(process.execPath, [MAIN, ...args], { input, encoding: "utf8", timeout: 30_000, env: { ...process.env, NODE_OPTIONS: "" } });
 
 test("validate-config prints only the version and input digest; exit codes 0/1/2", async () => {
@@ -195,6 +196,73 @@ test("validate-config prints only the version and input digest; exit codes 0/1/2
   assert.equal(cli(["validate-config", join(dir, "missing.yaml")]).status, 1);
   assert.equal(cli(["validate-config"]).status, 2);
   assert.equal(cli(["bogus"]).status, 2);
+});
+
+test("validate-config --script: digest, dry-run, file checks, exit codes and no script text", async () => {
+  const dir = await tempDir();
+  const config = join(dir, "config.yaml");
+  await writeFile(config, "cpa_base_url: http://cpa:8317\nstatic_models:\n  - slug: alias/a\n");
+  const configDigest = createHash("sha256").update(await readFile(config)).digest("hex");
+  const write = async (name: string, text: string) => {
+    const path = join(dir, name);
+    await writeFile(path, text);
+    return path;
+  };
+  const good = await readFile(DEFAULT_SCRIPT, "utf8");
+  const ok = cli(["validate-config", config, "--script", DEFAULT_SCRIPT]);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.stdout, `{"version":1,"config_digest":"${configDigest}","script_digest":"${createHash("sha256").update(good).digest("hex")}"}\n`);
+  assert.equal(ok.stderr, "");
+  const stdin = cli(["validate-config", config, "--script", "-"], good);
+  assert.equal(stdin.status, 0, stdin.stderr);
+  assert.equal(stdin.stdout, ok.stdout);
+  const configStdin = cli(["validate-config", "-", "--script", DEFAULT_SCRIPT], await readFile(config, "utf8"));
+  assert.equal(configStdin.stdout, ok.stdout);
+
+  for (const [name, text, error] of [
+    ["syntax.lua", "-- SCRIPT_MARKER_1\nlocal SCRIPT_MARKER_2 = (", /invalid script: membership script load/],
+    ["noselect.lua", "-- SCRIPT_MARKER_1\nlocal x = 1", /missing_select/],
+    ["invalid.lua", "-- SCRIPT_MARKER_1\nfunction select(m) return 1 end", /invalid_return/],
+  ] as const) {
+    const result = cli(["validate-config", config, "--script", await write(name, text)]);
+    assert.equal(result.status, 1, name);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, error);
+    assert.doesNotMatch(result.stderr, /SCRIPT_MARKER/, `${name}: no script text`);
+  }
+  await mkdir(join(dir, "dir.lua"));
+  assert.match(cli(["validate-config", config, "--script", join(dir, "dir.lua")]).stderr, /not a regular file/);
+  assert.equal(cli(["validate-config", config, "--script", join(dir, "dir.lua")]).status, 1);
+  assert.equal(cli(["validate-config", config, "--script", join(dir, "missing.lua")]).status, 1);
+  const big = await write("big.lua", `${"-".repeat(257 * 1024)}\nfunction select(m) return true end\n`);
+  assert.match(cli(["validate-config", config, "--script", big]).stderr, /exceeds 262144 bytes/);
+  assert.equal(cli(["validate-config", config, "--script", "-"], await readFile(big, "utf8")).status, 1);
+
+  const rejectAll = cli(["validate-config", config, "--script", await write("none.lua", 'function select(m) return false, "none" end')]);
+  assert.equal(rejectAll.status, 0, rejectAll.stderr);
+  assert.match(rejectAll.stdout, /^\{"version":1,"config_digest":"[0-9a-f]{64}","script_digest":"[0-9a-f]{64}"\}\n$/);
+  assert.equal(rejectAll.stderr.trim().split("\n").length, 1);
+  assert.match(rejectAll.stderr, /^WARN catalog\.lua rejected all 64 synthetic dry-run candidates/);
+
+  for (const args of [["validate-config", "-", "--script", "-"], ["validate-config", config, "--script"], ["validate-config", config, "--other", DEFAULT_SCRIPT], ["validate-config", config, "--script", DEFAULT_SCRIPT, "x"]]) {
+    assert.equal(cli(args).status, 2, args.join(" "));
+  }
+});
+
+test("startup with a script that defines no select exits non-zero before listening", async () => {
+  const dir = await tempDir();
+  await writeFile(join(dir, "config.yaml"), "cpa_base_url: http://127.0.0.1:9\n");
+  await writeFile(join(dir, "catalog.lua"), "local x = 1\n");
+  const result = spawnSync(process.execPath, [MAIN], {
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { PATH: process.env.PATH, CONFIG_PATH: join(dir, "config.yaml"), CATALOG_SCRIPT_PATH: join(dir, "catalog.lua"), CACHE_DIR: join(dir, "cache"), LISTEN_ADDR: "127.0.0.1:0", CPA_MANAGEMENT_KEY: "m", CPA_CLIENT_KEY: "c" },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, /missing_select/);
+  assert.doesNotMatch(result.stdout + result.stderr, /"msg":"listen"/);
+  const missing = spawnSync(process.execPath, [MAIN], { encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH, CONFIG_PATH: join(dir, "config.yaml"), CATALOG_SCRIPT_PATH: join(dir, "absent.lua") } });
+  assert.equal(missing.status, 1);
 });
 
 test("healthcheck exits non-zero when nothing serves /readyz", () => {

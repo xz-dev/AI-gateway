@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const SCRIPT = join(ROOT, "catalog.lua");
 const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
   spawnSync(process.execPath, args, { cwd: ROOT, encoding: "utf8", timeout: 120_000, env: { ...process.env, NODE_OPTIONS: "", ...env } });
 
@@ -28,17 +29,22 @@ test("build-tables writes both pinned data versions and non-empty tables", async
 test("bundles: server and worker build without Pi packages and compile from tables", async () => {
   const result = run(["scripts/bundle.mjs"]);
   assert.equal(result.status, 0, result.stderr);
-  for (const file of ["server.mjs", "worker.mjs"]) {
+  for (const file of ["server.mjs", "worker.mjs", "membership-worker.mjs"]) {
     const text = await readFile(join(ROOT, "dist", file), "utf8");
     assert.doesNotMatch(text, /@earendil-works/, file);
   }
+  assert.ok((await readFile(join(ROOT, "dist", "glue.wasm"))).length > 0, "glue.wasm ships next to the bundles");
+  assert.doesNotMatch(await readFile(join(ROOT, "dist", "server.mjs"), "utf8"), /LuaFactory/, "the server bundle holds no Lua runtime");
   const tables = join(await tempDir(), "tables.json");
   await writeFile(tables, JSON.stringify({ modelsDev: { providers: {}, models: {} }, modelparams: { catalog: [] }, degraded: [] }));
-  const warm = run(["dist/server.mjs", "warm-compile-cache"], { TABLES_PATH: tables, NODE_COMPILE_CACHE: await tempDir() });
+  const warm = run(["dist/server.mjs", "warm-compile-cache"], { TABLES_PATH: tables, NODE_COMPILE_CACHE: await tempDir(), CATALOG_SCRIPT_PATH: SCRIPT });
   assert.equal(warm.status, 0, warm.stderr);
   const validate = spawnSync(process.execPath, ["dist/server.mjs", "validate-config", "config.yaml"], { cwd: ROOT, encoding: "utf8" });
   assert.equal(validate.status, 0, validate.stderr);
   assert.match(validate.stdout, /^\{"version":1,"config_digest":"[0-9a-f]{64}"\}\n$/);
+  const withScript = spawnSync(process.execPath, ["dist/server.mjs", "validate-config", "config.yaml", "--script", "catalog.lua"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(withScript.status, 0, withScript.stderr);
+  assert.match(withScript.stdout, /^\{"version":1,"config_digest":"[0-9a-f]{64}","script_digest":"[0-9a-f]{64}"\}\n$/);
 });
 
 test("end to end: the bundled server process serves a Codex manifest and the models table from fake CPA and AISIX", async (t) => {
@@ -74,6 +80,7 @@ test("end to end: the bundled server process serves a Codex manifest and the mod
     env: {
       PATH: process.env.PATH,
       CONFIG_PATH: join(dir, "config.yaml"),
+      CATALOG_SCRIPT_PATH: SCRIPT,
       CACHE_DIR: join(dir, "cache"),
       LISTEN_ADDR: `127.0.0.1:${port}`,
       CPA_MANAGEMENT_KEY: MANAGEMENT_KEY,

@@ -855,6 +855,7 @@ services:
     environment:
       LISTEN_ADDR: :8090
       CONFIG_PATH: /app/config.yaml
+      CATALOG_SCRIPT_PATH: /app/catalog.lua
       CACHE_DIR: /var/cache/model-catalog
       CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY:?Set CPA_MANAGEMENT_KEY in .env}
       CPA_CLIENT_KEY: ${CPA_CLIENT_KEY:-${CPA_API_KEY:?Set CPA_CLIENT_KEY or CPA_API_KEY in .env}}
@@ -862,6 +863,7 @@ services:
       AISIX_TOKEN: ${AISIX_CATALOG_KEY:?Set AISIX_CATALOG_KEY in .env}
     volumes:
       - ./services/routing/model-catalog/config.yaml:/app/config.yaml:ro,Z
+      - ./services/routing/model-catalog/catalog.lua:/app/catalog.lua:ro,Z
       # 专用持久卷：元数据输入缓存跨重启/重建保留，只挂给 model-catalog。
       - model-catalog-cache:/var/cache/model-catalog
 

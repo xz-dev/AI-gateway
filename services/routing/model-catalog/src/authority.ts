@@ -2,23 +2,43 @@
 // mode, and the optional AISIX inventory, collected independently of catalog traffic and
 // published as immutable generations.
 import { createHash } from "node:crypto";
-import type { SyncRules } from "./config.ts";
-import { selectModels } from "./core.ts";
 import { CpaClient, decodeNativeManifest, type Channel, type Discovery } from "./cpa.ts";
 import { HttpPool, InvalidResponseError } from "./http.ts";
 import { exactModelID, isRecord, parseJSON, type Row } from "./json.ts";
 import type { Logger } from "./log.ts";
 import { errorMessage } from "./log.ts";
+import {
+  MembershipScriptError,
+  REJECTED_DEFAULT_REASON,
+  runMembershipScript,
+  type Candidate,
+  type Decision,
+  type MembershipScript,
+  type MemberSource,
+  type PrefixMode,
+  type RunOptions,
+} from "./membership.ts";
 import { readJSON, type JsonResult, type ReadCache, type ReadOptions } from "./read-cache.ts";
 
 export type Availability = "usable" | "empty" | "failed";
 
-export interface AdmittedModel {
+export type { PrefixMode } from "./membership.ts";
+
+/** A member chosen by the membership script, in candidate order (output order is set by the build). */
+export interface MemberEntry {
   readonly id: string;
-  /** Position of the CPA native manifest row (the `@self` record) in `nativeRows(generation)`. */
-  readonly index: number;
-  /** Emit this CPA record exactly as-is: OAuth routes under an inferred prefix, or prefix-discovery fallback. */
+  readonly origin: MemberSource;
+  /** CPA members: position of the native manifest row (the `@self` record) in `nativeRows(generation)`. */
+  readonly index?: number;
+  /** Emit this CPA record as CPA returned it (only `priority` replaced): the native flag without `compile`. */
   readonly preserveNative: boolean;
+}
+
+/** A candidate the membership script rejected, shown on the models table only. */
+export interface RejectedCandidate {
+  readonly id: string;
+  readonly sources: readonly MemberSource[];
+  readonly reason: string;
 }
 
 export interface AuthorityGeneration {
@@ -31,15 +51,16 @@ export interface AuthorityGeneration {
    * resident; the string is the one the authority read cache already holds.
    */
   readonly nativeText: string;
-  /** Admitted CPA models in native manifest order; first occurrence wins for duplicate IDs. */
-  readonly admitted: readonly AdmittedModel[];
+  /** Members decided by `catalog.lua`, in candidate order (CPA first occurrence, AISIX, static). */
+  readonly members: readonly MemberEntry[];
+  readonly rejected: readonly RejectedCandidate[];
   /** Every unique AISIX ID, in first-seen order with exact bytes. */
   readonly aisixIDs: readonly string[];
   readonly channels: readonly Channel[];
   readonly discoveryIncomplete: boolean;
   /** How CPA IDs were admitted: CPA prefix rule, forced-prefix compatibility, or fallback. */
   readonly prefixMode: PrefixMode;
-  /** Admitted records kept as-is because prefix discovery was incomplete. */
+  /** CPA members kept as-is because prefix discovery was incomplete. */
   readonly prefixFallbackCount: number;
 }
 
@@ -48,6 +69,8 @@ export interface RefreshOutcome {
   /** A new generation was published by this attempt. */
   readonly published: boolean;
   readonly errors: readonly string[];
+  /** The membership script failed; nothing was published and the previous generation keeps serving. */
+  readonly scriptError?: MembershipScriptError;
   /** Inputs answered from a retained response instead of a fresh read. */
   readonly staleInputs: number;
 }
@@ -57,7 +80,8 @@ const EMPTY: AuthorityGeneration = Object.freeze({
   cpa: "failed",
   aisix: "failed",
   nativeText: "",
-  admitted: Object.freeze([]),
+  members: Object.freeze([]),
+  rejected: Object.freeze([]),
   aisixIDs: Object.freeze([]),
   channels: Object.freeze([]),
   discoveryIncomplete: true,
@@ -66,9 +90,7 @@ const EMPTY: AuthorityGeneration = Object.freeze({
 });
 
 // ---------------------------------------------------------------------------
-// Membership (D1, D2, D4): CPA prefixes and the prefix mode come from management data only.
-
-export type PrefixMode = "prefix" | "forced" | "fallback";
+// Membership inputs: CPA prefixes and the prefix mode come from management data only.
 
 export interface Prefixes {
   /** `fallback` when a management read failed with no eligible cached response. */
@@ -181,46 +203,69 @@ export function nativeRows(generation: AuthorityGeneration): Row[] {
   return generation.nativeText === "" ? [] : decodeNativeManifest(generation.nativeText);
 }
 
-function hasPrefix(id: string, prefixes: ReadonlySet<string>): boolean {
-  for (let index = id.indexOf("/"); index > 0; index = id.indexOf("/", index + 1)) if (prefixes.has(id.slice(0, index))) return true;
-  return false;
+/** The shortest known CPA prefix `P` such that `id` starts with `P/` at a `/` boundary. */
+function shortestPrefix(id: string, prefixes: ReadonlySet<string>): string | undefined {
+  for (let index = id.indexOf("/"); index > 0; index = id.indexOf("/", index + 1)) if (prefixes.has(id.slice(0, index))) return id.slice(0, index);
+  return undefined;
+}
+
+export interface MembershipInput {
+  readonly candidates: readonly Candidate[];
+  /** Native manifest row index of each CPA candidate, by candidate position. */
+  readonly rowIndex: ReadonlyArray<number | undefined>;
 }
 
 /**
- * The D1 CPA admission rule. Prefix mode admits IDs under a CPA prefix; forced and fallback modes
- * admit every slash ID (CPA lists no bare copies, or prefixes are unknown). `cpaInclude` admits
- * the rest. Fallback rows and OAuth registrations under an inferred prefix are emitted as-is.
+ * Every unique candidate in candidate order: CPA native IDs (first occurrence), then AISIX, then
+ * static slugs. The native flag: OAuth registrations under an inferred prefix (forced mode: every
+ * OAuth registration; fallback: every CPA row), never for static slugs.
  */
-export function admitModels(
-  rows: readonly Row[],
-  prefixes: Prefixes,
-  cpaInclude: SyncRules | undefined,
-  staticSlugs: ReadonlySet<string>,
-): { admitted: AdmittedModel[]; fallbackCount: number } {
-  const ids = rows.map(exactModelID);
-  const prefixed = (id: string) => (prefixes.mode === "prefix" ? hasPrefix(id, prefixes.prefixes) : id.includes("/"));
-  const included = cpaInclude ? new Set(selectModels({ includeModels: cpaInclude, warnings: [] }, ids).kept) : new Set<string>();
-  const admitted: AdmittedModel[] = [];
-  const seen = new Set<string>();
-  let fallbackCount = 0;
-  for (const [index, id] of ids.entries()) {
-    if (seen.has(id) || !(prefixed(id) || included.has(id))) continue;
-    seen.add(id);
-    let preserveNative: boolean;
-    if (prefixes.mode === "fallback") {
-      fallbackCount++;
-      preserveNative = true;
-    } else {
-      // Prefix mode: OAuth IDs carry an inferred prefix, so cpa_include never applies to them.
-      preserveNative = prefixes.oauth.has(id) && !(prefixes.mode === "forced" && included.has(id));
-    }
-    admitted.push({ id, index, preserveNative: preserveNative && !staticSlugs.has(id) });
+export function membershipCandidates(rows: readonly Row[], prefixes: Prefixes, aisixIDs: readonly string[], staticSlugs: readonly string[]): MembershipInput {
+  const index = new Map<string, { sources: Partial<Record<MemberSource, true>>; row?: number }>();
+  for (const [row, value] of rows.entries()) {
+    const id = exactModelID(value);
+    if (!index.has(id)) index.set(id, { sources: { cpa: true }, row });
   }
-  return { admitted, fallbackCount };
+  const add = (id: string, source: MemberSource) => {
+    const entry = index.get(id);
+    if (entry) entry.sources[source] = true;
+    else index.set(id, { sources: { [source]: true } });
+  };
+  for (const id of aisixIDs) add(id, "aisix");
+  for (const slug of staticSlugs) add(slug, "static");
+  const candidates: Candidate[] = [];
+  const rowIndex: Array<number | undefined> = [];
+  for (const [id, { sources, row }] of index) {
+    const prefix = shortestPrefix(id, prefixes.prefixes);
+    const native = sources.cpa === true && sources.static !== true && (prefixes.mode === "fallback" || prefixes.oauth.has(id));
+    candidates.push({ id, sources, mode: prefixes.mode, has_prefix: prefix !== undefined, ...(prefix === undefined ? {} : { prefix }), native });
+    rowIndex.push(row);
+  }
+  return { candidates, rowIndex };
+}
+
+const SOURCE_ORDER: readonly MemberSource[] = ["cpa", "aisix", "static"];
+
+/** Members and rejected candidates from the script's decisions (one per candidate). */
+export function applyDecisions(input: MembershipInput, decisions: readonly Decision[]): { members: MemberEntry[]; rejected: RejectedCandidate[] } {
+  const members: MemberEntry[] = [];
+  const rejected: RejectedCandidate[] = [];
+  for (const [position, candidate] of input.candidates.entries()) {
+    const decision = decisions[position]!;
+    const sources = SOURCE_ORDER.filter((source) => candidate.sources[source]);
+    if (!decision.keep) {
+      rejected.push({ id: candidate.id, sources, reason: decision.reason ?? REJECTED_DEFAULT_REASON });
+      continue;
+    }
+    const origin = decision.source ?? sources[0]!;
+    if (origin === "cpa") members.push({ id: candidate.id, origin, index: input.rowIndex[position], preserveNative: candidate.native && !decision.compile });
+    else members.push({ id: candidate.id, origin, preserveNative: false });
+  }
+  return { members, rejected };
 }
 
 /** Runtime conflicts that make the configured catalog ambiguous. */
-export function runtimeConflicts(channels: readonly Channel[], customPoolKeys: Iterable<string>, admitted: readonly AdmittedModel[]): string[] {
+export function runtimeConflicts(channels: readonly Channel[], customPoolKeys: Iterable<string>, members: readonly MemberEntry[]): string[] {
   const conflicts: string[] = [];
   const prefixes = new Map<string, string>();
   for (const channel of channels) {
@@ -234,7 +279,8 @@ export function runtimeConflicts(channels: readonly Channel[], customPoolKeys: I
   }
   if (conflicts.length > 0) return conflicts;
   const nativePrefixes = new Set<string>();
-  for (const model of admitted) {
+  for (const model of members) {
+    if (model.origin !== "cpa") continue;
     const slash = model.id.indexOf("/");
     if (slash > 0) nativePrefixes.add(model.id.slice(0, slash));
   }
@@ -294,9 +340,13 @@ export function uniqueIDs(ids: readonly string[]): string[] {
 export interface AuthorityOwnerOptions {
   cpa: CpaClient;
   aisix?: AisixClient;
-  staticSlugs: ReadonlySet<string>;
-  /** `membership.cpa_include`: admits CPA IDs without a CPA prefix. */
-  cpaInclude?: SyncRules;
+  /** Static model slugs in configuration order. */
+  staticSlugs: readonly string[];
+  /** The profile's `catalog.lua`, loaded and dry-run at startup. */
+  script: MembershipScript;
+  /** Worker file and bounds overrides (tests). */
+  membership?: RunOptions;
+  clock?: () => number;
   /** Budget for the mandatory CPA phase. */
   cpaTimeoutMs: number;
   /** Independent budget for the optional AISIX phase. */
@@ -306,7 +356,12 @@ export interface AuthorityOwnerOptions {
 
 export class AuthorityOwner {
   #current: AuthorityGeneration = EMPTY;
+  /** Inputs fingerprint plus the decisions digest of the current generation. */
   #fingerprint = "";
+  /** Inputs fingerprint and decisions of the last successful script run. */
+  #inputs = "";
+  #decided: { members: MemberEntry[]; rejected: RejectedCandidate[]; digest: string } | undefined;
+  #scriptFailure: { at: number; error: MembershipScriptError } | undefined;
   #active: { promise: Promise<RefreshOutcome>; bypass: boolean } | undefined;
 
   readonly options: AuthorityOwnerOptions;
@@ -317,6 +372,11 @@ export class AuthorityOwner {
 
   current(): AuthorityGeneration {
     return this.#current;
+  }
+
+  /** The latest membership script failure, until a later run succeeds. */
+  scriptFailure(): { at: number; error: MembershipScriptError } | undefined {
+    return this.#scriptFailure;
   }
 
   /** Coalesced: callers join an active attempt unless they need a forced one and it is not. */
@@ -335,7 +395,7 @@ export class AuthorityOwner {
   }
 
   async #collect(bypass: boolean, signal: AbortSignal | undefined): Promise<RefreshOutcome> {
-    const { cpa, aisix, staticSlugs, cpaInclude, log } = this.options;
+    const { cpa, aisix, staticSlugs, log } = this.options;
     const errors: string[] = [];
     let staleInputs = 0;
     const phase = (ms: number): ReadOptions => ({
@@ -349,29 +409,30 @@ export class AuthorityOwner {
     // Mandatory CPA phase.
     let cpaState: Availability = "failed";
     let nativeText = "";
-    let admitted: AdmittedModel[] = [];
+    let rows: readonly Row[] = [];
+    let prefixes: Prefixes | undefined;
     let channels: readonly Channel[] = [];
     let discoveryIncomplete = true;
-    let prefixMode: PrefixMode = "fallback";
-    let prefixFallbackCount = 0;
     const cpaOptions = phase(this.options.cpaTimeoutMs);
     try {
       const native = await cpa.nativeManifest(cpaOptions);
       part(native.text);
       nativeText = native.text;
+      rows = native.value;
       cpaState = native.value.length > 0 ? "usable" : "empty";
       const discovery = await cpa.discover(cpaOptions);
       discovery.texts.forEach(part);
-      const prefixes = await readPrefixes(cpa, discovery, cpaOptions);
+      prefixes = await readPrefixes(cpa, discovery, cpaOptions);
       prefixes.texts.forEach(part);
       part(`!mode:${prefixes.mode}`);
-      ({ admitted, fallbackCount: prefixFallbackCount } = admitModels(native.value, prefixes, cpaInclude, staticSlugs));
       channels = discovery.channels;
       discoveryIncomplete = discovery.incomplete;
-      prefixMode = prefixes.mode;
       if (discovery.incomplete) log.warn("channel discovery incomplete");
-      if (prefixFallbackCount > 0) log.warn("CPA prefixes unavailable; preserving CPA slash records", { count: prefixFallbackCount });
     } catch (error) {
+      cpaState = "failed";
+      nativeText = "";
+      rows = [];
+      prefixes = undefined;
       errors.push(`CPA catalog: ${errorMessage(error)}`);
       part("!cpa-failed");
     }
@@ -392,8 +453,42 @@ export class AuthorityOwner {
       }
     }
 
-    const fingerprint = hash.digest("hex");
+    // Membership stage (design D4): the script decides every candidate. Unchanged inputs reuse the
+    // last decisions; a forced refresh runs the script again.
+    const inputs = hash.digest("hex");
     const previous = this.#current;
+    let members: MemberEntry[] = [];
+    let rejected: RejectedCandidate[] = [];
+    let digest = "!no-membership";
+    if (prefixes) {
+      if (!bypass && this.#decided && inputs === this.#inputs) ({ members, rejected, digest } = this.#decided);
+      else {
+        const input = membershipCandidates(rows, prefixes, aisixIDs, staticSlugs);
+        try {
+          const run = await runMembershipScript(this.options.script, input.candidates, this.options.membership);
+          ({ members, rejected } = applyDecisions(input, run.decisions));
+        } catch (error) {
+          const scriptError = error instanceof MembershipScriptError ? error : new MembershipScriptError("worker_exit", errorMessage(error));
+          this.#scriptFailure = { at: (this.options.clock ?? Date.now)(), error: scriptError };
+          log.warn("membership script failed; previous generation keeps serving", {
+            class: scriptError.errorClass,
+            ...(scriptError.candidate === undefined ? {} : { candidate: scriptError.candidate }),
+            err: scriptError.message,
+          });
+          return { generation: previous, published: false, errors: [...errors, scriptError.message], staleInputs, scriptError };
+        }
+        this.#scriptFailure = undefined;
+        digest = createHash("sha256").update(JSON.stringify([members, rejected])).digest("hex");
+        this.#inputs = inputs;
+        this.#decided = { members, rejected, digest };
+        if (members.length === 0 && input.candidates.length > 0) log.info("catalog.lua kept no candidate; publishing an empty catalog", { candidates: input.candidates.length, rejected: rejected.length });
+      }
+    }
+    const prefixMode: PrefixMode = prefixes?.mode ?? "fallback";
+    const prefixFallbackCount = prefixMode === "fallback" ? members.filter((member) => member.origin === "cpa" && member.preserveNative).length : 0;
+    if (prefixFallbackCount > 0) log.warn("CPA prefixes unavailable; preserving CPA slash records", { count: prefixFallbackCount });
+
+    const fingerprint = `${inputs}:${digest}`;
     if (previous.generation !== 0 && fingerprint === this.#fingerprint) {
       // Same content: hold the read cache's current string so an equal old copy is not kept alive.
       if (nativeText !== "") this.#current = Object.freeze({ ...previous, nativeText });
@@ -404,7 +499,8 @@ export class AuthorityOwner {
       cpa: cpaState,
       aisix: aisixState,
       nativeText,
-      admitted: Object.freeze(admitted),
+      members: Object.freeze(members),
+      rejected: Object.freeze(rejected),
       aisixIDs: Object.freeze(aisixIDs),
       channels: Object.freeze(channels),
       discoveryIncomplete,

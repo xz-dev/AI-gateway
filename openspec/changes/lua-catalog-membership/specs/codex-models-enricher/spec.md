@@ -20,10 +20,7 @@ So, with the default script, a CPA ID without `/` and a slash ID whose first seg
 
 When a member's source is CPA, its CPA native row SHALL be its base record, even if AISIX or a static model also lists it. A CPA row SHALL NOT be used as the `@self` record of a member whose source is not CPA.
 
-Members SHALL be ordered as follows:
-- CPA members in native-manifest order;
-- then AISIX members in AISIX order;
-- then static members in configuration order.
+When the script keeps a candidate without choosing a source, the source SHALL be the first of CPA, AISIX and static that lists it. Member output order SHALL follow "Catalog output order and Codex priority" and SHALL NOT depend on source order or on the order in which the script is called.
 
 `@cpa-upstream` rows and bundled metadata SHALL only contribute fields. A model present only in a channel's upstream list SHALL NOT be a candidate.
 
@@ -47,7 +44,7 @@ Members SHALL be ordered as follows:
 - **WHEN** the default script runs, CPA lists `deepseek/deepseek-v4.1-flash`, `deepseek` is not a CPA prefix, and the extra CPA list does not match it
 - **THEN** no catalog lists `deepseek/deepseek-v4.1-flash`
 
-#### Scenario: Extra CPA list admits unprefixed CPA IDs
+#### Scenario: Exception list admits unprefixed CPA IDs
 
 - **WHEN** the script's extra CPA list is `{"devin/*"}` and CPA lists `devin/claude-opus-5-5` from an account without a prefix
 - **THEN** the member set contains `devin/claude-opus-5-5` as a CPA member
@@ -57,7 +54,7 @@ Members SHALL be ordered as follows:
 - **WHEN** the script's extra CPA list is `{"my-alias"}`, CPA lists the operator-configured unprefixed model `my-alias`, and `include_models` is absent
 - **THEN** the catalogs list `my-alias` with chain-selected metadata
 
-#### Scenario: Every AISIX ID is a member by default
+#### Scenario: Every AISIX ID is a member
 
 - **WHEN** the default script runs, AISIX lists the bare ID `gpt-6.1-sol` and CPA also lists a bare `gpt-6.1-sol`
 - **THEN** the member set contains `gpt-6.1-sol` once, as an AISIX member without a CPA `@self` record
@@ -65,7 +62,7 @@ Members SHALL be ordered as follows:
 #### Scenario: ID listed by both CPA and AISIX
 
 - **WHEN** the default script runs, CPA admits `codex/gpt-5.3-codex-spark` and AISIX also lists it
-- **THEN** it appears once, in CPA order, with the CPA native row as its base record
+- **THEN** it appears once, with the CPA native row as its base record
 
 #### Scenario: Edited script admits every candidate
 
@@ -75,7 +72,7 @@ Members SHALL be ordered as follows:
 #### Scenario: Edited script prefers AISIX on shared IDs
 
 - **WHEN** the script returns `true, {source = "aisix"}` for every candidate listed by AISIX, and CPA and AISIX both list `codex/gpt-5.3-codex-spark`
-- **THEN** `codex/gpt-5.3-codex-spark` is an AISIX member, placed in AISIX order, without a CPA `@self` record
+- **THEN** `codex/gpt-5.3-codex-spark` is an AISIX member without a CPA `@self` record, at its position in the catalog output order
 
 ### Requirement: CPA prefixes come from CPA management data
 
@@ -85,7 +82,7 @@ The sidecar SHALL take the CPA prefix set from the CPA Management API only:
 
 The sidecar SHALL NOT download authentication files, read OAuth model definitions or OAuth model aliases for membership, or accept an operator-written prefix list.
 
-The host SHALL compute a native flag for every CPA candidate. The flag is set when the ID is an OAuth registration under an inferred prefix, and no static model has that slug. A CPA member whose native flag is set SHALL be emitted exactly as CPA returned it, without compile, resolution or post-processing, unless the script asks for a normal compile. Other CPA members SHALL be compiled normally.
+The host SHALL compute a native flag for every CPA candidate. The flag is set when the ID is an OAuth registration under an inferred prefix, and no static model has that slug. A CPA member whose native flag is set SHALL be emitted as CPA returned it, without compile, resolution or post-processing and with only `priority` replaced (see "Catalog output order and Codex priority"), unless the script asks for a normal compile. Other CPA members SHALL be compiled normally.
 
 If prefix discovery is incomplete because a management read failed with no eligible cached response, the sidecar SHALL log a warning, report the prefix mode `fallback` to the script, and set the native flag on every CPA candidate that is not a static slug. The default script SHALL then admit every CPA ID containing `/` plus its extra CPA list, and no other CPA ID without `/`.
 
@@ -110,7 +107,7 @@ On every authority collection the sidecar SHALL read CPA's `force-model-prefix` 
 
 The default script SHALL, in `forced` mode:
 - admit every CPA ID containing `/`, plus its extra CPA list;
-- ask for a normal compile of members matched by its extra CPA list, so those are compiled and every other OAuth registration is emitted as CPA returned it.
+- ask for a normal compile of members matched by its extra CPA list, so those are compiled and every other OAuth registration is emitted as CPA returned it, with only `priority` replaced.
 
 A failed read of the setting SHALL count as incomplete prefix discovery.
 
@@ -152,7 +149,7 @@ The hint for channel `models.<name>.metadata_from` SHALL point to the root `meta
 
 ### Requirement: Membership script interface
 
-The membership script SHALL define a global function `select(m)`. The host SHALL call it exactly once per candidate, in member order (CPA native-manifest order, then AISIX order, then static configuration order), with a fresh table `m` holding:
+The membership script SHALL define a global function `select(m)`. The host SHALL call it exactly once per candidate, in candidate order (CPA native-manifest order, then AISIX order, then static configuration order), with a fresh table `m` holding:
 - `id`: the exact candidate ID;
 - `sources`: a table with `cpa`, `aisix` and `static` set to `true` for each source that lists the ID;
 - `mode`: the CPA prefix mode of this collection, `"prefix"`, `"forced"` or `"fallback"`;

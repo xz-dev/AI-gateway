@@ -17,6 +17,10 @@ for command in openssl python3; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
+# The membership script mount source: a missing path would make the runtime create a directory.
+catalog_script=services/routing/model-catalog/catalog.lua
+[ -f "$catalog_script" ] && [ ! -L "$catalog_script" ] || { echo "$catalog_script must be a regular file" >&2; exit 1; }
+
 value_from_env() {
   local key=$1
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$env_file"
@@ -520,6 +524,8 @@ if routing_service.get("network_mode") != "service:model-catalog-netns" or routi
     raise SystemExit("model-catalog routing index must remain inside its route-stripped namespace")
 if (routing_service.get("healthcheck") or {}).get("test") != ["CMD", "/model-catalog", "healthcheck"]:
     raise SystemExit("model-catalog must report canonical-snapshot readiness without publishing the index")
+if (routing_service.get("environment") or {}).get("CATALOG_SCRIPT_PATH") != "/app/catalog.lua" or "/app/catalog.lua" not in volume_targets(routing_service):
+    raise SystemExit("model-catalog must mount catalog.lua read-only at CATALOG_SCRIPT_PATH=/app/catalog.lua")
 relay_dependencies = services.get("apisix-models-catalog-relay", {}).get("depends_on") or {}
 if (relay_dependencies.get("model-catalog") or {}).get("condition") != "service_started":
     raise SystemExit("the selector relay must start during a cold snapshot so classified requests can return 503")

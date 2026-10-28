@@ -6,14 +6,10 @@
 #   models          ordered `match:` glob rules (`*` stays inside one segment, `**` spans `/`);
 #                   later matching rules replace the chain, overrides merge in order (RFC 7396).
 #   include_models  optional ordered globs, `!` hides, last match wins, unmatched = hidden.
-# Membership: CPA IDs under a CPA prefix, membership.cpa_include matches, every AISIX ID and
-# static_models, deduplicated in that order.
+# Membership is decided by the profile's catalog.lua (next to this file), before include_models.
+# The default script keeps CPA IDs under a CPA prefix, its EXTRA_CPA globs, every AISIX ID and the
+# static_models. Devin accounts register `devin/<model>` with no prefix: set EXTRA_CPA = { "devin/*" }.
 cpa_base_url: http://cpa:8317
-
-# CPA IDs without a CPA prefix are not members unless an ordered glob here admits them (same
-# matcher as include_models). Devin accounts register `devin/<model>` with no prefix, so:
-# membership:
-#   cpa_include: ["devin/*"]
 
 # Full-chain refresh: once at startup in the background; entry window and schedule are independent.
 scheduled_refresh_interval: 30m

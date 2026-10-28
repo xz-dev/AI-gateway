@@ -3,8 +3,9 @@ import { test } from "node:test";
 import {
   AisixClient,
   AuthorityOwner,
-  admitModels,
+  applyDecisions,
   inferredPrefixes,
+  membershipCandidates,
   nativeRows,
   decodeAISIXModels,
   runtimeConflicts,
@@ -12,12 +13,13 @@ import {
   type AuthorityGeneration,
   type Prefixes,
 } from "../src/authority.ts";
-import { parseConfig } from "../src/config.ts";
+import { runMembershipScript } from "../src/membership.ts";
 import { CHANNEL_KINDS, type Channel } from "../src/cpa.ts";
 import { HttpPool } from "../src/http.ts";
 import { ReadCache } from "../src/read-cache.ts";
 import { cpaClient, fakeCPA, serveCPA, type FakeCPA } from "./fake-cpa.ts";
 import { captureLog, json, serve, sleep, type CapturedLog } from "./helpers.ts";
+import { defaultScript, script } from "./scripts.ts";
 
 interface Harness {
   owner: AuthorityOwner;
@@ -29,12 +31,13 @@ interface Harness {
 interface HarnessOptions {
   aisix?: string;
   staticSlugs?: string[];
-  cpaInclude?: string[];
+  /** The default script's EXTRA_CPA list. */
+  extraCpa?: string[];
+  /** A script text replacing the default one. */
+  script?: string;
   concurrency?: number;
   aisixTimeoutMs?: number;
 }
-
-const include = (globs: string[] | undefined) => (globs ? parseConfig(`cpa_base_url: x\nmembership:\n  cpa_include: ${JSON.stringify(globs)}\n`).cpaInclude : undefined);
 
 async function harness(t: { after(fn: () => unknown): void }, fake: FakeCPA, options: HarnessOptions = {}): Promise<Harness> {
   const server = await serveCPA(fake);
@@ -44,12 +47,22 @@ async function harness(t: { after(fn: () => unknown): void }, fake: FakeCPA, opt
   const cache = new ReadCache(undefined, log, () => now);
   const { client } = cpaClient(server.url, { cache, log, concurrency: options.concurrency });
   const aisix = options.aisix ? new AisixClient(options.aisix, "aisix-token", client.pool, cache) : undefined;
-  const owner = new AuthorityOwner({ cpa: client, aisix, staticSlugs: new Set(options.staticSlugs), cpaInclude: include(options.cpaInclude), cpaTimeoutMs: 5_000, aisixTimeoutMs: options.aisixTimeoutMs ?? 5_000, log });
+  const owner = new AuthorityOwner({
+    cpa: client,
+    aisix,
+    staticSlugs: options.staticSlugs ?? [],
+    script: options.script === undefined ? defaultScript(options.extraCpa) : script(options.script),
+    cpaTimeoutMs: 5_000,
+    aisixTimeoutMs: options.aisixTimeoutMs ?? 5_000,
+    log,
+    clock: () => now,
+  });
   return { owner, fake, log, advance: (ms) => (now += ms) };
 }
 
-const ids = (generation: AuthorityGeneration) => generation.admitted.map((model) => model.id).sort();
-const preserved = (generation: AuthorityGeneration) => generation.admitted.filter((m) => m.preserveNative).map((m) => m.id).sort();
+const cpaMembers = (generation: AuthorityGeneration) => generation.members.filter((member) => member.origin === "cpa");
+const ids = (generation: AuthorityGeneration) => cpaMembers(generation).map((model) => model.id).sort();
+const preserved = (generation: AuthorityGeneration) => cpaMembers(generation).filter((m) => m.preserveNative).map((m) => m.id).sort();
 
 function oauth(routes: Record<string, unknown>) {
   return (req: { url?: string }, res: Parameters<NonNullable<FakeCPA["identity"]>>[1]) => {
@@ -84,12 +97,12 @@ const accounts = (forced: boolean) => oauth({
   "models?devin.json": models("devin/claude-opus-5-5", "devin/glm-5-3"),
 });
 
-test("prefix rule: CPA-prefixed IDs and cpa_include matches are admitted; bare and unprefixed slash originals are not", async (t) => {
-  const h = await harness(t, fakeCPA({ native: manifest(...DEFAULT_IDS), channels: PREFIX_CHANNELS, identity: accounts(false) }), { cpaInclude: ["devin/*"] });
+test("prefix rule: CPA-prefixed IDs and EXTRA_CPA matches are admitted; bare and unprefixed slash originals are not", async (t) => {
+  const h = await harness(t, fakeCPA({ native: manifest(...DEFAULT_IDS), channels: PREFIX_CHANNELS, identity: accounts(false) }), { extraCpa: ["devin/*"] });
   const { generation, errors } = await h.owner.refresh();
   assert.deepEqual(errors, []);
   assert.equal(generation.prefixMode, "prefix");
-  assert.deepEqual(generation.admitted.map((m) => m.id), [
+  assert.deepEqual(cpaMembers(generation).map((m) => m.id), [
     "codex/gpt-6.1-sol",
     "supergrok/grok-4.7",
     "xl/claude-opus-5-5",
@@ -100,7 +113,7 @@ test("prefix rule: CPA-prefixed IDs and cpa_include matches are admitted; bare a
     "devin/claude-opus-5-5",
     "devin/glm-5-3",
   ]);
-  // OAuth registrations under an inferred prefix pass through; key-channel and cpa_include IDs compile.
+  // OAuth registrations under an inferred prefix pass through; key-channel and EXTRA_CPA IDs compile.
   assert.deepEqual(preserved(generation), ["codex/gpt-6.1-sol", "supergrok/grok-4.7"]);
   assert.equal(generation.prefixFallbackCount, 0);
   assert.match(h.log.text(), /follows the CPA prefix rule/);
@@ -110,7 +123,7 @@ test("prefix rule: CPA-prefixed IDs and cpa_include matches are admitted; bare a
   assert.ok(!h.fake.calls.some((call) => call.includes("off.json")), "disabled accounts are not read");
 });
 
-test("without cpa_include an account without a prefix contributes nothing", async (t) => {
+test("without EXTRA_CPA an account without a prefix contributes nothing", async (t) => {
   const h = await harness(t, fakeCPA({ native: manifest(...DEFAULT_IDS), channels: PREFIX_CHANNELS, identity: accounts(false) }));
   const { generation } = await h.owner.refresh();
   assert.ok(!ids(generation).some((id) => id.startsWith("devin/")));
@@ -123,21 +136,26 @@ test("OAuth prefixes are inferred only from paired P/x and x registrations", () 
   assert.deepEqual([...inferredPrefixes(["devin/claude-opus-5-5", "devin/glm-5-3"])], []);
 });
 
-test("cpa_include: the last match decides and cannot hide prefixed IDs; static slugs opt out of passthrough", () => {
+test("EXTRA_CPA: the last match decides and cannot hide prefixed IDs; static slugs opt out of passthrough", async () => {
   const rows = ["codex/gpt-6.1-sol", "devin/model_private_2", "devin/glm-5-3", "bare", "codex/gpt-6.1-sol"].map((slug) => ({ slug }));
   const prefixes: Prefixes = { mode: "prefix", prefixes: new Set(["codex"]), oauth: new Set(["codex/gpt-6.1-sol"]), texts: [] };
-  const { admitted } = admitModels(rows, prefixes, include(["devin/*", "!devin/model_private_*", "!codex/*"]), new Set());
-  assert.deepEqual(admitted.map((m) => [m.id, m.preserveNative]), [["codex/gpt-6.1-sol", true], ["devin/glm-5-3", false]]);
-  const statics = admitModels(rows, prefixes, undefined, new Set(["codex/gpt-6.1-sol"])).admitted;
-  assert.deepEqual(statics.map((m) => [m.id, m.preserveNative]), [["codex/gpt-6.1-sol", false]]);
+  const decide = async (extra: string[], statics: string[]) => {
+    const input = membershipCandidates(rows, prefixes, [], statics);
+    return applyDecisions(input, (await runMembershipScript(defaultScript(extra), input.candidates)).decisions);
+  };
+  const { members, rejected } = await decide(["devin/*", "!devin/model_private_*", "!codex/*"], []);
+  assert.deepEqual(members.map((m) => [m.id, m.preserveNative]), [["codex/gpt-6.1-sol", true], ["devin/glm-5-3", false]]);
+  assert.deepEqual(rejected.map((r) => [r.id, r.reason]), [["devin/model_private_2", "CPA ID without a CPA prefix"], ["bare", "CPA ID without a CPA prefix"]]);
+  const statics = (await decide([], ["codex/gpt-6.1-sol"])).members;
+  assert.deepEqual(statics.map((m) => [m.id, m.origin, m.preserveNative]), [["codex/gpt-6.1-sol", "cpa", false]]);
 });
 
-test("compatibility mode: forced prefixes admit every slash ID; OAuth IDs outside cpa_include pass through", async (t) => {
+test("compatibility mode: forced prefixes admit every slash ID; OAuth IDs outside EXTRA_CPA pass through", async (t) => {
   const forced = ["codex/gpt-6.1-sol", "supergrok/grok-4.7", "xl/claude-opus-5-5", "xl/deepseek/deepseek-v4.1-flash", "openrouter/openrouter/auto", "devin/claude-opus-5-5", "devin/glm-5-3"];
-  const h = await harness(t, fakeCPA({ native: manifest(...forced), channels: PREFIX_CHANNELS, identity: accounts(true) }), { cpaInclude: ["devin/*"] });
+  const h = await harness(t, fakeCPA({ native: manifest(...forced), channels: PREFIX_CHANNELS, identity: accounts(true) }), { extraCpa: ["devin/*"] });
   const { generation } = await h.owner.refresh();
   assert.equal(generation.prefixMode, "forced");
-  assert.deepEqual(generation.admitted.map((m) => m.id), forced);
+  assert.deepEqual(cpaMembers(generation).map((m) => m.id), forced);
   assert.deepEqual(preserved(generation), ["codex/gpt-6.1-sol", "supergrok/grok-4.7"]);
   assert.match(h.log.text(), /compatibility mode/);
 });
@@ -153,13 +171,13 @@ test("fallback: a failed prefix read admits slash IDs as CPA returned them and n
         if (key === failing) return json(res, {}, 403);
         routes(req, res);
       },
-    }), { cpaInclude: ["devin/*"] });
+    }), { extraCpa: ["devin/*"] });
     const { generation } = await h.owner.refresh();
     assert.equal(generation.prefixMode, "fallback", failing);
     assert.deepEqual(ids(generation), ["codex/gpt-6.1-sol", "devin/glm-5-3", "vendor/m"], failing);
     assert.deepEqual(preserved(generation), ["codex/gpt-6.1-sol", "devin/glm-5-3", "vendor/m"], failing);
     assert.equal(generation.prefixFallbackCount, 3);
-    assert.equal(JSON.stringify(nativeRows(generation)[generation.admitted.find((m) => m.id === "vendor/m")!.index]), `{"slug":"vendor/m","id":"unchanged","null":null}`);
+    assert.equal(JSON.stringify(nativeRows(generation)[cpaMembers(generation).find((m) => m.id === "vendor/m")!.index!]), `{"slug":"vendor/m","id":"unchanged","null":null}`);
     assert.match(h.log.text(), /prefix discovery failed/);
   }
 });
@@ -309,7 +327,7 @@ test("generations: unchanged inputs keep the generation, changes publish atomica
   assert.equal(same.published, false);
   // Same generation and members; only the held text is swapped for the read cache's current copy.
   assert.equal(same.generation.generation, first.generation.generation);
-  assert.equal(same.generation.admitted, first.generation.admitted);
+  assert.equal(same.generation.members, first.generation.members);
   assert.equal(h.owner.current(), same.generation);
 
   fake.native = `{"models":[{"slug":"p/new"}]}`;
@@ -326,7 +344,7 @@ test("generations: unchanged inputs keep the generation, changes publish atomica
   h.advance(10 * 60_000);
   let outcome = await h.owner.refresh();
   assert.equal(outcome.generation.cpa, "failed");
-  assert.deepEqual(outcome.generation.admitted, []);
+  assert.deepEqual(outcome.generation.members, []);
   fake.nativeStatus = 502;
   h.advance(10 * 60_000);
   outcome = await h.owner.refresh();
@@ -348,7 +366,7 @@ test("refreshes coalesce; a forced refresh bypasses freshness once", async (t) =
 test("runtime conflicts: empty and duplicate prefixes, custom pool collisions", () => {
   const ch = (prefix: string, type: Channel["type"] = "openai-compatibility"): Channel => ({ type, name: prefix, prefix, baseUrl: "", authIndex: "", models: [] });
   assert.equal(runtimeConflicts([ch(""), ch("a"), ch("a", "claude-api-key")], [], []).length, 2);
-  assert.deepEqual(runtimeConflicts([ch("a")], ["a", "native", "free"], [{ id: "native/m", index: 0, preserveNative: false }]), [
+  assert.deepEqual(runtimeConflicts([ch("a")], ["a", "native", "free"], [{ id: "native/m", origin: "cpa", index: 0, preserveNative: false }]), [
     `custom channel "a" conflicts with CPA channel prefix`,
     `custom channel "native" conflicts with native manifest provider prefix`,
   ]);

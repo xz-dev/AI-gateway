@@ -15,9 +15,9 @@ FROM ${NODE_IMAGE}
 ENV NODE_ENV=production \
     NODE_COMPILE_CACHE=/app/.node-compile-cache \
     MALLOC_ARENA_MAX=2
-COPY --from=build /src/dist/server.mjs /src/dist/worker.mjs /app/dist/
+COPY --from=build /src/dist/server.mjs /src/dist/worker.mjs /src/dist/membership-worker.mjs /src/dist/glue.wasm /app/dist/
 COPY --from=build /src/data/source-tables.json /app/data/source-tables.json
-COPY config.yaml /app/config.yaml
+COPY config.yaml catalog.lua /app/
 # A named volume inherits owner and mode from the mount point on first creation.
 RUN install -d -m 0700 -o 65532 -g 65532 /var/cache/model-catalog \
  && install -d -o 65532 -g 65532 /app/.node-compile-cache \

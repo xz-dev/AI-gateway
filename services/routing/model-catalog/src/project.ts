@@ -44,6 +44,8 @@ export interface TableSummary {
   readonly rowCount: number;
   readonly kept: number;
   readonly hidden: number;
+  /** Candidates rejected by `catalog.lua` (counted apart from include_models hides). */
+  readonly rejected: number;
   readonly referencedOnly: number;
   readonly dataVersions: PreparedGeneration["catalog"]["dataVersions"];
   readonly clientVersion: string;
@@ -70,7 +72,7 @@ function hiddenReason(prepared: PreparedGeneration, id: string): string {
 // Catalog output order; referenced-only pool rows are appended to the members, so the table re-sorts.
 const slugOrder = (a: TableRow, b: TableRow) => compareCatalogIDs(a.slug, b.slug);
 
-/** Compact table rows: kept, hidden (with the deciding rule) and referenced-only entries. */
+/** Compact table rows: kept, hidden (with the deciding rule), script-rejected and referenced-only entries. */
 export function tableData(prepared: PreparedGeneration, projection: Projection, clientVersion: string): TableData {
   const rows: TableRow[] = [];
   let referencedOnly = 0;
@@ -89,6 +91,8 @@ export function tableData(prepared: PreparedGeneration, projection: Projection, 
     }
     rows.push({ slug: id, status, hidden: !kept, cells: processed ? COLUMNS.map(([, key]) => cell(entry, key)) : undefined });
   }
+  const { rejected } = prepared.authority;
+  for (const candidate of rejected) rows.push({ slug: candidate.id, status: `hidden by catalog.lua: ${candidate.reason}`, hidden: true });
   rows.sort(slugOrder);
   return {
     generation: prepared.authority.generation,
@@ -96,6 +100,7 @@ export function tableData(prepared: PreparedGeneration, projection: Projection, 
     rows,
     kept: prepared.kept.size,
     hidden: prepared.hidden.size,
+    rejected: rejected.length,
     referencedOnly,
     dataVersions: prepared.catalog.dataVersions,
     clientVersion,
@@ -124,7 +129,7 @@ export function renderTableHead(page: TablePage): string {
   const { table } = page;
   const versions = table?.dataVersions;
   const meta = table
-    ? `${table.rowCount} models · kept ${table.kept} · hidden ${table.hidden} · referenced-only ${table.referencedOnly} · generation ${table.generation} · client_version=${table.clientVersion} · @opencode-ai/models ${versions?.modelsDevVersion ?? "未使用"} (snapshot ${versions?.modelsDevGeneratedAt ?? "未知"}) · modelparams ${versions?.modelparamsVersion ?? "未使用"} · ${iso(page.renderedAt)}`
+    ? `${table.rowCount} models · kept ${table.kept} · hidden ${table.hidden} · rejected by catalog.lua ${table.rejected ?? 0} · referenced-only ${table.referencedOnly} · generation ${table.generation} · client_version=${table.clientVersion} · @opencode-ai/models ${versions?.modelsDevVersion ?? "未使用"} (snapshot ${versions?.modelsDevGeneratedAt ?? "未知"}) · modelparams ${versions?.modelparamsVersion ?? "未使用"} · ${iso(page.renderedAt)}`
     : iso(page.renderedAt);
   let head = `<!DOCTYPE html>
 <html lang="zh">

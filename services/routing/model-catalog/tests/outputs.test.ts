@@ -122,9 +122,9 @@ test("idle state holds the index only: no bodies, no parsed rows", async (t) => 
     assert.ok(longest(entry) < 512, `${entry.key} holds no body`);
     assert.ok(entry.size > 0);
   }
-  assert.deepEqual(Object.keys((entries.find((entry) => entry.key === "table")!.meta as object)).sort(), ["clientVersion", "dataVersions", "generation", "hidden", "kept", "referencedOnly", "rowCount"]);
+  assert.deepEqual(Object.keys((entries.find((entry) => entry.key === "table")!.meta as object)).sort(), ["clientVersion", "dataVersions", "generation", "hidden", "kept", "referencedOnly", "rejected", "rowCount"]);
   // The authority keeps the validated text, not parsed rows.
-  for (const model of h.owner.current().admitted) assert.deepEqual(Object.keys(model).sort(), ["id", "index", "preserveNative"]);
+  for (const model of h.owner.current().members) assert.deepEqual(Object.keys(model).sort(), model.origin === "cpa" ? ["id", "index", "origin", "preserveNative"] : ["id", "origin", "preserveNative"]);
 });
 
 test("an expired catalog is served immediately and rebuilt in the background", async (t) => {
