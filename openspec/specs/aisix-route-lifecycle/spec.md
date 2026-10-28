@@ -124,6 +124,6 @@ After activation, verification SHALL show that the catalog lost only the members
 
 #### Scenario: Catalog loses only solely contributed members
 
-- **GIVEN** a removed direct model's ID is not registered by CPA, not matched by `membership.cpa_include`, and not a static model
+- **GIVEN** a removed direct model's ID is not registered by CPA, not matched by the extra CPA list (`EXTRA_CPA`) of the profile's `catalog.lua`, and not a static model
 - **WHEN** the cleanup is activated and the catalog refreshes
 - **THEN** that ID leaves the catalog, and every other member and every passthrough row is unchanged apart from list order and Codex `priority`
