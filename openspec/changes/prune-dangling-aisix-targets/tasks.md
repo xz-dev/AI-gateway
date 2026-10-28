@@ -2,48 +2,51 @@ This change does not depend on union-catalog-membership (design D6), so it has n
 
 ## 1. Diagnosis and pre-capture (read-only)
 
-- [ ] 1.1 Diagnose the 7 `axis/*` targets read-only, as design D5 describes. Collect:
+- [x] 1.1 Diagnose the 7 `axis/*` targets read-only, as design D5 describes. Collect:
   - the channel's enabled flag and model names from the CPA config;
   - the auth and registration state;
   - recent CPA log lines for the `axis` prefix;
   - the upstream model list through CPA management, if available.
 
   Classify the cause as transient, permanent or unknown, and write the evidence path. Verify: the evidence is in `/var/tmp`, and the classification has one line per ID. If permanent or unknown, ask the user through the supervisor before 2.1, and record the answer.
-- [ ] 1.2 Re-sample CPA's native and registered models. Confirm that none of the 15 IDs is registered now; any that is registered is dropped from the set and reported. Verify: a saved list shows that all 15 are absent from both native and registered.
-- [ ] 1.3 Pre-capture to `/var/tmp/prune-aisix-<date>/pre/`:
+  Decision: `axis/*` kept intentionally (user, 2026-10-28). The enabled channel excludes `*`; this is a permanent configuration exclusion, not cooldown. Evidence: `/var/tmp/ai-prune-20261028/axis-diagnosis.md`.
+- [x] 1.2 Re-sample CPA's native and registered models. Confirm that none of the 15 IDs is registered now; any that is registered is dropped from the set and reported. Verify: a saved list shows that all 15 are absent from both native and registered.
+- [x] 1.3 Pre-capture to `/var/tmp/prune-aisix-<date>/pre/`:
   - AISIX effective inventory;
   - internal catalog, Codex manifest, passthrough set;
   - public standard and Codex lists, using one temporary normal-client key;
   - AISIX and model-catalog health.
 
+  Fresh baseline: 358 internal/public standard and 349 public Codex members; expected post counts are 344 and 335. Upstream added `anyrouter/claude-fable-5-1-reversed` and its bare alias since the union capture. The supervisor approved this fresh-baseline adjustment; the exact 14-removal gate is unchanged.
+
   Compute the expected removal set per design D4. Verify: the expected set has 14 IDs, or one fewer for each ID dropped in 1.2. It is saved next to the capture, and the expected public Codex removals are listed.
 
 ## 2. Edit and deploy
 
-- [ ] 2.1 Save a mode-0600 backup of the private `services/routing/aisix/resources.yaml` under `/var/tmp/prune-aisix-<date>/`. This is the rollback source, since `rollback-config.yml` has no `aisix` path. Then edit the file per design D3: remove the 15 direct models, and remove their targets from `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6.1-sol`, `grok-imagine-image-2.0`, `kimi-k3` and `kimi-k3-500k`. Keep the `axis/*` entries, unless the user approved their removal in 1.1. Verify:
+- [x] 2.1 Save a mode-0600 backup of the private `services/routing/aisix/resources.yaml` under `/var/tmp/prune-aisix-<date>/`. This is the rollback source, since `rollback-config.yml` has no `aisix` path. Then edit the file per design D3: remove the 15 direct models, and remove their targets from `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6.1-sol`, `grok-imagine-image-2.0`, `kimi-k3` and `kimi-k3-500k`. Keep the `axis/*` entries, unless the user approved their removal in 1.1. Verify:
   - a parsed comparison against the backup shows only these removals;
   - `python3 ops/scripts/host/check-aisix-orphans.py <file> --adopted '[]'` reports no unresolved reference and no empty route;
   - 76 models remain (91 − 15).
-- [ ] 2.2 Run `ansible-playbook playbooks/deploy-config.yml -e component=aisix --check --diff`. Verify: the diff contains exactly:
+- [x] 2.2 Run `ansible-playbook playbooks/deploy-config.yml -e component=aisix --check --diff`. Verify: the diff contains exactly:
   - the removed objects;
   - the removed target lines;
   - the `max_fallbacks` changes listed in design D3;
   - nothing else.
-- [ ] 2.3 Apply `deploy-config.yml -e component=aisix`. Verify:
+- [x] 2.3 Apply `deploy-config.yml -e component=aisix`. Verify:
   - the role's Admin API read-back shows the edited routes in the new order;
   - none of the 15 IDs is in the effective inventory;
   - AISIX is healthy with restarts=0.
 
 ## 3. Production verify and record
 
-- [ ] 3.1 Force a catalog refresh, wait for the public cache, and post-capture into `/var/tmp/prune-aisix-<date>/post/`. Verify:
+- [x] 3.1 Force a catalog refresh, wait for the public cache, and post-capture into `/var/tmp/prune-aisix-<date>/post/`. Verify:
   - the member set after equals the member set before minus exactly the expected set from 1.3;
   - every other row is equal apart from list order and Codex `priority`, and `priority` follows the output-order rule;
-  - the passthrough set is unchanged (47);
+  - the passthrough set changes only by native-availability recovery of IDs diagnosed in the pre-capture; every retained row is equal modulo priority. For this activation, only `codex/gpt-6.1-sol` recovered, so the availability-derived set is 46→47 (supervisor-approved explicit gate adjustment); no other change is allowed;
   - the public standard and Codex lists lose exactly the expected IDs;
   - no AISIX direct model or route target names a newly unregistered ID.
-- [ ] 3.2 Run one bare-route inference per edited route family through the public chain, with the temporary key: `gpt-6-astra`, `kimi-k3` and `grok-imagine-image-2.0` (image). Verify: each returns 200, and the AISIX log shows the first working target serving it.
-- [ ] 3.3 Run `--check --diff` for `deploy-config.yml -e component=aisix` and `-e component=model-catalog`, and `deploy.yml -e component=aisix`. Delete the temporary key. Verify:
+- [x] 3.2 Run one bare-route inference per edited route family through the public chain, with the temporary key: `gpt-6-astra`, `kimi-k3` and `grok-imagine-image-2.0` (image). Verify: each returns 200, and the AISIX log shows the first working target serving it.
+- [x] 3.3 Run `--check --diff` for `deploy-config.yml -e component=aisix` and `-e component=model-catalog`, and `deploy.yml -e component=aisix`. Delete the temporary key. Verify:
   - every run reports changed=0 failed=0;
   - the key DELETE returns 200, a following GET returns 404, and the local key file is gone.
 - [ ] 3.4 Write `docs/records/prune-dangling-aisix-targets-<date>.md`, using model IDs and route names only. It covers:

@@ -47,6 +47,8 @@ Notes on the table:
 | Public Codex | 348 | 348 minus those of the 14 present at pre-capture |
 | Passthrough | 47 | 47 |
 
+The table is the historical union baseline, not a fixed absolute-count gate. On activation day the fresh baseline was 358 internal/public standard and 349 public Codex members, so the exact 14-removal delta yielded 344 and 335. The availability-derived passthrough diagnostic changed 46→47 only because the pre-diagnosed `codex/gpt-6.1-sol` recovered natively; every retained manifest row was equal modulo priority. These explicit gate adjustments were supervisor-approved and are recorded in the deployment record.
+
 The 14 visible removals are all of the 15 IDs except `xl/grok-imagine-image-2.0`, which `include_models` already hides. Every other member keeps all its fields. List order and Codex `priority` shift by position under the union output-order rule.
 
 ## Goals / Non-Goals
@@ -78,7 +80,7 @@ The 14 visible removals are all of the 15 IDs except `xl/grok-imagine-image-2.0`
   - apply `include_models`.
   
   Compare that set with the post-capture member set. Passthrough rows must be byte-equal apart from `priority`. Other compiled rows must be equal apart from `priority`.
-- **D5: `axis/*` diagnosis is read-only, with a decision point.** Gather:
+- **D5: `axis/*` diagnosis is read-only, with a decision point.** Resolved: `axis/*` kept intentionally (user, 2026-10-28), after diagnosis showed the configured wildcard exclusion. No CPA configuration change or further investigation is in scope. Gather:
   - the channel's CPA config entry (enabled flag and model list, names only);
   - CPA auth/registration state for that channel;
   - recent CPA log lines for that prefix (errors, cooldowns, model-list fetch failures);
