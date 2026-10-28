@@ -32,7 +32,7 @@ The dedicated membership-discovery key SHALL never be sent to inference endpoint
 
 AISIX membership SHALL be an exact-ID set refreshed outside the inference path by one non-overlapping per-worker timer using a dedicated full-visibility service key. The initial proposed refresh interval is 3 seconds with a maximum age of 15 seconds; final engineering values SHALL be confirmed with the pipe prototype, not exposed as alternate routing mechanisms. Refresh duration, body bytes, ID count/length and retained generations SHALL be bounded. Only a complete valid discovery response SHALL atomically replace the current set; a valid empty set SHALL differ from no loaded set. A failed refresh SHALL NOT reset last-success age.
 
-A still-young prior set MAY be used after a refresh failure only to the bounded maximum age. No loaded snapshot, expired/invalid snapshot or clock anomaly SHALL be uncertain. No trustworthy top-level model at complete-body EOF, malformed/untrustworthy scanned JSON or duplicate model detected before commitment SHALL also be uncertain. `MAX_ROUTING_PREFIX_BYTES=65,536` SHALL bound the single sliding memory window, not search distance; a split token or model not yet found at that boundary SHALL remain `needMore` while the buffer spills automatically to bounded disk. Uncertain requests SHALL go to AISIX with caller credentials, never to CPA on speculative absence. Warn at a bounded rate without logging credentials or bodies. No inference request SHALL synchronously fetch or wait for membership. A duplicate appearing after early dispatch cannot retroactively change backend and SHALL remain subject to the explicit full-document validation decision.
+A still-young prior set MAY be used after a refresh failure only to the bounded maximum age. No loaded snapshot, expired/invalid snapshot or clock anomaly SHALL be uncertain. No trustworthy top-level model at complete-body EOF, malformed/untrustworthy scanned JSON or duplicate model detected before commitment SHALL also be uncertain. `MAX_ROUTING_PREFIX_BYTES=65,536` SHALL bound the single sliding memory window, not search distance; a split token or model not yet found at that boundary SHALL remain `needMore` while the buffer spills automatically to bounded disk. Uncertain requests SHALL go to AISIX with caller credentials, never to CPA on speculative absence. Warn at a bounded rate without logging credentials or bodies. No inference request SHALL synchronously fetch or wait for membership. After dispatch the same scanner SHALL continue bounded token/structure validation through EOF, inspecting each chunk before forwarding. A later duplicate top-level model or malformed JSON SHALL cancel upstream, clean spool/quota state and return 400 if client headers are unsent, otherwise abort the client connection. It SHALL NOT reroute or promise to undo execution/billing already begun. Fixed-capacity nesting/token state SHALL keep validation memory independent of body length.
 
 Wildcard AISIX model definitions SHALL be forbidden through both local and Ansible resource validation because the list does not enumerate them. Wildcard caller ACLs SHALL NOT be confused with wildcard model definitions. Discovery full visibility SHALL be provisioned and verified separately from inference authorization. The documentation SHALL explicitly permit this background snapshot and its bounded stale interval, superseding the old unconditional cache ban; `/routing-index`, catalog-derived inference decisions and unbounded last-known-good routing SHALL remain prohibited.
 
@@ -55,6 +55,11 @@ Wildcard AISIX model definitions SHALL be forbidden through both local and Ansib
 - **WHEN** complete-body EOF has no trustworthy model or scanning detects malformed/untrustworthy JSON or a duplicate before commitment
 - **THEN** retained bytes and any unread body stream once to AISIX with caller credentials
 - **AND** the gateway does not decode a full document or retry CPA after an AISIX error
+
+#### Scenario: Late duplicate does not select another backend
+- **WHEN** a second top-level model is detected at suffix offset 1 KiB or 4 MiB after an early backend choice
+- **THEN** the same scanner cancels that upstream and cleans its spool instead of selecting AISIX or CPA again
+- **AND** unsent client headers permit 400, otherwise the connection is aborted; previously started execution/billing is not guaranteed undone
 
 #### Scenario: Wildcard definition cannot be deployed
 - **WHEN** local resources or an Ansible AISIX resources candidate contains a wildcard model definition in a supported naming field
@@ -85,9 +90,9 @@ The entrance SHALL select exactly one inference backend from incremental model c
 
 ### Requirement: Classification scope is the model-bearing HTTP seam
 
-Classification SHALL apply only to POST `/v1/responses`, `/v1/chat/completions` and `/v1/images/generations`, including bridged WS turns sent through HTTP-only Sub2API. Selector routes SHALL take precedence over CPA-direct routes. Direct WS upgrades SHALL remain unclassified and forward to CPA without frame inspection. Non-classified paths SHALL retain their existing matching and compatibility behavior.
+Classification SHALL apply only to POST `/v1/responses`, `/v1/chat/completions` and `/v1/images/generations`, including bridged WS turns sent through HTTP-only Sub2API. Selector routes SHALL take precedence over CPA-direct routes. Direct WS upgrades SHALL remain unclassified and forward to CPA without frame inspection. Non-classified paths SHALL retain existing matching/upstreams; the only compatibility change there SHALL be removal of catch-all retention decode/strip/re-encode.
 
-Classification SHALL use an incremental scanner and one bounded sliding-window spool, not a complete-body JSON decoder or a fixed search cutoff. A not-yet-found model SHALL keep scanning until complete or uncertain, using automatic disk overflow. Missing model at EOF or malformed/ambiguous scanned model information before commitment SHALL be uncertain and go to AISIX. Full-document validation beyond the committed decision SHALL be assigned explicitly through the user compatibility decision; the retired local-400/no-forward guarantee SHALL NOT be silently claimed for a streaming body.
+Classification SHALL use an incremental scanner and one bounded sliding-window spool, not a complete-body JSON decoder or a fixed search cutoff. A not-yet-found model SHALL keep scanning until complete or uncertain, using automatic disk overflow. Missing model at EOF or malformed/ambiguous scanned model information before commitment SHALL be uncertain and go to AISIX. The same scanner SHALL continue bounded JSON validation after the committed decision and cancel on later malformed JSON or duplicate top-level model, returning 400 before client headers or aborting after commitment, with cleanup and no reroute. Backend semantic validation remains effective; the retired whole-document local-400/no-forward guarantee SHALL NOT be claimed for a streaming body.
 
 #### Scenario: Direct WebSocket stays outside the selector
 - **WHEN** a client opens a direct WebSocket upgrade at the entrance
@@ -100,16 +105,17 @@ Classification SHALL use an incremental scanner and one bounded sliding-window s
 
 #### Scenario: Non-classified endpoint unchanged
 - **WHEN** a request is outside the enumerated classification paths
-- **THEN** existing route and compatibility processing remain distinct from uncertain classified routing
+- **THEN** existing routing remains distinct from uncertain classified routing
+- **AND** catch-all no longer performs its retention rewrite, without entering the classified scanner
 
 ### Requirement: Preserved behavior outside the routing seam
 
-Existing response streaming, model IDs, provider errors, Sub2API account/group authorization and non-chat catalog filtering SHALL be preserved. Request bytes SHALL be preserved except for an explicitly user-approved pipe-compatible retention-field removal. Complete-body validation semantics at the classified seam SHALL be documented and approved separately; they SHALL NOT be preserved by reinstating full-body decoding. Catalog visibility SHALL remain admission/authorization constrained and SHALL NOT prove invocation eligibility.
+Existing response streaming, model IDs, provider errors, Sub2API account/group authorization and non-chat catalog filtering SHALL be preserved. Request payload bytes SHALL be preserved at the gateway-to-selected-backend seam, including `prompt_cache_retention`; targeted CPA `requests.payload.filter[].params` rules SHALL own removal for rejecting upstreams after that seam. The gateway SHALL remove selector and catch-all full-body stripping, with no scanner filter. Continuous bounded validation/cancellation SHALL replace the prior whole-document pre-dispatch guarantee, not reinstate full-body decoding. Catalog visibility SHALL remain admission/authorization constrained and SHALL NOT prove invocation eligibility.
 
 #### Scenario: Streaming and body fidelity retained
 - **WHEN** a request streams to its one selected backend
 - **THEN** model bytes and response stream semantics remain intact
-- **AND** only the explicitly chosen retention transformation may alter request bytes
+- **AND** no gateway retention transformation alters request payload bytes; targeted CPA filtering occurs downstream
 
 #### Scenario: Unauthorized model stays invisible
 - **WHEN** Sub2API denies entitlement or AISIX denies its caller access to a present definition
@@ -120,9 +126,9 @@ Existing response streaming, model IDs, provider errors, Sub2API account/group a
 
 The public chain SHALL be public APISIX → keepalive → keeper → responses-ws-sse-bridge → Sub2API (HTTP/SSE only) → inner `apisix-models` streaming selector → one AISIX/CPA backend. Keeper SHALL remain a pure single-upstream cache with `IGNORE_CLIENT_STORE_FALSE=true`: forward/record a turn without a parent; expand a cached parent and remove `previous_response_id` before forwarding/recording; forward an unknown-parent request unchanged without recording that chain. The bridge SHALL remain stateless and convert WS turns to POST/SSE without history storage or retries. Sub2API SHALL NOT move before keeper/bridge. Reasons and native-WS tradeoffs remain in `docs/websocket-termination.md`.
 
-After front-bridge activation, every Sub2API OpenAI API-key account SHALL use `extra.openai_apikey_responses_websockets_v2_mode=off`, not `http_bridge`, `ctx_pool` or `passthrough`. This WS mode is distinct from the HTTP boolean `extra.openai_passthrough`; the HTTP flag SHALL NOT be enabled as part of this change without a separate explicit operator decision about mapping, eligibility and compatibility changes. It is not an ordering guarantee. Unified-entrance accounts SHALL retain `credentials.base_url=http://cli-proxy-api:8317/v1`; third-party accounts retain their own URLs. Retired `/rk/v1` SHALL NOT return. No Sub2API code modification is authorized.
+After front-bridge activation, every Sub2API OpenAI API-key account SHALL use `extra.openai_apikey_responses_websockets_v2_mode=off`, not `http_bridge`, `ctx_pool` or `passthrough`. This WS mode is distinct from the HTTP boolean `extra.openai_passthrough`; the HTTP flag SHALL remain OFF by explicit user decision; enabling it and changing WS modes/account mappings SHALL be outside this change. It is not an ordering guarantee. Unified-entrance accounts SHALL retain `credentials.base_url=http://cli-proxy-api:8317/v1`; third-party accounts retain their own URLs. Retired `/rk/v1` SHALL NOT return. No Sub2API code modification is authorized.
 
-The separately approved keeper model-first release/gitlink/image pin SHALL be verified before routing rollout. Its existing rewrite SHALL emit the already-scanned raw top-level model before input without new complete-body decode/history copy/spool or changing native passthrough paths. This is a performance prerequisite only: routing correctness SHALL remain independent of downstream legal field reordering.
+The delivered keeper model-first revision `b49ad9ac6c1eb65b1785d66ecb7249413d4c82bf`, image digest `sha256:eb21638bdfc65ea09c119baf62337bb8f7f7b421890eeb1e63c1815c60030872` and gateway pin `1dfc027` SHALL be verified and activated through a separate image-only component step before the router window. Delivery/pin SHALL NOT count as production activation. Its existing rewrite SHALL emit the already-scanned raw top-level model before input without new complete-body decode/history copy/spool or changing native passthrough paths. This is a performance prerequisite only: routing correctness SHALL remain independent of downstream legal field reordering.
 
 #### Scenario: Bare ID over client WebSocket
 - **WHEN** a client sends a bare-ID Responses WS turn through the public chain
@@ -178,4 +184,4 @@ CPA SHALL remain an official upstream release pinned by digest without gateway s
 
 **Reason**: Revised user Decision A chooses a bounded streaming pipe and background exact membership; B/C retain pure priority and authorized CPA-only bare selection. Error replay is rejected.
 
-**Migration**: Review completed client survey/passthrough findings and separate keeper delivery, resolve storage/compatibility decisions, then pass the APISIX 3.19 single-path sliding-spool gate at early and late offsets. Explicitly update the cache prohibition, provision full-visibility discovery, validate wildcard-free definitions and keep selected-backend responses terminal. Catalog, authorization, account mappings, WS-off mode, default CPA registration and non-classified routes stay intact.
+**Migration**: Review completed client survey/passthrough findings and separate keeper delivery, review resolved CPA-owned retention/continuous-validation/1 GiB quota decisions, then pass the APISIX 3.19 single-path sliding-spool gate at early and late offsets. Explicitly update the cache prohibition, provision full-visibility discovery, validate wildcard-free definitions and keep selected-backend responses terminal. Catalog, authorization, account mappings, WS-off mode, default CPA registration and non-classified upstreams stay intact except the explicitly removed catch-all retention processing.
