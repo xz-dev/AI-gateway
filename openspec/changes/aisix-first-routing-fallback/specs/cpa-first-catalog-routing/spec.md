@@ -1,125 +1,149 @@
 ## ADDED Requirements
 
-### Requirement: Backend selection follows an ordered priority list
+### Requirement: Backend selection follows an ordered membership list
 
-For every classified model-bearing JSON inference request, the entrance SHALL use one ordered backend list, initially AISIX then terminal CPA. It SHALL attempt AISIX first for both bare and slash IDs, including AISIX-defined slash direct models. It SHALL advance to CPA at most once and only on the exact proven AISIX miss defined below. Invalid credentials, permission denial, rate limiting, target failure, transport failure and stream failure SHALL NOT establish absence. The original model ID SHALL reach each attempted backend unchanged.
+For classified inference, the entrance SHALL use one ordered backend list, initially AISIX then terminal CPA. Each entry SHALL provide upstream identity, credential mode and membership source; the terminal entry SHALL require no membership source. Slash and bare IDs SHALL use the same rule without model-name rewrites or provider-specific branches. A usable exact AISIX membership hit SHALL select AISIX with the caller key. A known absence from that usable set SHALL select CPA with `CPA_API_KEY`. Uncertain routing SHALL select AISIX with the caller key. No backend response SHALL trigger another attempt.
 
-AISIX SHALL receive the caller credential unchanged. CPA SHALL receive the configured CPA service credential, never the caller credential. Existing Sub2API authorization SHALL remain in force. Authorized CPA-only bare IDs SHALL be eligible for fallback despite remaining catalog-hidden; catalog omission SHALL NOT itself grant or deny access. Catalog membership/order/priority SHALL remain unchanged.
+The dedicated membership-discovery key SHALL never be sent to inference endpoints. Missing CPA credentials SHALL fail closed with local 503 only when CPA is selected. Existing Sub2API authorization SHALL remain effective; AISIX ACL/auth denials SHALL remain terminal. Authorized CPA-only bare IDs SHALL be eligible for CPA selection while remaining catalog-hidden. Catalog omission SHALL NOT itself grant or deny access; catalog membership/order/priority SHALL remain unchanged.
 
-Each ordered backend entry SHALL supply its upstream identity, credential mode and miss predicate. Terminal CPA SHALL never advance. A future backend SHALL require an entry with its own verified miss signature, not a new per-model naming convention. Each actual fallback SHALL emit one visible INFO record with bounded escaped model ID and non-secret request ID, without credentials or request bodies.
+#### Scenario: AISIX-defined slash ID has priority
+- **WHEN** a usable exact snapshot includes a classified request's slash ID
+- **THEN** AISIX receives it unchanged with the caller credential, as for a bare ID
+- **AND** no separate selector-originated CPA inference attempt occurs
 
-#### Scenario: Model defined in AISIX
-- **WHEN** an authorized classified request names an AISIX-defined bare or slash ID
-- **THEN** AISIX receives the caller credential and unchanged model ID
-- **AND** the selector does not send a separate inference request to CPA unless AISIX returns the exact proven local miss
+#### Scenario: CPA-only bare or prefixed ID
+- **WHEN** a trustworthy extracted model is absent from a usable snapshot and the caller is authorized
+- **THEN** terminal CPA receives the request once with its service credential, regardless of slash presence
+- **AND** catalog membership remains unchanged
 
-#### Scenario: Model only CPA knows
-- **WHEN** AISIX returns the exact eligible local miss for an authorized prefixed or bare ID registered only by CPA
-- **THEN** the entrance replays the identical validated body once to CPA with the CPA service credential
-- **AND** a visible INFO fallback log identifies the model and request ID without leaking credentials
+#### Scenario: AISIX permission denial remains terminal
+- **WHEN** a model present in the discovery snapshot is forbidden to the inference caller
+- **THEN** AISIX evaluates that caller's credential and its denial is returned without CPA selection or retry
 
-#### Scenario: Model unknown everywhere
-- **WHEN** AISIX returns the exact eligible local miss and CPA also does not know the ID
-- **THEN** CPA's final status, body and end-to-end headers reach the existing downstream error-handling path unchanged
-- **AND** no further backend attempt occurs
+#### Scenario: Missing CPA service key
+- **WHEN** usable snapshot absence selects CPA but its service key is missing
+- **THEN** the entrance returns a local 503 without sending the caller or discovery key to CPA
 
-#### Scenario: CPA-only bare ID remains catalog-hidden but callable when authorized
-- **WHEN** an authorized request names a bare ID absent from AISIX but registered by CPA
-- **THEN** the exact AISIX miss permits terminal CPA fallback
-- **AND** catalog membership and Sub2API authorization remain unchanged
+#### Scenario: Another backend is inserted
+- **WHEN** a compatible backend is added to the ordered list
+- **THEN** its entry supplies upstream, credential mode and bounded membership source without per-model naming branches
 
-#### Scenario: Missing CPA credential fails closed
-- **WHEN** an exact AISIX miss requires CPA and no CPA service credential is configured
-- **THEN** the entrance returns a 503-class error without forwarding to CPA
+### Requirement: Background membership has bounded validity and explicit uncertainty
 
-#### Scenario: A backend is added later
-- **WHEN** an operator inserts a backend with a compatible, verified miss predicate into the ordered list
-- **THEN** that entry supplies its upstream identity, credential mode and predicate without changing the selection rule for other entries
+AISIX membership SHALL be an exact-ID set refreshed outside the inference path by one non-overlapping per-worker timer using a dedicated full-visibility service key. The initial proposed refresh interval is 3 seconds with a maximum age of 15 seconds; final engineering values SHALL be confirmed with the pipe prototype, not exposed as alternate routing mechanisms. Refresh duration, body bytes, ID count/length and retained generations SHALL be bounded. Only a complete valid discovery response SHALL atomically replace the current set; a valid empty set SHALL differ from no loaded set. A failed refresh SHALL NOT reset last-success age.
 
-### Requirement: Exact pre-commit AISIX absence is the only fallback signal
+A still-young prior set MAY be used after a refresh failure only to the bounded maximum age. No loaded snapshot, expired/invalid snapshot or clock anomaly SHALL be uncertain. Model missing within `MAX_ROUTING_PREFIX_BYTES`, malformed JSON prefix, invalid/incomplete model or duplicate top-level model within the retained prefix SHALL also be uncertain. The request-prefix constant's **value remains pending client survey**. Uncertain requests SHALL go to AISIX with caller credentials, never to CPA on speculative absence. Warn at a bounded rate without logging credentials or bodies. No inference request SHALL synchronously fetch or wait for membership.
 
-The entrance SHALL perform no model-list lookup, routing-index lookup, membership cache or last-known-good routing decision. It SHALL use AISIX's actual inference response as the sole absence authority: HTTP 404 AND a complete JSON body whose top-level `error.type` is exactly `model_not_found`, before response commitment. Neither generic 404, nested message text nor `error.code` SHALL qualify. Malformed, truncated, ambiguous or oversized candidate bodies SHALL NOT authorize fallback. Candidate inspection SHALL be bounded to 64 KiB and preserve every inspected non-miss response byte when forwarding.
+Wildcard AISIX model definitions SHALL be forbidden through both local and Ansible resource validation because the list does not enumerate them. Wildcard caller ACLs SHALL NOT be confused with wildcard model definitions. Discovery full visibility SHALL be provisioned and verified separately from inference authorization. The documentation SHALL explicitly permit this background snapshot and its bounded stale interval, superseding the old unconditional cache ban; `/routing-index`, catalog-derived inference decisions and unbounded last-known-good routing SHALL remain prohibited.
 
-The gateway SHALL buffer replayable validated request bytes before the first attempt, bounded to 64 MiB for Responses and 16 MiB for other classified JSON. Existing nginx/route over-limit behavior SHALL remain 413 before forwarding, including chunked requests; the standalone selector's defensive invalid/over-limit-reader 400 SHALL remain if those controls are bypassed. Existing `prompt_cache_retention` removal SHALL occur once before AISIX, and both AISIX and CPA SHALL receive identical sanitized bytes, including file-backed requests. It SHALL NOT decode/re-encode between attempts, truncate bodies or retry after response commitment.
+#### Scenario: Cold or expired membership
+- **WHEN** no valid set is loaded or the last successful set exceeds maximum age
+- **THEN** the request streams once to AISIX regardless of slash presence
+- **AND** discovery refresh remains background work and warnings are rate-limited
 
-The discarded eligible AISIX error SHALL NOT be emitted to the client. All other AISIX responses SHALL pass through unchanged at the inner seam, preserving status, end-to-end headers, error payloads and incremental SSE bytes. Existing timeout/connection/stream failure behavior SHALL remain effective without fallback; no whole successful stream SHALL be buffered. CPA's response SHALL be terminal, including a CPA 404 or model-not-found envelope. Existing downstream safe-error translation and internal backend retry budgets SHALL remain unchanged.
+#### Scenario: Refresh fails within maximum age
+- **WHEN** refresh fails while the previous snapshot is still within its maximum age
+- **THEN** that previous set remains usable only until its original age expires
+- **AND** failure does not reset the age or publish partial membership
 
-#### Scenario: Confirmed local absence
-- **WHEN** AISIX returns complete pre-commit 404 JSON with top-level `error.type=model_not_found`
-- **THEN** the entrance suppresses that miss response and replays the validated request once to CPA with approved credential substitution
-- **AND** no model-list lookup or cache is consulted
+#### Scenario: Model is late, malformed or duplicated in prefix
+- **WHEN** the bounded prefix cannot provide one trustworthy top-level model, including a duplicate within retained bytes
+- **THEN** retained prefix plus the unread body stream once to AISIX
+- **AND** the gateway does not grow/spool the request or retry CPA after an AISIX error
 
-#### Scenario: Existing target fails with model-not-found code
-- **WHEN** an AISIX-defined target fails with `error.type=upstream_error`, including `error.code=model_not_found` or provider HTTP 404
-- **THEN** that failure passes through unchanged and the selector does not try CPA separately
+#### Scenario: Wildcard definition cannot be deployed
+- **WHEN** local resources or an Ansible AISIX resources candidate contains a wildcard model definition in a supported naming field
+- **THEN** policy validation rejects it before activation
+- **AND** intentionally retained Axis entries and wildcard-access caller permissions are not removed
 
-#### Scenario: Non-miss or ambiguous 404
-- **WHEN** AISIX returns 404 with another type, invalid/truncated JSON or a candidate body exceeding the inspection bound
-- **THEN** that response cannot authorize fallback
-- **AND** non-miss response bytes are not lost or duplicated by inspection
-
-#### Scenario: Authentication and availability failures stop
-- **WHEN** AISIX returns 401/403, 429 or 5xx, or its connection fails or times out
-- **THEN** existing failure behavior is preserved without a CPA attempt
-
-#### Scenario: Terminal CPA does not recurse
-- **WHEN** terminal CPA returns any response, including the same status/type shape as an AISIX miss
-- **THEN** that response remains terminal and unchanged at the inner seam
+#### Scenario: Invalid discovery response preserves safety
+- **WHEN** refresh returns auth failure, malformed/truncated/oversized JSON or invalid ID data
+- **THEN** no partial set is published, prior age is preserved and expiry routes uncertain requests to AISIX
 
 ## MODIFIED Requirements
 
 ### Requirement: One backend per request with no cross-backend retry
 
-The entrance SHALL use one inference-capable backend per request, with one narrow exception: AISIX HTTP 404 JSON with top-level `error.type=model_not_found` before response commitment SHALL permit one replay to terminal CPA. This exception SHALL NOT permit model-list discovery, a cache, generic status-based fallback or retry after response commitment. A selected backend's 429, 5xx, timeout, connection failure, permission/authentication failure, provider error or stream error SHALL NOT trigger cross-backend retry. Existing error propagation and provider error behavior SHALL be preserved. Existing Sub2API account-pool retries and AISIX internal routing budgets remain applicable only within their own boundaries.
+The entrance SHALL select exactly one inference backend from bounded prefix classification and bounded-age membership, with AISIX as the uncertain default. A selected backend's 404/model-not-found, auth/ACL denial, 429, 5xx, timeout, connection failure or stream error SHALL NOT trigger retry or selection of another backend. Existing response/provider error behavior SHALL be preserved. This constraint applies to entrance selection; Sub2API account-pool retries and AISIX internal routing budgets remain within their own boundaries.
+
+#### Scenario: Model not found after selection
+- **WHEN** the selected backend returns model-not-found, including AISIX's precise 404/type signature after a stale-set race
+- **THEN** that response is terminal and the other backend is not attempted
 
 #### Scenario: Rate limit on the chosen backend
-- **WHEN** the chosen backend returns 429
-- **THEN** the client receives that failure without any attempt on the other backend
+- **WHEN** the selected backend returns 429
+- **THEN** that failure reaches the client without another backend attempt
 
 #### Scenario: Stream error after forwarding
-- **WHEN** the chosen backend's stream disconnects or errors after response commitment
-- **THEN** the failure surfaces per the existing stream error behavior
-- **AND** the other backend is never invoked for the same request
+- **WHEN** the selected stream disconnects or errors after response commitment
+- **THEN** existing stream failure behavior applies without replay or another backend attempt
+
+### Requirement: Classification scope is the model-bearing HTTP seam
+
+Classification SHALL apply only to POST `/v1/responses`, `/v1/chat/completions` and `/v1/images/generations`, including bridged WS turns sent through HTTP-only Sub2API. Selector routes SHALL take precedence over CPA-direct routes. Direct WS upgrades SHALL remain unclassified and forward to CPA without frame inspection. Non-classified paths SHALL retain their existing matching and compatibility behavior.
+
+Classification SHALL use incremental bounded-prefix scanning, not a complete-body JSON decoder. Missing, invalid or ambiguous model information in that prefix SHALL be uncertain and go to AISIX. Full-document validation beyond the committed prefix SHALL be assigned explicitly through the user compatibility decision; the retired local-400/no-forward guarantee SHALL NOT be silently claimed for a streaming body.
+
+#### Scenario: Direct WebSocket stays outside the selector
+- **WHEN** a client opens a direct WebSocket upgrade at the entrance
+- **THEN** it is forwarded to CPA without model classification or frame inspection
+
+#### Scenario: Malformed body on a classified path
+- **WHEN** classified prefix scanning encounters malformed JSON or cannot extract one trustworthy model
+- **THEN** the request streams to AISIX, whose response is terminal
+- **AND** the entrance does not buffer the rest of the body to restore the old local rejection behavior
+
+#### Scenario: Non-classified endpoint unchanged
+- **WHEN** a request is outside the enumerated classification paths
+- **THEN** existing route and compatibility processing remain distinct from uncertain classified routing
+
+### Requirement: Preserved behavior outside the routing seam
+
+Existing response streaming, model IDs, provider errors, Sub2API account/group authorization and non-chat catalog filtering SHALL be preserved. Request bytes SHALL be preserved except for an explicitly user-approved pipe-compatible retention-field removal. Complete-body validation semantics at the classified seam SHALL be documented and approved separately; they SHALL NOT be preserved by reinstating full-body decoding. Catalog visibility SHALL remain admission/authorization constrained and SHALL NOT prove invocation eligibility.
+
+#### Scenario: Streaming and body fidelity retained
+- **WHEN** a request streams to its one selected backend
+- **THEN** model bytes and response stream semantics remain intact
+- **AND** only the explicitly chosen retention transformation may alter request bytes
+
+#### Scenario: Unauthorized model stays invisible
+- **WHEN** Sub2API denies entitlement or AISIX denies its caller access to a present definition
+- **THEN** that denial remains effective without privilege escalation through discovery credentials
+- **AND** catalog-visible listing remains constrained by existing admission and authorization rules
 
 ### Requirement: Client WebSocket terminates before Sub2API
 
-The public chain SHALL be public APISIX → keepalive → keeper → responses-ws-sse-bridge → Sub2API (HTTP/SSE only) → inner `apisix-models` selector → AISIX first, then terminal CPA only on the exact pre-commit AISIX miss. Keeper SHALL remain a pure single-upstream cache with `IGNORE_CLIENT_STORE_FALSE=true`: forward and record a turn without a parent; expand a cached parent and remove `previous_response_id` before forwarding and recording; forward an unknown-parent request unchanged without recording that chain. The bridge SHALL be stateless and convert WS turns to POST/SSE without history storage or retries. Sub2API SHALL NOT be placed in front of keeper or the bridge. Reasons and native-WS tradeoffs are recorded in `docs/websocket-termination.md`.
+The public chain SHALL be public APISIX → keepalive → keeper → responses-ws-sse-bridge → Sub2API (HTTP/SSE only) → inner `apisix-models` streaming selector → one AISIX/CPA backend. Keeper SHALL remain a pure single-upstream cache with `IGNORE_CLIENT_STORE_FALSE=true`: forward/record a turn without a parent; expand a cached parent and remove `previous_response_id` before forwarding/recording; forward an unknown-parent request unchanged without recording that chain. The bridge SHALL remain stateless and convert WS turns to POST/SSE without history storage or retries. Sub2API SHALL NOT move before keeper/bridge. Reasons and native-WS tradeoffs remain in `docs/websocket-termination.md`.
 
-After the front bridge is live, every Sub2API OpenAI API-key account SHALL set `extra.openai_apikey_responses_websockets_v2_mode` to `off`, not `http_bridge`, `ctx_pool` or `passthrough`. Accounts using the unified CPA/AISIX entrance SHALL keep `credentials.base_url=http://cli-proxy-api:8317/v1`; third-party upstream accounts SHALL retain their own URLs. The retired `/rk/v1` base URL SHALL NOT be used. This requirement SHALL be met without modifying Sub2API code for gateway requirements.
+After front-bridge activation, every Sub2API OpenAI API-key account SHALL use `extra.openai_apikey_responses_websockets_v2_mode=off`, not `http_bridge`, `ctx_pool` or `passthrough`. Unified-entrance accounts SHALL retain `credentials.base_url=http://cli-proxy-api:8317/v1`; third-party accounts retain their own URLs. Retired `/rk/v1` SHALL NOT return. No Sub2API code modification is authorized.
 
 #### Scenario: Bare ID over client WebSocket
-- **WHEN** a client sends a Responses WS turn naming a bare ID through the public chain
-- **THEN** keeper forwards or expands it to the stateless bridge, which sends HTTP to Sub2API
-- **AND** Sub2API sends `POST /v1/responses` to the entrance under the AISIX-first HTTP policy
+- **WHEN** a client sends a bare-ID Responses WS turn through the public chain
+- **THEN** keeper/bridge convert it to HTTP through Sub2API and the inner pipe applies membership selection or uncertain-to-AISIX
 
 #### Scenario: Cached continuation after reconnect
-- **WHEN** a client reconnects and sends a cached parent plus new input only
-- **THEN** keeper expands the full history and removes the parent before the bridge sends the HTTP turn to Sub2API
+- **WHEN** a client reconnects with a cached parent plus new input
+- **THEN** keeper expands history and removes the parent before bridge HTTP forwarding
 
 #### Scenario: Account left on a WebSocket mode or /rk
-- **WHEN** an account uses `http_bridge`, `ctx_pool`, `passthrough` or a `/rk/v1` base URL after this cutover
-- **THEN** this violates the HTTP-only account contract, and `/rk` requests receive 404
-- **AND** the front bridge SHALL NOT be bypassed to accommodate that configuration
+- **WHEN** an account retains an unsupported WS mode or retired `/rk/v1` URL after cutover
+- **THEN** it violates the HTTP-only contract and the front bridge is not bypassed
 
 ### Requirement: CPA runs an official image with default model-prefix behavior
 
-CPA SHALL run an official upstream release image, pinned by digest, without gateway-specific source patches. Its `routing.force-model-prefix` setting SHALL be `false`, the upstream default.
-
-Gateway routing and catalog membership SHALL NOT depend on that setting:
-- the inner selector SHALL try AISIX first for all classified IDs and replay once to terminal CPA only on the exact pre-commit local miss, forwarding the original ID unchanged;
-- AISIX targets that use the CPA pool SHALL name CPA IDs that carry a CPA prefix or a CPA-registered ID containing `/`.
+CPA SHALL remain an official upstream release pinned by digest without gateway source patches. `routing.force-model-prefix` SHALL remain `false`, the upstream default. Gateway routing and catalog membership SHALL NOT depend on toggling that setting: the selector uses exact AISIX membership or uncertain-to-AISIX for both bare and slash IDs; AISIX CPA-pool targets SHALL retain prefixed or CPA-registered slash IDs. No new CPA registration, catalog rewrite or provider patch is authorized.
 
 #### Scenario: Prefixed ID reaches only its prefix's credentials
-- **WHEN** an authorized client requests `xl/gpt-6.1-sol`
-- **THEN** CPA serves it only with the credential whose prefix is `xl`, reached through the AISIX direct target when defined or through terminal fallback after the exact AISIX miss
+- **WHEN** an authorized `xl/gpt-6.1-sol` request reaches CPA through an AISIX direct target or terminal snapshot selection
+- **THEN** CPA serves it only through the `xl` credential and the model bytes are unchanged
 
 #### Scenario: Bare ID still routes to AISIX
-- **WHEN** a client requests `gpt-6.1-sol`, which AISIX defines, and CPA also registers a bare copy
-- **THEN** AISIX remains preferred and the selector does not separately invoke CPA
+- **WHEN** usable membership contains `gpt-6.1-sol` and CPA also registers a bare copy
+- **THEN** AISIX is chosen with caller credentials and no separate CPA attempt
 
 #### Scenario: Unprefixed slash ID served by its registering credential
-- **WHEN** a client requests `devin/claude-opus-5-5`, which only the Devin account registers and AISIX does not define
-- **THEN** AISIX's exact miss permits one fallback and CPA serves it with that account
+- **WHEN** usable membership lacks `devin/claude-opus-5-5` and only Devin registers it at CPA
+- **THEN** terminal CPA receives it unchanged and serves it with that account
 
 #### Scenario: AISIX target no longer registered by CPA
 - **WHEN** a CPA image change stops registering an unprefixed slash ID that an AISIX direct model names, such as `devin/deepseek-v4-1-flash` in v8.0.45
@@ -128,13 +152,13 @@ Gateway routing and catalog membership SHALL NOT depend on that setting:
 - **AND** pre-existing targets absent from CPA registration are recorded separately, not deleted as part of this change
 
 #### Scenario: Setting drift is visible
-- **WHEN** an operator inspects CPA's `force-model-prefix` setting after deployment
-- **THEN** it reads `false` through the Management API and in the persisted CPA configuration
+- **WHEN** CPA's model-prefix setting is inspected
+- **THEN** Management API and persisted config both show `false`
 
 ## REMOVED Requirements
 
 ### Requirement: Backend selection follows the model ID slash rule
 
-**Reason**: Approved pure AISIX-first priority replaces backend-specific naming conventions, including AISIX-defined slash IDs and authorized CPA-only bare fallback.
+**Reason**: Revised user Decision A chooses a bounded streaming pipe and background exact membership; B/C retain pure priority and authorized CPA-only bare selection. Error replay is rejected.
 
-**Migration**: Replace with ordered selection and the exact pre-commit 404/type miss contract after the local APISIX 3.19 prototype gate passes. Preserve validation, model bytes, credential isolation, downstream authorization, catalog, non-classified routes and stream/error behavior. Retain no-index/cache rules and document the sole narrow retry exception.
+**Migration**: Resolve client-survey prefix cap and compatibility decisions, then pass the APISIX 3.19 pipe gate. Explicitly update the cache prohibition, provision full-visibility discovery, validate wildcard-free definitions and keep selected-backend responses terminal. Catalog, authorization, default CPA registration and non-classified routes stay intact.

@@ -1,21 +1,22 @@
 ## Why
 
-`apisix-models` currently selects CPA for IDs containing `/` and AISIX otherwise. The operator approved priority-based routing: try AISIX first for every classified inference request, then CPA only when AISIX itself proves the model is undefined. This removes backend-specific naming conventions and permits later components through another ordered backend entry.
+The operator wants ordered backend selection without model-name conventions, but clarified the governing principle: **the gateway is a streaming pipe, not a bigger bucket**. Decision A is revised: reject error-driven fallback and whole-request replay. Choose one backend from a bounded request prefix and a background AISIX membership snapshot, then stream once with no cross-backend retry.
 
-The operator also requested comparison with per-request AISIX model-list lookup. Research found that listing is permission-filtered and omits wildcard definitions, so list omission is not an authoritative existence signal. The operator selected error-based fallback, pure priority for slash IDs, and authorized fallback for CPA-only bare IDs.
+AISIX 1.5.0 resolves the model only after Axum has extracted the complete JSON body. Its precise `404/error.type=model_not_found` signature therefore cannot support replay-free fallback. The local replay prototype also reproduced a pre-existing 64 MiB OOM in today's full-body cjson selector. The revised pipe must remove that decoder and pass 64 MiB under the existing 128 MiB container cap.
 
 ## What Changes
 
-**Planning only. User policy decisions are resolved; runtime implementation remains gated on a local APISIX 3.19 prototype.**
+**Planning only. Do not run the new prototype or implement until the supervisor confirms this revised plan. Retention filtering and whole-body validation semantics require explicit user decisions.**
 
-- **BREAKING:** replace literal slash selection with one Lua backend list: AISIX (caller credential, exact local-miss predicate) → terminal CPA (`CPA_API_KEY`, never advances).
-- Send every classified JSON inference request to AISIX first, regardless of slash or bare ID. Fall back at most once, only before response commitment, for HTTP 404 with a complete JSON body whose top-level `error.type` is exactly `model_not_found`.
-- Pass all other AISIX responses through unchanged at the inner seam, including `upstream_error` with `error.code=model_not_found`, other 404s, auth/permission errors, 429 and 5xx. Transport errors/timeouts retain existing client-visible failure semantics and do not retry. CPA's response, including unknown-model errors, is terminal and unchanged.
-- No model-list lookup, routing index, membership cache or last-known-good state. Retain the documentation prohibition on indexes/caches and document this one narrow cross-backend retry exception.
-- Buffer a replayable validated request within existing bounds: 64 MiB for Responses, 16 MiB for other classified JSON. Preserve bytes across both attempts after the existing `prompt_cache_retention` removal, without decode/re-encode between attempts. Preserve file-backed handling; reject over-limit requests before any attempt.
-- Log each actual AISIX→CPA fallback once at INFO with bounded, escaped model ID and request ID; no credentials or bodies in logs.
-- The 53 AISIX-defined slash direct models now enter AISIX, adding its accounting and CPA-pool credential hop. Preserve `session_id` and verify error/credential boundaries. CPA-only bare IDs can fall back when authorized; catalog membership remains unchanged and Sub2API authorization still applies.
-- Keep the classified seam: `POST /v1/responses`, `/v1/chat/completions`, `/v1/images/generations`. Preserve multipart edits→AISIX, messages/direct WS/catch-all→CPA, catalog routing/order/priority, validation and downstream safe-error handling.
+- **BREAKING:** replace literal slash routing with one ordered list: AISIX (caller credential, exact membership snapshot) → terminal CPA (`CPA_API_KEY`, no membership source). Pure priority applies to slash and bare IDs; authorized CPA-only bare IDs become callable without changing the catalog.
+- Read classified request bodies incrementally with `ngx.req.socket()` before any `read_body`. Retain at most `MAX_ROUTING_PREFIX_BYTES` (**value pending client survey; see design**), use bounded JSON scanner depth/model length, and forward prefix plus remaining chunks through a backpressured `resty.http` iterator. Never retain/spool a complete request for replay or decode it into a complete JSON object.
+- Refresh an atomic per-worker AISIX exact-ID set in a background timer, proposed every 3 seconds, with a dedicated full-visibility discovery service key never used for inference. No per-request discovery network call.
+- Route uncertain input to AISIX with the caller key, without fallback: model missing beyond the prefix cap, malformed prefix, duplicate top-level model in the retained prefix, cold or expired snapshot. After refresh failure, use a previous snapshot only to a proposed 15-second maximum age; warn with rate limiting.
+- Forbid wildcard AISIX model definitions through both local and Ansible resource validation. The list is otherwise wildcard-incomplete and permission-filtered; the dedicated key must see every concrete definition.
+- Stream one request and its response, including incremental SSE; preserve cancellation, safe headers, credentials and HTTP framing. Selected-backend errors, including model-not-found, ACL denials and transport failures, are terminal.
+- Keep ingress size ceilings at 64 MiB Responses / 16 MiB other classified JSON. With true streaming, a chunked over-limit upload may have sent bytes to its selected backend before the limit is reached; it must stop without retry, not claim pre-dispatch whole-body validation.
+- Inventory current retention removal and full-body validation exactly. Propose a bounded streaming top-level key filter or backend-owned compatibility handling, but do not silently decide either or claim unchanged validation semantics. Keep these as blocking user decisions.
+- Explicitly revise the documentation's cache prohibition: allow only this bounded, background-refreshed membership snapshot. Keep `/routing-index`, catalog-derived membership and unbounded last-known-good decisions prohibited.
 
 ## Capabilities
 
@@ -25,14 +26,14 @@ None.
 
 ### Modified Capabilities
 
-- `cpa-first-catalog-routing`: ordered AISIX-first routing, exact pre-stream miss predicate, terminal CPA fallback, credential and retry boundaries; preserve default CPA prefix registration and existing WS chain.
-- `apisix-cpa-gateway`: priority passthrough at the existing classified HTTP seam, bounded replay and incremental SSE.
+- `cpa-first-catalog-routing`: ordered snapshot-based selection, bounded prefix uncertainty and age policy, dedicated discovery credentials, no cross-backend retry, wildcard validation and unchanged authorization/catalog.
+- `apisix-cpa-gateway`: bounded streaming HTTP pipe, request/response framing, 64 MiB resource gate and explicit compatibility decision gates.
 
 ## Impact
 
-- Selector/tests: `services/routing/apisix-models/routing_selector.lua`, `routing_selector_test.lua`, and a local APISIX 3.19 stub harness wired into `ops/scripts/validate.sh`.
-- Prototype must prove byte-identical replay, incremental SSE/timing, credential swap, non-miss error boundaries, and large/over-limit bodies before the relay mechanism is locked. A Lua `resty.http` streaming relay is the candidate; native status-only interception is insufficient.
-- Documentation: short service README; policy, rejected list/cache alternatives, measured latency, deployment and rollback details in `docs/model-routing.md` during implementation.
-- Runtime: no discovery round trip on AISIX hits; misses add a measured 1.409/100.123/115.721 ms p50/p95/p99 AISIX miss round trip, plus unmeasured replay overhead. All successful streams acquire relay responsibility; no zero-overhead claim is made.
-- Deployment: existing `deploy.yml -e component=apisix-models` handles guarded image/env transactions, not tracked source-file installation. Use one reviewed manual source-file activation and component-only recreate, with saved-file rollback; do not overlap catalog Lua or public-list production windows.
-- This planning update changes no code, production state, secrets, staging or commits. All implementation tasks remain unchecked.
+- Runtime work after approval: `services/routing/apisix-models/` selector, config, template and tests; real APISIX 3.19 streaming harness at the existing `ops/scripts/validate.sh` seam. No new dependency/service is selected.
+- Discovery provisioning: dedicated AISIX key, private caller-key schema and key-generation/verification paths, Compose/Ansible secret delivery and matching examples. No secret values enter Git. This is a coupled configuration/source activation, not merely selector-file deployment.
+- Validation: extend `ops/scripts/check-aisix-resource-policy.py` and the Ansible AISIX deployment seam to reject wildcard definitions without changing the seven intentionally retained Axis entries or other routing/cooldown policy.
+- Documentation: short component README; technical decisions, new snapshot exception, limits, byte-filter semantics and rollback in `docs/model-routing.md`; reconcile affected topology/spec text.
+- Old replay prototype and its memory ablation remain rejected-alternative evidence, not acceptance of the new pipe. Task 0.1 must prove bounded memory across 1/16/64 MiB, size-independent first upstream byte, byte identity, SSE, cancellation, chunked uploads and uncertain-to-AISIX behavior.
+- No runtime implementation, production writes, new production probes or pipe prototype execution in this planning update. All implementation tasks remain unchecked.

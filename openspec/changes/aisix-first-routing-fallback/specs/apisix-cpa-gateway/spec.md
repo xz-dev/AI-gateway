@@ -1,69 +1,53 @@
 ## ADDED Requirements
 
-### Requirement: Priority passthrough to AISIX or CPA
+### Requirement: Classified inference is a bounded streaming pipe
 
-The internal instance SHALL apply AISIX-first priority to every classified JSON HTTP inference request: `POST /v1/responses`, `POST /v1/chat/completions` and `POST /v1/images/generations`, including front-bridge WS turns forwarded through Sub2API as HTTP. Slash IDs and bare IDs SHALL follow the same priority. No model-list lookup, routing index or membership cache SHALL be consulted.
+The internal instance SHALL classify only POST `/v1/responses`, `/v1/chat/completions` and `/v1/images/generations`, including front-bridge WS turns forwarded through HTTP-only Sub2API. Before any complete-body read, it SHALL read the client body incrementally and retain at most one bounded routing prefix. The prefix limit SHALL be one named constant, `MAX_ROUTING_PREFIX_BYTES`, whose **value is pending the separately requested client survey**; a numeric default SHALL NOT be silently selected before that review. Scanner depth and extracted model length SHALL also be bounded.
 
-AISIX SHALL receive the caller credential unchanged. Only HTTP 404 with a complete pre-commit JSON body whose top-level `error.type` equals `model_not_found` SHALL allow one fallback to terminal CPA with the CPA service credential. Other AISIX responses SHALL pass through unchanged at the inner seam; neither other 404s nor `upstream_error` with `error.code=model_not_found` SHALL qualify. CPA's final status, body and end-to-end headers, including its unknown-model error, SHALL pass through unchanged without another attempt. Existing downstream safe-error handling SHALL remain in force.
+The gateway SHALL NOT decode a complete inference body into a JSON document, retain/spool the complete request for replay, or make an inference-path discovery network request. After one backend choice, it SHALL forward the retained prefix once followed by unread chunks through a backpressured body iterator. It SHALL stream the response incrementally, preserving status, end-to-end headers, model/session identifiers, payload bytes and SSE event bytes, except an explicitly approved retention-field transformation. It SHALL handle cancellation and HTTP framing without retrying another backend.
 
-The entrance SHALL buffer a replayable request before forwarding, within existing limits: 64 MiB for Responses and 16 MiB for the other classified JSON endpoints. It SHALL preserve file-backed handling. Normal nginx/route over-limit rejection SHALL remain 413 before any backend attempt; the selector's defensive invalid/over-limit reader behavior SHALL remain an explicit 400 if boundary controls are bypassed. It SHALL NOT truncate or partially send an over-limit body. Model IDs SHALL remain unchanged. Apart from the existing `prompt_cache_retention` removal performed once before forwarding, request bytes SHALL be preserved. Both attempts SHALL receive byte-identical validated/sanitized bodies without reserialization between attempts.
+Ingress limits SHALL remain 64 MiB for Responses and 16 MiB for other classified JSON. The pipe SHALL successfully handle 64 MiB Responses within the existing 128 MiB container cap; the old whole-body decoder's OOM SHALL NOT waive this gate. Known over-limit lengths SHALL be rejected before forwarding where possible. When a chunked/unknown-length upload crosses its limit after streaming begins, the pipe SHALL stop and close its selected upstream without replay, returning 413 if response commitment permits; it SHALL NOT claim no bytes reached that upstream.
 
-The entrance SHALL preserve status, end-to-end headers, incremental SSE bytes, cancellation and existing timeout/error behavior. It SHALL NOT buffer a whole successful stream, rewrite events or retry after response commitment. Ambiguous, invalid, incomplete or oversized candidate 404 bodies SHALL NOT authorize fallback; any inspected non-miss response bytes SHALL be forwarded without loss or duplication. Transport errors and timeouts SHALL retain existing client-visible failure semantics without invoking CPA. Each actual fallback SHALL produce one visible INFO log with bounded escaped model ID and non-secret request ID, without keys or bodies.
+Malformed/incomplete/duplicate model information within the retained prefix SHALL follow uncertain-to-AISIX routing, not the retired local whole-document validation contract. Complete-document validation and retention-removal semantics SHALL require explicit user agreement as specified below before implementation is locked. Requests outside classification SHALL retain current routing/compatibility behavior: multipart edits to AISIX, messages/direct WS/catch-all to CPA, catalog to model-catalog. Catalog membership/order/priority and Sub2API authorization SHALL remain unchanged.
 
-Malformed classified payloads SHALL fail explicitly before forwarding. Requests outside classification SHALL retain current behavior: multipart `POST /v1/images/edits` to AISIX, direct WebSocket upgrades and other catch-all endpoints (including `/v1/messages`) to CPA. Catalog routes, membership, ordering and priority SHALL remain unchanged. Raw source-discovery traffic SHALL NOT traverse this entrance. Sub2API authorization SHALL remain effective, including for catalog-hidden CPA-only bare IDs.
+#### Scenario: Large body has an early model
+- **WHEN** accepted 1, 16 and 64 MiB Responses bodies expose the same model in the same early prefix and continue uploading
+- **THEN** the gateway begins forwarding to its one selected backend before client EOF with first-byte latency independent of total body size
+- **AND** request memory stays bounded by prefix/chunk state rather than body length, under the existing container cap
 
-#### Scenario: AISIX-defined slash ID reaches AISIX
-- **WHEN** an authorized classified request names an AISIX-defined slash direct model
-- **THEN** AISIX receives the caller credential and unchanged model ID, as for a bare logical model
-- **AND** its response passes through without a separate selector-originated CPA attempt
+#### Scenario: Chunked upload remains a pipe
+- **WHEN** a classified request arrives with chunked transfer encoding
+- **THEN** decoded payload bytes are forwarded incrementally with correct upstream framing and no whole-body spool
+- **AND** crossing the applicable limit stops the selected upload without replay or a credential change to another backend
 
-#### Scenario: Confirmed miss replays once to CPA
-- **WHEN** AISIX returns HTTP 404 JSON with top-level `error.type=model_not_found` before response commitment
-- **THEN** CPA receives the identical validated body with only the approved credential/header substitution
-- **AND** AISIX's miss is suppressed, fallback is logged at INFO with model/request ID, and CPA's final response is terminal
+#### Scenario: SSE passes through incrementally
+- **WHEN** the selected backend emits delayed/split data or event frames, including reasoning/encrypted items
+- **THEN** the same SSE bytes reach the downstream incrementally before backend EOF without event rewriting or complete-response buffering
 
-#### Scenario: SSE streaming passes through
-- **WHEN** Sub2API sends a streaming `POST /v1/responses` request and the serving backend emits delayed or split SSE frames
-- **THEN** the same SSE bytes arrive incrementally before backend EOF, without full-response buffering or event rewriting
-- **AND** no fallback occurs after response commitment
+#### Scenario: Client cancels an upload or stream
+- **WHEN** the client disconnects while upload or response forwarding is active
+- **THEN** upstream I/O stops, incomplete connections are closed and retained prefix/chunk resources are released
+- **AND** no other backend is attempted
 
-#### Scenario: File-backed request is replayed within bounds
-- **WHEN** an accepted file-backed Responses request receives the exact AISIX miss envelope
-- **THEN** both attempts receive identical sanitized bytes and the original model/session identifiers
-- **AND** the 64 MiB Responses limit and 16 MiB other-JSON limit remain effective without duplicate whole-response buffering
+#### Scenario: Non-classified routes are unchanged
+- **WHEN** a multipart edit, direct WebSocket upgrade, catch-all message or catalog request reaches its existing route
+- **THEN** it keeps its current upstream and compatibility processing without entering the classified pipe
 
-#### Scenario: Over-limit request is rejected before forwarding
-- **WHEN** a body exceeds its normal endpoint limit, including a chunked body crossing that limit
-- **THEN** nginx or route body controls return 413 before either backend receives an inference attempt
-- **AND** no truncation or fallback occurs
+### Requirement: Pipe compatibility changes require an explicit contract
 
-#### Scenario: Direct WebSocket passes through to CPA
-- **WHEN** a client opens a direct WebSocket upgrade on `/v1/responses`
-- **THEN** the upgrade and frames pass through to CPA without classification
-- **AND** public bare-ID WS support SHALL instead use keeper → stateless responses-ws-sse-bridge → HTTP-only Sub2API with API-key account WS mode `off`
-- **AND** keeper SHALL retain `IGNORE_CLIENT_STORE_FALSE=true`; Sub2API SHALL NOT move in front of keeper/bridge or use `passthrough`/`ctx_pool` for this chain, as explained in `docs/websocket-termination.md`
+Before implementation or mechanism lock, the change SHALL enumerate existing complete-body validation and `prompt_cache_retention` stripping by route and obtain explicit user decisions for pipe-compatible handling. The implementation SHALL NOT preserve compatibility by reinstating complete-body buffering or silently drop the stripping behavior.
 
-#### Scenario: Non-miss 404 is passed through
-- **WHEN** AISIX returns 404 with another error type, including `upstream_error` whose code is `model_not_found`
-- **THEN** its status/body pass through unchanged at the inner seam and CPA is not attempted by the selector
+A bounded streaming top-level key filter and backend-owned stripping SHALL remain proposed alternatives until chosen. A filter SHALL remove only the approved top-level field and required separator, preserve other bytes and correctly re-frame changed length. Backend-owned handling SHALL require evidence that the relevant backend actually supports equivalent removal; a backend patch or ignored compatibility error SHALL NOT be inferred as authorized. Complete JSON validity and duplicates beyond an already-forwarded prefix cannot be guaranteed before dispatch; delegation to the backend SHALL be acknowledged as a change to the former local-400/no-forward behavior.
 
-#### Scenario: Chosen backend failure does not re-route
-- **WHEN** AISIX or terminal CPA returns auth/permission failure, 429/5xx, provider error, timeout, connection error or mid-stream failure
-- **THEN** existing response/transport failure behavior is preserved without a separate attempt on the other backend
-
-#### Scenario: Malformed classified payload does not fall through
-- **WHEN** a classified path receives malformed JSON or lacks a valid top-level model ID
-- **THEN** the entrance returns an explicit protocol-shaped error before forwarding
-
-#### Scenario: Denied caller cannot gain service-key access
-- **WHEN** authorization rejects invocation at Sub2API or AISIX returns an authentication/permission error
-- **THEN** the denial remains effective and cannot trigger service-key fallback
-- **AND** catalog hiding alone is not used as an authorization decision
+#### Scenario: Compatibility decision is not yet made
+- **WHEN** retention filtering, complete-document validation delegation or the request-prefix cap remains unresolved
+- **THEN** planning records the open decision and implementation/mechanism lock remains blocked
+- **AND** no full-body parser, replay buffer or unapproved backend modification is introduced as a workaround
 
 ## REMOVED Requirements
 
 ### Requirement: Slash-rule passthrough to CPA or AISIX
 
-**Reason**: Approved pure priority replaces slash naming conventions for classified inference, including AISIX-defined slash direct models and authorized CPA-only bare IDs.
+**Reason**: The user selected ordered membership-based routing with a bounded streaming pipe instead of slash conventions or error replay. Uncertain prefixes deliberately go to AISIX; pre-dispatch complete-body validation is no longer assumed.
 
-**Migration**: Replace with priority passthrough at the same HTTP seam after the local APISIX 3.19 replay/SSE/credential/limit prototype gate passes. Preserve validation, credential isolation, non-classified routes, catalog and downstream authorization/error handling. Only the exact pre-commit AISIX miss permits one retry; no lookup/cache or generic provider-error retry is introduced.
+**Migration**: Resolve the prefix survey and explicit compatibility decisions, then prove the APISIX 3.19 pipe gate before replacing the classified seam. Keep non-classified routes, catalog, authorization, credentials and terminal backend errors. No error-based cross-backend fallback is permitted.
