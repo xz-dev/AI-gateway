@@ -163,7 +163,7 @@ test("sync_max_context_window: enabled, per-model glob list, and off", async (t)
   assert.deepEqual(await max(""), { "xl/a": 872000, "xl/keep-b": 872000, "aihub/c": 872000, "aihub/low": 500000, "aihub/none": 500000, "aihub/explicit": 100 });
 });
 
-test("membership comes from authority only; preserveNative rows are emitted unchanged", async (t) => {
+test("membership comes from authority only; fallback rows are emitted unchanged and bare IDs are not admitted", async (t) => {
   const conflictRow = { slug: "oauth/route", default_reasoning_level: "xhigh", supported_reasoning_levels: levels("low"), unknown: null };
   const h = await harness(t, {
     channels: channels([{ prefix: "codex", models: ["m"] }]),
@@ -171,15 +171,37 @@ test("membership comes from authority only; preserveNative rows are emitted unch
     upstream: { "https://codex.example/v1/models?client_version=1.0.0": { data: [{ id: "m" }, { id: "m-new", context_length: 5 }] } },
     yaml: `metadata:\n  chain: ["@cpa-upstream", "@self"]\n`,
   });
-  // An unreadable identity list keeps unmatched prefixed rows as unchanged CPA records.
+  // An unreadable prefix input keeps CPA's slash rows as unchanged records.
   h.fake.identity = (_req, res) => json(res, {}, 503);
   const models = await codex(h);
   const slugs = models.map((model) => model.slug);
   assert.ok(slugs.includes("codex/m"));
-  assert.ok(slugs.includes("my-alias"), "admitted unprefixed models are listed");
+  assert.ok(!slugs.includes("my-alias"), "fallback admits no bare CPA ID");
   assert.ok(!slugs.includes("codex/m-new"), "channel-only models never appear");
   const preserved = models.find((model) => model.slug === "oauth/route");
   assert.deepEqual(preserved, conflictRow, "preserveNative rows keep CPA content as-is");
+});
+
+test("D1 order and D5: CPA rows win over AISIX; an AISIX bare ID never takes CPA's bare row", async (t) => {
+  let status = 200;
+  const aisix = await serve((_req, res) => json(res, { data: [{ id: "gpt-6.1-sol" }, { id: "codex/m" }, { id: "Router/Only" }, { id: "router/only" }, { id: "router/only" }] }, status));
+  t.after(() => aisix.close());
+  const h = await harness(t, {
+    channels: channels([{ prefix: "codex", models: ["m", "gpt-6.1-sol"] }]),
+    native: [native("codex/m", { context_window: 1000 }), native("gpt-6.1-sol", { context_window: 999 }), native("codex/gpt-6.1-sol")],
+    aisix: aisix.url,
+    yaml: `metadata:\n  chain: ["@self"]\nstatic_models:\n  - slug: alias/a\n    inherit: [codex/m]\n  - slug: codex/m\n`,
+  });
+  const models = bySlug(await codex(h));
+  assert.deepEqual([...models.keys()], ["codex/m", "codex/gpt-6.1-sol", "gpt-6.1-sol", "Router/Only", "router/only", "alias/a"]);
+  assert.equal(models.get("codex/m")!.context_window, 1000, "the CPA-admitted row is the base for an ID in both sources");
+  assert.equal(models.get("gpt-6.1-sol")!.context_window, undefined, "CPA's non-admitted bare row is never @self");
+  assert.equal(models.get("gpt-6.1-sol")!.display_name, undefined);
+
+  // An AISIX failure removes only AISIX members.
+  status = 401;
+  await h.owner.refresh({ bypass: true });
+  assert.deepEqual([...bySlug(await codex(h)).keys()], ["codex/m", "codex/gpt-6.1-sol", "alias/a"]);
 });
 
 test("@cpa-upstream reads only channels whose kept models need it; Ollama rows come from /api/show", async (t) => {
@@ -211,7 +233,7 @@ channels:
   ]);
 });
 
-test("AISIX-only IDs are supplemented and enriched through the chain", async (t) => {
+test("AISIX-only IDs are members and enriched through the chain", async (t) => {
   const aisix = await serve((_req, res) => json(res, { data: [{ id: "codex/m" }, { id: "router/only" }] }));
   t.after(() => aisix.close());
   const h = await harness(t, {

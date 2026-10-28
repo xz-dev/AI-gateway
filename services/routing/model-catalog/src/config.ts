@@ -31,6 +31,8 @@ export interface GatewayConfig {
   readonly staticModels: readonly StaticModel[];
   /** Full output slug → full output slug whose metadata it copies. */
   readonly metadataFrom: ReadonlyMap<string, string>;
+  /** `membership.cpa_include`: ordered glob rules admitting CPA IDs without a CPA prefix. */
+  readonly cpaInclude: SyncRules | undefined;
   /** true = every non-native entry, false = none, or the ordered glob rules selecting models. */
   readonly syncMaxContextWindow: boolean | SyncRules;
   readonly aisixModelsUrl: string;
@@ -46,7 +48,7 @@ const LEGACY: Readonly<Record<string, string>> = {
   global_fallback: "write the rule's chain explicitly; @default inserts the root chain in place",
   exclude_models: 'use metadata.include_models, e.g. ["**", "!<model-id>"]',
   fetch_models: "remove it; channel upstream rows are read only when a chain contains @cpa-upstream",
-  bare_models_takeover: 'remove it; unprefixed models are always listed (hide them with metadata.include_models: ["*/**"])',
+  bare_models_takeover: 'remove it; CPA IDs without a CPA prefix are admitted only through membership.cpa_include (hide members with metadata.include_models: ["*/**"])',
 };
 const LEGACY_CHANNEL: Readonly<Record<string, string>> = {
   ...LEGACY,
@@ -71,6 +73,7 @@ const ROOT_KEYS = new Set([
   "custom_channels",
   "static_models",
   "metadata_from",
+  "membership",
   "sync_max_context_window",
   "aisix_models_url",
   "aisix_timeout",
@@ -113,11 +116,10 @@ function nonEmptyString(value: unknown, path: string): string {
   return value as string;
 }
 
-function readSyncMaxContextWindow(value: unknown): boolean | SyncRules {
-  const path = "sync_max_context_window";
-  if (value === undefined || typeof value === "boolean") return value ?? false;
-  if (!Array.isArray(value)) fail(path, "expected true, false or a list of model ID globs");
-  if ((value as unknown[]).length === 0) fail(path, "an empty list selects no model; use false or omit the field");
+/** An ordered `include_models`-style glob list; an empty list is rejected with `emptyReason`. */
+function readGlobList(value: unknown, path: string, emptyReason: string): SyncRules {
+  if (!Array.isArray(value)) fail(path, "expected a list of model ID globs");
+  if ((value as unknown[]).length === 0) fail(path, emptyReason);
   return (value as unknown[]).map((item, index) => {
     const at = `${path}[${index}]`;
     if (typeof item !== "string" || item === "") fail(at, "expected a non-empty glob string");
@@ -133,6 +135,22 @@ function readSyncMaxContextWindow(value: unknown): boolean | SyncRules {
     }
     return { raw, exclude, glob };
   });
+}
+
+function readSyncMaxContextWindow(value: unknown): boolean | SyncRules {
+  const path = "sync_max_context_window";
+  if (value === undefined || typeof value === "boolean") return value ?? false;
+  if (!Array.isArray(value)) fail(path, "expected true, false or a list of model ID globs");
+  return readGlobList(value, path, "an empty list selects no model; use false or omit the field");
+}
+
+function readCpaInclude(value: unknown): SyncRules | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) fail("membership", "expected a mapping");
+  const membership = value as Row;
+  checkKeys(membership, "membership", new Set(["cpa_include"]), {});
+  if (membership.cpa_include === undefined) return undefined;
+  return readGlobList(membership.cpa_include, "membership.cpa_include", "an empty list admits no model; omit the field");
 }
 
 function readOverrides(value: unknown, path: string): Row | undefined {
@@ -241,6 +259,7 @@ export function parseConfig(text: string): GatewayConfig {
     customChannels,
     staticModels,
     metadataFrom,
+    cpaInclude: readCpaInclude(root.membership),
     syncMaxContextWindow: readSyncMaxContextWindow(root.sync_max_context_window),
     aisixModelsUrl: root.aisix_models_url === undefined ? "" : nonEmptyString(root.aisix_models_url, "aisix_models_url"),
     aisixTimeoutMs: Math.min(optionalDuration(root, "aisix_timeout", channelTimeoutMs), overallDeadlineMs),

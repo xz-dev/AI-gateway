@@ -84,7 +84,7 @@ export async function harness(t: { after(fn: () => unknown): void }, options: Ha
   const { client } = cpaClient(server.url, { cache, log });
   const config = parseConfig(`cpa_base_url: ${server.url}\n${options.yaml}`);
   const aisix = options.aisix ? new AisixClient(options.aisix, "", client.pool, cache) : undefined;
-  const owner = new AuthorityOwner({ cpa: client, aisix, staticSlugs: new Set(config.staticModels.map((m) => m.slug)), cpaTimeoutMs: 5_000, aisixTimeoutMs: 5_000, log });
+  const owner = new AuthorityOwner({ cpa: client, aisix, staticSlugs: new Set(config.staticModels.map((m) => m.slug)), cpaInclude: config.cpaInclude, cpaTimeoutMs: 5_000, aisixTimeoutMs: 5_000, log });
   const deps = { config, cpa: client, workerFile: WORKER, tablesPath: await writeTables(dir, options.providers ?? {}), log };
   const outputs = await OutputStore.open(join(dir, "cache", "out"), PINNED_KEYS);
   const service = new CatalogService({ build: deps, owner, outputs, log, clock });

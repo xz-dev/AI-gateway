@@ -19,6 +19,14 @@ The inner models gateway (`apisix-models`) picks the backend from the literal `m
 
 Do not reintroduce `/routing-index` lookups, last-known-good caches or a "registered provider" check.
 
+CPA runs with its default `force-model-prefix: false`. Each model of a prefixed credential is registered twice, as `x` and `P/x`:
+
+- `P/x` is served only by the credential whose prefix is `P`;
+- a bare `x` never reaches CPA, because the selector sends IDs without `/` to AISIX;
+- an unprefixed slash ID (`devin/<model>`, or an upstream original such as `deepseek/…`) reaches CPA unchanged and is served by the credential that registers it.
+
+The catalog lists only the IDs in model-catalog's [membership rule](model-catalog.md#membership), so clients see prefixed IDs and AISIX IDs, not CPA's bare copies.
+
 ## Topology
 
 ```text

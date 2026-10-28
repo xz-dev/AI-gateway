@@ -78,7 +78,7 @@ CPA-admitted(id) =
 - It only admits CPA IDs that have no CPA prefix. Hiding stays with `include_models`.
 - Validation:
   - an absent field means no exceptions;
-  - an empty list, a non-string entry, a bad pattern or an unknown key fails closed, like the rest of `config.ts`.
+  - an empty list, a non-string entry, an empty pattern or a lone `!` or an unknown key fails closed, like the rest of `config.ts`.
 - The private config sets `["devin/*"]`. The tracked example shows it commented out with the Devin reason.
 
 ### D4 Native passthrough, compatibility mode and fallback

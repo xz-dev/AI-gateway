@@ -1,7 +1,7 @@
 ## 1. model-catalog
 
-- [ ] 1.1 Config (design D3): add the root `membership` block with `cpa_include`, compiled with the `include_models` matcher. Update the tracked `config.yaml` (commented example with the Devin reason) and the local private config (`membership.cpa_include: ["devin/*"]`). Verify: `tests/config.test.ts` covers absent, valid, empty list, non-string entry, bad pattern and unknown `membership` key, each with the field named in the error; `npm run typecheck` passes.
-- [ ] 1.2 Authority (D1, D2, D4): in `authority.ts`, replace `readIdentities`/`admitModels` with:
+- [x] 1.1 Config (design D3): add the root `membership` block with `cpa_include`, compiled with the `include_models` matcher. Update the tracked `config.yaml` (commented example with the Devin reason) and the local private config (`membership.cpa_include: ["devin/*"]`). Verify: `tests/config.test.ts` covers absent, valid, empty list, non-string entry, bad pattern and unknown `membership` key, each with the field named in the error; `npm run typecheck` passes.
+- [x] 1.2 Authority (D1, D2, D4): in `authority.ts`, replace `readIdentities`/`admitModels` with:
   - prefix discovery: key-channel prefixes, and OAuth `P/x` + `x` pairs from `auth-files/models`;
   - the `force-model-prefix` read;
   - the admission rule, passthrough, compatibility mode and fallback.
@@ -17,28 +17,28 @@
   - the force refresh bypassing the new reads.
 
   The old identity tests are removed or rewritten, not skipped.
-- [ ] 1.3 AISIX and build (D5): AISIX contributes every ID. `supplementalIDs` is removed and `build.ts` takes members in the D1 order. A CPA-admitted row wins over AISIX, and a non-admitted CPA bare row is never `@self`. Verify: `tests/catalog.test.ts` and `tests/authority.test.ts` cover:
+- [x] 1.3 AISIX and build (D5): AISIX contributes every ID. `supplementalIDs` is removed and `build.ts` takes members in the D1 order. A CPA-admitted row wins over AISIX, and a non-admitted CPA bare row is never `@self`. Verify: `tests/catalog.test.ts` and `tests/authority.test.ts` cover:
   - an ID in both sources;
   - an AISIX bare ID that CPA also lists bare;
   - duplicates and case-distinct IDs;
   - an AISIX failure that keeps CPA membership.
-- [ ] 1.4 Parity fixture: add a test built from the shape of the 2026-10-27 production data. It uses synthetic IDs that keep each category and count ratio, not private values. Two CPA variants:
+- [x] 1.4 Parity fixture: add a test built from the shape of the 2026-10-27 production data. It uses synthetic IDs that keep each category and count ratio, not private values. Two CPA variants:
   - a forced-prefix manifest, prefixes only;
   - a default manifest, with bare copies and bare slash originals added.
 
   Verify: after `include_models`, both variants give the same member set and passthrough set, and the default variant admits no bare or unprefixed slash IDs outside `cpa_include`.
-- [ ] 1.5 Full suite and image. Verify:
+- [x] 1.5 Full suite and image. Verify:
   - `npm ci && npm run typecheck && npm test && npm run build` pass in `services/routing/model-catalog`;
   - `podman build` succeeds;
   - `ops/scripts/validate.sh .env.example` passes, with `compose.override.yaml` moved to `/var/tmp` and restored.
 
 ## 2. CPA pin and docs
 
-- [ ] 2.1 Re-resolve the latest official CPA release and its index digest (`eceasy/cli-proxy-api`). Pin it in `compose.yaml`, `.env.example` and the private `.env`, and record the old digest for rollback. Verify:
+- [x] 2.1 Re-resolve the latest official CPA release and its index digest (`eceasy/cli-proxy-api`). Pin it in `compose.yaml`, `.env.example` and the private `.env`, and record the old digest for rollback. Verify:
   - the digest pulls;
   - `ops/scripts/validate.sh .env.example` passes;
   - no tracked file references `xz-dev/cli-proxy-api` outside `docs/records`.
-- [ ] 2.2 Docs:
+- [x] 2.2 Docs:
   - `docs/model-catalog.md`: membership rule, `membership.cpa_include`, prefix discovery, compatibility mode; remove the identity-admission text;
   - `docs/catalog.md`;
   - `docs/add-openai-compatible-provider.md`: CPA lists both bare and prefixed IDs; the catalog admits prefixed IDs; how to add a `cpa_include` glob;

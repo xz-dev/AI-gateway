@@ -1,4 +1,4 @@
-// Local CPA stand-in: native manifest, management channel lists, identity endpoints and api-call.
+// Local CPA stand-in: native manifest, management channel lists, prefix endpoints and api-call.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { CHANNEL_KINDS, CpaClient } from "../src/cpa.ts";
 import { HttpPool } from "../src/http.ts";
@@ -13,7 +13,9 @@ export interface FakeCPA {
   nativeStatus?: number;
   /** Body for GET /v0/management/openai-compatibility. */
   channels?: string;
-  /** Identity endpoints (auth-files, model-definitions, oauth-model-alias); default: no auth files. */
+  /** CPA's `force-model-prefix` setting; default false (the upstream default). */
+  forceModelPrefix?: boolean;
+  /** Prefix endpoints (auth-files, auth-files/models, force-model-prefix); default: no auth files. */
   identity?: (req: IncomingMessage & { body: string }, res: ServerResponse) => void;
   apiCall?: (payload: { method: string; url: string; header: Record<string, string>; data?: string; auth_index?: string }, res: ServerResponse) => void;
   calls: string[];
@@ -36,8 +38,9 @@ export async function serveCPA(fake: FakeCPA): Promise<TestServer> {
       if (!fake.apiCall) return json(res, { status_code: 404, body: "" });
       return fake.apiCall(JSON.parse(req.body), res);
     }
-    if (url.pathname.startsWith("/v0/management/auth-files") || url.pathname.startsWith("/v0/management/model-definitions/") || url.pathname === "/v0/management/oauth-model-alias") {
+    if (url.pathname.startsWith("/v0/management/auth-files") || url.pathname === "/v0/management/force-model-prefix") {
       if (fake.identity) return fake.identity(req, res);
+      if (url.pathname === "/v0/management/force-model-prefix") return json(res, { "force-model-prefix": fake.forceModelPrefix ?? false });
       if (url.pathname === "/v0/management/auth-files") return json(res, { files: [] });
       return json(res, {}, 404);
     }

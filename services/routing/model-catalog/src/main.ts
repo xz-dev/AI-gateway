@@ -122,6 +122,7 @@ async function serve(): Promise<number> {
     cpa,
     aisix,
     staticSlugs: new Set(config.staticModels.map((model) => model.slug)),
+    cpaInclude: config.cpaInclude,
     cpaTimeoutMs: deadlineMs,
     aisixTimeoutMs: config.aisixTimeoutMs,
     log,

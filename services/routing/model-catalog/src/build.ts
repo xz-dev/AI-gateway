@@ -75,7 +75,7 @@ export async function prepare(deps: BuildDeps, authority: AuthorityGeneration, s
     seen.add(model.id);
     members.push({ id: model.id, origin: "cpa", row: rows[model.index], preserveNative: model.preserveNative });
   }
-  for (const id of authority.supplemental) {
+  for (const id of authority.aisixIDs) {
     if (seen.has(id)) continue;
     seen.add(id);
     members.push({ id, origin: "aisix", preserveNative: false });

@@ -95,6 +95,23 @@ test("sync_max_context_window: boolean or an ordered glob list with include_mode
   rejects("sync_max_context_window: yes-please", /^sync_max_context_window: expected true, false or a list/);
 });
 
+test("membership.cpa_include: absent, valid and every invalid shape names the field", () => {
+  assert.equal(parseConfig(base).cpaInclude, undefined, "absent field: no exceptions");
+  assert.equal(parseConfig(`${base}membership: {}\n`).cpaInclude, undefined);
+  assert.deepEqual(parseConfig(`${base}membership:\n  cpa_include: ["devin/*", "!devin/model_private_*"]\n`).cpaInclude, [
+    { raw: "devin/*", exclude: false, glob: "devin/*" },
+    { raw: "!devin/model_private_*", exclude: true, glob: "devin/model_private_*" },
+  ]);
+  rejects("membership:\n  cpa_include: []", /^membership\.cpa_include: an empty list admits no model/);
+  rejects("membership:\n  cpa_include: [1]", /^membership\.cpa_include\[0\]: expected a non-empty glob/);
+  rejects("membership:\n  cpa_include: devin/*", /^membership\.cpa_include: expected a list/);
+  // Bad patterns: what the shared compileModelPattern/include_models validation rejects.
+  rejects('membership:\n  cpa_include: [""]', /^membership\.cpa_include\[0\]: expected a non-empty glob/);
+  rejects('membership:\n  cpa_include: ["devin/*", "!"]', /^membership\.cpa_include\[1\]: `!` must be followed/);
+  rejects("membership:\n  typo: 1", /^membership\.typo: unknown field/);
+  rejects("membership: [devin/*]", /^membership: expected a mapping/);
+});
+
 test("the tracked example configuration is valid", async () => {
   const { readFile } = await import("node:fs/promises");
   const config = parseConfig(await readFile(new URL("../config.yaml", import.meta.url), "utf8"));
