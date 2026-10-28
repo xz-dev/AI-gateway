@@ -17,14 +17,15 @@ Constraints:
   - `config.yaml` and `apisix.yaml` as **single-file bind mounts**. A replaced file (a new inode) is not seen by the running container.
   - `lua/` as a **directory** mount. A replaced file is seen, but OpenResty caches `require`d modules per worker until the workers restart.
   - `worker_processes: 1`.
-- `ops/ansible/playbooks/deploy.yml -e component=apisix` uploads only `compose.yaml`, `compose.override.yaml` and `.env`. If they are unchanged it reports a verified no-op and does not restart anything. No playbook deploys tracked service files. Tracked front-door Lua has historically been deployed in a reviewed manual window.
+- `ops/ansible/playbooks/deploy.yml -e component=apisix` uploads only `compose.yaml`, `compose.override.yaml` and `.env`. If they are unchanged it reports a verified no-op and does not restart anything. `deploy-config.yml` accepts only `aisix`, `egress-proxy`, `cpa-model-sync` and `model-catalog`; the shared `ai_ops_managed_file` role is wired to those roles only. No playbook deploys the front door's `apisix.yaml` or `lua/`. Tracked front-door files have historically been deployed in a reviewed manual window.
+- `cloudflared-apisix-relay` depends on `apisix` with `condition: service_started` and no `restart: true`, so a `--no-deps` recreate of `apisix` does not restart it. It is a forking socat relay, so new connections reach the new container.
 - The test harness `lua/model_list_intersection_test.lua` runs under `resty` in the pinned APISIX image, uses fake `ngx` and `resty.http` objects, and is executed by `ops/scripts/validate.sh` (and therefore CI).
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Give the plain public model list the same order rule as model-catalog's `compareCatalogIDs`, with no change to members, record bytes, auth or error behavior.
-- Keep the change to one Lua file and deploy it without interrupting in-flight public streams.
+- Keep the change to the front door's Lua module and its plain route, with a clean entry-point name, activated by one reviewed front-door recreate.
 
 **Non-Goals:**
 - Changing Sub2API or its entitlement model.
@@ -45,13 +46,15 @@ The body is reordered only when it is a recognized 2xx collection.
 
 *Alternative*: a `body_filter` on the proxied response. It would have to buffer chunks across calls, delete `Content-Length` in `header_filter` before the body is known, and handle compression and early errors in a second code path. The fetch-and-respond pattern already exists and is tested in this file, so it is reused.
 
-### D2: Lua-only change; the existing `admit()` entry becomes the plain-list handler
+### D2: New `_M.list` entry point; `_M.admit` stays the admission slot (user decision)
 
-`apisix.yaml` is a single-file bind mount (Context), so changing it means either recreating the public front door, which interrupts every in-flight SSE and WebSocket stream, or an in-place write that relies on standalone file watching. To avoid both, the route keeps calling `require("model_list_intersection").admit(_, ctx)`.
+The module gains `_M.list(_, ctx)`, the plain-list handler: take the admission slot through the existing `_M.admit`, then D1. `_M.admit`, `_M.release` and `_M.run` keep their current behavior and names.
 
-`_M.admit` becomes the plain-list entry point: admission, then D1. The intersection's `run()` switches to a local `admit_request()`, the current admission body, so its behavior is unchanged. A one-line comment on `_M.admit` records that it is the `ai-api-models-get` entry, kept under this name to avoid a front-door recreate. The rename waits for the next window that recreates the front door anyway.
+`apisix.yaml` route `ai-api-models-get` changes its rewrite-phase pre-function from `require("model_list_intersection").admit(_, ctx)` to `require("model_list_intersection").list(_, ctx)`, with the same `if status then return status, body, headers end` shape. Its log-phase `release()` post-function, `upstream_id: sub2api` and `plugin_config_id` stay unchanged. The upstream is no longer contacted by the proxy phase, because `list()` always returns a status, but keeping it leaves the route's static shape and `apisix test` unchanged.
 
-*Alternative*: a new `_M.list` called from `apisix.yaml`. The name is clearer, but it costs a public front-door recreate (D5).
+`apisix.yaml` is a single-file bind mount (Context), so the route change takes effect only when the front door is recreated (D5). The user accepted that cost for a clean name.
+
+*Rejected alternative*: reuse `_M.admit` as the plain-list handler and activate by `SIGHUP` reload without touching `apisix.yaml`. It avoids the recreate but leaves a misleading entry name.
 
 ### D3: Recognition and ordering
 
@@ -94,24 +97,21 @@ For both pass-through cases, the existing `OMIT_RESPONSE_HEADERS` set drops Sub2
 
 **Streaming and caching**: the list is a single JSON document and was never streamed. It is now fully buffered under the existing 64 MiB limit. There is no front-door cache: per-key entitlement makes the body private, and caching stays confined to model-catalog's upstream reads (docs/catalog.md).
 
-### D5: Activation by graceful reload in a reviewed manual window
+### D5: Activation by one front-door recreate in a reviewed manual window (user decision)
 
-Production changes only `services/firewall/apisix/lua/model_list_intersection.lua`, which is visible through the directory mount. Steps:
+Production changes two tracked files: `services/firewall/apisix/lua/model_list_intersection.lua` and `services/firewall/apisix/apisix.yaml`. No Ansible path can carry them (Context): `deploy.yml -e component=apisix` is a no-op when Compose and `.env` are unchanged, and `deploy-config.yml` has no front-door component. So, as in earlier front-door migrations, the deploy is a reviewed manual window. Steps:
 
-1. Back it up.
-2. Upload it and check its SHA-256 against the reviewed commit.
-3. Send `SIGHUP` to the OpenResty master (`docker kill --signal HUP ai-gateway-apisix-1`). The master starts new workers that load the new module. Old workers finish their in-flight requests, including long streams, within `worker_shutdown_timeout`.
+1. Back up both live files.
+2. Upload both and check each SHA-256 against the reviewed commit. Upload order is safe either way: the running container keeps the old `apisix.yaml` inode, and the new module still exports an unchanged `_M.admit` for the old route.
+3. Check traffic: sample the front listener's established TCP connections three times, 10 s apart (`/proc/net/tcp` and `/proc/net/tcp6` inside `ai-gateway-apisix-1`, state `01`, local port 9080). Proceed at a low point and record the counts. If traffic stays high for the window budget, stop and ask the supervisor.
+4. Recreate only `apisix` with the component playbook's secret-free argv: `env -i PATH=<remote PATH> docker compose ... up -d --force-recreate --no-deps --no-build --pull never apisix`. The user accepted that this cuts in-flight public streams.
+5. Wait for `healthy`, then check the error log for Lua or route-load errors.
 
-Task 1.4 proves first, against the pinned image with production's `cap_drop: [ALL]` and `no-new-privileges`, that:
-- the signal reaches the master as PID 1;
-- the new module is used after the reload;
-- an in-flight request survives it.
+Rollback: restore both backed-up files, check their SHA-256 against the backup, recreate `apisix` the same way, and repeat the comparison against the pre-capture order.
 
-If that proof fails, the fallback is a recreate of only `apisix` (`up -d --force-recreate --no-deps --no-build --pull never apisix`, run through `env -i` as the component playbook does), in a low-traffic window. This needs the supervisor's explicit approval at that point.
+`deploy.yml -e component=apisix --check --diff` reports `changed=0` before and after; it guards Compose and `.env` drift only.
 
-The existing playbook is used for the drift checks: `deploy.yml -e component=apisix --check --diff` reports `changed=0` before and after. It cannot perform this deploy because it is a no-op when Compose and `.env` are unchanged.
-
-*Alternative*: an Ansible managed-file deploy for tracked front-door files. That is new scope, not needed for a one-file change; recorded under Risks.
+*Alternative*: an Ansible managed-file deploy for tracked front-door files. That is new scope, recorded under Risks.
 
 ### D6: Independence from union-catalog-membership
 
@@ -121,13 +121,13 @@ The change is therefore **independent**, with no task 0 gate. Operationally, its
 
 ## Risks / Trade-offs
 
-- [`admit()` now does more than admission] → One-line comment plus a recorded rename for the next front-door recreate (D2). The behavior is covered by tests.
+- [The recreate cuts in-flight public SSE and WebSocket streams] → Accepted by the user. The window picks a low point by the connection samples (D5 step 3) and records the counts.
+- [Route and module must match] → The new module keeps `_M.admit` unchanged, so the old route still works if the module is loaded first, and `list()` exists before the new route loads. Both files activate together at the recreate.
 - [A recognized-shape body from a future Sub2API version adds a second collection or nested lists] → It counts as unrecognized and passes through unchanged with a WARN, so no client sees an error. The WARN is checked in the production verify.
 - [Cache headers on the plain list change (Sub2API ETag/Cache-Control → front-door ETag/`private, no-cache`)] → They match the parameterized list. Clients only lose a stale validator.
 - [Memory on the front door] → The plain list is tens of KiB for about 400 entries. The fragments plus the concatenation need about 2× the body, far below the 320 MiB container limit. Sort cost is about 3.5k comparisons per request (well under 1 ms), and requests are already serialized by the admission slot.
-- [Graceful reload is unproven in this container] → Task 1.4 proves it locally first. The recreate fallback needs explicit approval.
 - [No Ansible path for tracked front-door files] → Recorded gap. Every such deploy is a reviewed manual window with backup and SHA checks.
-- [Partial deploy (file uploaded, no reload)] → Already-running workers keep the old cached module, so behavior stays old until the HUP. Verification compares the live body, not the file.
+- [Partial deploy (files uploaded, no recreate)] → The running container keeps the old `apisix.yaml` inode and its workers keep the cached module, so behavior stays old until the recreate. Verification compares the live body, not the files.
 
 ## Migration Plan
 
@@ -137,11 +137,17 @@ The change is therefore **independent**, with no task 0 gate. Operationally, its
    - the Codex manifest `?client_version=<current>`;
    - an unauthenticated request, which today returns the opaque 404;
    - front APISIX container ID, StartedAt and restarts.
-3. Window:
-   - back up the live Lua file under `.ai-ops-state/sort-public-models-list-<ts>/`;
-   - upload the reviewed file and check its SHA-256;
-   - send HUP;
-   - check health and the error log (no Lua errors).
+3. Window (D5):
+   - back up the live Lua file and `apisix.yaml` under `.ai-ops-state/sort-public-models-list-<ts>/`;
+   - upload both reviewed files and check their SHA-256;
+   - sample established connections and pick a low point;
+   - recreate only `apisix`;
+   - check health and the error log (no Lua or route-load errors).
 4. Post-capture and compare (task 3.3).
-5. Rollback: restore the backed-up file, check its SHA-256, send HUP again, and repeat the comparison against the pre-capture order.
+5. Rollback: restore both backed-up files, check their SHA-256, recreate `apisix` again, and repeat the comparison against the pre-capture order.
 6. Delete the temporary key with proof. Write the record.
+
+## Resolved decisions
+
+- Activation (user, 2026-10-28): new `_M.list` entry plus the `apisix.yaml` route change, activated by one front-door recreate in a reviewed manual window. The HUP-reload design was rejected.
+- Response headers (user, 2026-10-28): a reordered `200` carries the front door's `Cache-Control: private, no-cache` and a strong ETag of the final body, with `304`/`412` support, as on the parameterized intersection (D4). Sub2API's own ETag and Cache-Control are not forwarded.

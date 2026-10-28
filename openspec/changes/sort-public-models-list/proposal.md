@@ -31,7 +31,7 @@ None.
 
 ## Impact
 
-- Code: `services/firewall/apisix/lua/model_list_intersection.lua` (plain-list handler and ordering) and its test `model_list_intersection_test.lua`. `services/firewall/apisix/apisix.yaml` is unchanged (design D2).
+- Code: `services/firewall/apisix/lua/model_list_intersection.lua` (new `_M.list` plain-list handler and ordering; `_M.admit` unchanged) and its test `model_list_intersection_test.lua`. `services/firewall/apisix/apisix.yaml`: route `ai-api-models-get` calls `_M.list` (design D2).
 - Docs: `docs/catalog.md` (front-door notes) and the front APISIX README if it describes the plain route.
-- Production: one reviewed manual window that uploads one tracked Lua file and gracefully reloads the front APISIX (design D5). No image, Compose, `.env` or private configuration change. The existing `deploy.yml -e component=apisix --check --diff` must stay `changed=0` before and after.
+- Production: one reviewed manual window that uploads the two tracked front-door files and recreates the public front APISIX once, at a low-traffic point (design D5). The recreate cuts in-flight public streams; the user accepted this. No image, Compose, `.env` or private configuration change. The existing `deploy.yml -e component=apisix --check --diff` must stay `changed=0` before and after.
 - Clients: same members and records; only the order and the cache headers of the plain list change.
