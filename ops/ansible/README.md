@@ -13,8 +13,10 @@ ansible-playbook playbooks/deploy.yml -e component=cli-proxy-api --check --diff
 ansible-playbook playbooks/deploy.yml -e component=cli-proxy-api \
   -e ai_ops_component_approved_digest='<reviewed-plan-digest>'
 ansible-playbook playbooks/deploy-config.yml -e component=egress-proxy      # egress policy
-ansible-playbook playbooks/deploy-config.yml -e component=model-catalog     # model-catalog config
+ansible-playbook playbooks/deploy-config.yml -e component=model-catalog     # model-catalog config.yaml (+ catalog.lua)
 ```
+
+The model-catalog profile is `config.yaml` plus, when the private file exists (custom), `catalog.lua`; a custom script combined with `metadata.include_models` fails before upload, also under `--check`. Changes that couple the image, Compose and the profile use a reviewed manual window ([details](../../docs/ansible-operations.md#the-membership-script-cataloglua)).
 
 Playbooks: `deploy`, `rollback`, `deploy-config`, `rollback-config`, `recovery`, `unlock`. Set variables in the private inventory's `group_vars/gateway.yml` or `host_vars/<host>.yml`; `inventories/example/group_vars/gateway.yml` lists every knob.
 

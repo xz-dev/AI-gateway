@@ -92,7 +92,7 @@
 
 ## 4. Docs
 
-- [ ] 4.1 Docs (D12):
+- [x] 4.1 Docs (D12):
   - `services/routing/model-catalog/README.md` gets one line and a link;
   - `docs/model-catalog.md` gets the "Membership script" section: fields, return values, `glob`, sandbox and limits, failure behavior, `validate-config --script`, and the examples admit all, exclude a few, prefer AISIX on same-name IDs, and the extra CPA list;
   - `docs/ansible-operations.md` and `ops/ansible/README.md` list the second file, the custom rule, the combination check, and that coupled image/Compose/profile changes use a reviewed manual window;

@@ -78,7 +78,7 @@ curl -X POST .../v1/responses -d '{"model":"aihub/<model>","input":"hi"}'       
 
 ## 4. model-catalog 目录来源（`services/routing/model-catalog/config.yaml`）
 
-新 prefix 出现在 CPA 目录后，model-catalog 决定元数据。未配置规则的渠道使用根 `metadata.chain`。要为渠道指定来源，在 `metadata.models` 加一条规则，例如 `{match: "<prefix>/**", chain: ["models.dev/<provider>/api_key", "@self"]}`；需要渠道上游的富数据时在链中加入 `@cpa-upstream`（只在链需要时才经 CPA `api-call` 读取）。要隐藏模型，在 `metadata.include_models` 加 `!` 条目。没有 CPA 前缀的 CPA 账号（如 Devin 的 `devin/<model>`）默认不进目录；要收录，在根 `membership.cpa_include` 加 glob（例如 `["devin/*"]`，规则同 `include_models`，空列表报错）。上限同步需要时把该渠道 glob 加入根 `sync_max_context_window` 列表。改后在 `services/routing/model-catalog/` 运行 `npm test`，并用部署镜像的 `/model-catalog validate-config -` 校验私有配置（输出 `{"version":1,"config_digest":...}`）。
+新 prefix 出现在 CPA 目录后，model-catalog 决定元数据。未配置规则的渠道使用根 `metadata.chain`。要为渠道指定来源，在 `metadata.models` 加一条规则，例如 `{match: "<prefix>/**", chain: ["models.dev/<provider>/api_key", "@self"]}`；需要渠道上游的富数据时在链中加入 `@cpa-upstream`（只在链需要时才经 CPA `api-call` 读取）。要隐藏模型，在 `metadata.include_models` 加 `!` 条目。没有 CPA 前缀的 CPA 账号（如 Devin 的 `devin/<model>`）默认不进目录；要收录，在 profile 的 `catalog.lua` 里把 glob 加进 `EXTRA_CPA`（例如 `{ "devin/*" }`，见[成员脚本](model-catalog.md#membership-script)）；使用自定义 `catalog.lua` 时隐藏规则也写在脚本里，不再用 `include_models`。上限同步需要时把该渠道 glob 加入根 `sync_max_context_window` 列表。改后在 `services/routing/model-catalog/` 运行 `npm test`，并用部署镜像的 `/model-catalog validate-config -` 校验私有配置（输出 `{"version":1,"config_digest":...}`）。
 
 WebSocket 入站由 Sub2API 统一鉴权和处理；内部 models gateway 不再维护独立 WS 别名表。
 

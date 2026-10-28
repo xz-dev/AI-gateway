@@ -135,7 +135,7 @@ test("models table: script-rejected rows show the reason, no metadata, a separat
   const h = await stage(t, { extraCpa: ["devin/*"] });
   const page = await replyText(await h.service.refreshPage());
   assert.match(page, /<td>my-alias<\/td><td>hidden by catalog\.lua: CPA ID without a CPA prefix<\/td><td colspan="9">not processed<\/td>/);
-  assert.match(page, /rejected by catalog\.lua 2 ·/);
+  assert.match(page, /rejected by catalog\.lua 2 ·/, h.log.text());
   const slugs = [...page.matchAll(/<tr[^>]*><td>([^<]+)<\/td>/g)].map((match) => match[1]!);
   assert.deepEqual(slugs, ["gpt-6.1-sol", "my-alias", "alias/a", "codex/gpt-5.3-codex-spark", "codex/gpt-6.1-sol", "deepseek/deepseek-v4.1-flash", "devin/claude-opus-5-5", "router/only"]);
   // The spec scenario: the bare CPA ID gpt-6.1-sol without an AISIX route.

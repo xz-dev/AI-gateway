@@ -28,6 +28,7 @@ The membership filter should be part of the operator's profile, as a small Lua s
 - `models-enricher-runtime`: the Lua sandbox, its limits, thread placement and memory budget; `validate-config --script`.
 - `models-table-force-refresh`: script-rejected IDs show as hidden with the script's reason.
 - `production-ops-tooling`: `catalog.lua` is a managed model-catalog file; the deploy check rejects a custom script combined with `include_models`.
+- `aisix-route-lifecycle`: the pruning scenario names the extra CPA list in `catalog.lua` instead of `membership.cpa_include` (wording only; added during apply, after `prune-dangling-aisix-targets` was archived).
 
 ## Impact
 

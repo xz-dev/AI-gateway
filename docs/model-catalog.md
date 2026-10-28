@@ -20,10 +20,11 @@ The image entrypoint is `/model-catalog`:
 /model-catalog                          # serve
 /model-catalog healthcheck              # exit 0 when GET 127.0.0.1:8090/readyz is 200 (Compose healthcheck)
 /model-catalog validate-config <path|-> # prints {"version":1,"config_digest":"<sha256 of the bytes>"}; non-zero on invalid config
+/model-catalog validate-config <path|-> --script <path|-> # also checks catalog.lua; adds "script_digest"
 /model-catalog warm-compile-cache       # image build step: fills NODE_COMPILE_CACHE for both bundles
 ```
 
-Ansible's `deploy-model-catalog-config` runs `validate-config` inside the running container before activation and compares `config_digest` after recreation ([Ansible operations](ansible-operations.md#model-catalog-config-safety)).
+Ansible's `deploy-config.yml -e component=model-catalog` runs `validate-config` inside the running container before activation and compares `config_digest` after recreation ([Ansible operations](ansible-operations.md#model-catalog-config-safety)).
 
 ## Environment
 
@@ -31,6 +32,7 @@ Ansible's `deploy-model-catalog-config` runs `validate-config` inside the runnin
 |---|---|---|
 | `LISTEN_ADDR` | `:8090` | listen address |
 | `CONFIG_PATH` | `/app/config.yaml` | YAML configuration (production: the private config mounted read-only) |
+| `CATALOG_SCRIPT_PATH` | `/app/catalog.lua` | [membership script](#membership-script); startup dry-runs it and exits 1 if it fails |
 | `CACHE_DIR` | `/var/cache/model-catalog` | volume holding `v2/` (`@cpa-upstream` cache) and `out/` (published outputs) |
 | `CPA_MANAGEMENT_KEY` | required | CPA Management API key (channel discovery, prefix discovery, `api-call`) |
 | `CPA_CLIENT_KEY` | `CPA_API_KEY` | client key for the CPA native manifest |
@@ -50,7 +52,6 @@ Annotated example: [`services/routing/model-catalog/config.yaml`](../services/ro
 | `http_concurrency` | positive integer, `8` | shared outbound pool size |
 | `channel_timeout` / `overall_deadline` | duration, `8s` / `25s` | per-read timeout / whole-build deadline |
 | `aisix_models_url` / `aisix_timeout` | string / duration (`channel_timeout`) | optional AISIX inventory (members) |
-| `membership.cpa_include` | ordered glob list, optional | admits CPA IDs without a CPA prefix (see [Membership](#membership)); an empty list is an error |
 | `scheduled_refresh_interval` / `entry_refresh_window` | duration, `30m` / `10m` | table schedule / staleness window that lets a page view start a background refresh |
 | `metadata.chain` | list | default field-source chain |
 | `metadata.models[]` | `{match, chain?, overrides?}` | ordered glob rules; a later matching `chain` replaces, `overrides` merge in order |
@@ -97,28 +98,93 @@ The dedicated `apisix-models` instance remains for catalog and protocol compatib
 
 ### Membership
 
-Each authority collection builds the member list from three sources, deduplicated by exact, case-sensitive ID; on a duplicate the earlier source supplies the base row:
+Each authority collection collects candidates from three sources, deduplicated by exact, case-sensitive ID: the CPA native manifest, AISIX and `static_models`. The [membership script](#membership-script) `catalog.lua` decides for each candidate whether it is a member. The tracked default script keeps:
 
-1. **CPA-admitted IDs**: an ID that starts with `P/` for a CPA prefix `P`, or that `membership.cpa_include` matches.
-2. **Every AISIX ID**. An AISIX ID that CPA also admits keeps CPA's row; an AISIX ID that CPA lists only bare (for example `gpt-6.1-sol`) has no `@self` row.
+1. **CPA IDs under a CPA prefix**: an ID that starts with `P/` for a CPA prefix `P`, or that its `EXTRA_CPA` list matches.
+2. **Every AISIX ID**. An AISIX ID that CPA also keeps uses CPA's row; an AISIX ID that CPA lists only bare (for example `gpt-6.1-sol`) has no `@self` row.
 3. **`static_models`**.
 
 **Output order** is fixed and independent of source order: IDs without `/` first, then every other ID, each group sorted by Unicode code point (case-sensitive, so `B` sorts before `a`). The standard list, the Codex manifest and `/models-table` use it. In the Codex manifest model-catalog sets `priority` to the 1-based output position on every row, passthrough rows included; Codex lists lower values first. Front-door unparameterized `/v1/models` is answered by Sub2API and keeps Sub2API's order.
 
-`metadata.include_models` then hides members; `membership.cpa_include` only adds CPA IDs and cannot hide prefixed ones.
+`metadata.include_models` then hides members. With a custom `catalog.lua`, put the hides in the script instead; the Ansible operation rejects a custom script combined with `include_models`.
 
 **Prefix discovery** uses Management data only and never downloads authentication files:
 
 - key channels: the non-empty `prefix` of every enabled channel (empty or duplicate prefixes stay configuration errors);
 - OAuth accounts: for each enabled account, `GET /v0/management/auth-files/models?name=` lists its registered IDs; `P` is a prefix when the account registers both `P/x` and `x`. This is CPA's default listing (`force-model-prefix: false`), which registers each model of a prefixed credential as `x` and `P/x`.
 
-An account without a prefix (Devin registers `devin/<model>` only) contributes no prefix; admit its IDs with `membership.cpa_include: ["devin/*"]`. Upstream originals with `/` that CPA lists bare (`deepseek/…`) are not members. A channel whose own originals start with its prefix (`openrouter/auto` under `openrouter`) also has its bare original admitted; both IDs route to the same channel, and `include_models` can hide one.
+An account without a prefix (Devin registers `devin/<model>` only) contributes no prefix; admit its IDs with `local EXTRA_CPA = { "devin/*" }` in `catalog.lua`. Upstream originals with `/` that CPA lists bare (`deepseek/…`) are not members. A channel whose own originals start with its prefix (`openrouter/auto` under `openrouter`) also has its bare original admitted; both IDs route to the same channel, and `include_models` can hide one.
 
-**Passthrough**: an ID that an OAuth account registers under an inferred prefix is emitted exactly as CPA returned it (no compile, resolution or post-processing) except for `priority`, unless a static model owns the slug. Key-channel and `cpa_include` IDs are compiled normally.
+**Passthrough**: an ID that an OAuth account registers under an inferred prefix is emitted exactly as CPA returned it (no compile, resolution or post-processing) except for `priority`, unless a static model owns the slug. Key-channel and `EXTRA_CPA` IDs are compiled normally.
 
-**Compatibility mode**: every collection reads `GET /v0/management/force-model-prefix`. While it is `true`, CPA lists no bare copies, so the catalog admits every CPA slash ID plus `cpa_include` matches, and OAuth registrations outside `cpa_include` pass through. The log names the mode when it changes.
+**Compatibility mode**: every collection reads `GET /v0/management/force-model-prefix`. While it is `true`, CPA lists no bare copies, so the default script keeps every CPA slash ID plus `EXTRA_CPA` matches, and OAuth registrations outside `EXTRA_CPA` pass through. The log names the mode when it changes.
 
-**Fallback**: if a Management read (the setting, the account list, an account's models, or channel discovery) fails with no eligible cached response, model-catalog warns and admits every CPA slash ID plus `cpa_include` matches, emitted as CPA returned them, and no bare CPA ID. These reads are authority inputs: they enter the generation fingerprint, and the diagnostic refresh bypasses their caches.
+**Fallback**: if a Management read (the setting, the account list, an account's models, or channel discovery) fails with no eligible cached response, model-catalog warns and the default script keeps every CPA slash ID plus `EXTRA_CPA` matches, emitted as CPA returned them, and no bare CPA ID. These reads are authority inputs: they enter the generation fingerprint, and the diagnostic refresh bypasses their caches.
+
+### Membership script
+
+`catalog.lua` (tracked default: [`services/routing/model-catalog/catalog.lua`](../services/routing/model-catalog/catalog.lua); production: the private profile next to `config.yaml`) defines one global function `select(m)`. The host calls it once per candidate, in CPA, AISIX, static order. `m` is a fresh copy:
+
+| Field | Meaning |
+|---|---|
+| `id` | exact ID bytes |
+| `sources` | `{cpa = true, aisix = true, static = true}`, only the sources that list the ID |
+| `mode` | `"prefix"`, `"forced"` (CPA `force-model-prefix: true`) or `"fallback"` (a prefix read failed) |
+| `has_prefix` | the ID starts with a CPA prefix plus `/` |
+| `prefix` | the shortest matched prefix, or `nil` |
+| `native` | the row passes through as CPA returned it unless the script sets `compile = true` |
+
+Return values:
+
+- `true`: keep. The row comes from the first of CPA, AISIX, static that lists the ID.
+- `true, {source = "cpa"|"aisix"|"static", compile = true|false}`: both keys optional. `source` picks the row on a shared ID and must be one of `m.sources`; `compile = true` compiles a CPA row that would pass through.
+- `false, "reason"`: reject. The models table shows `hidden by catalog.lua: <reason>` (cut at 200 bytes; default `rejected by catalog.lua`).
+- Anything else is a script error.
+
+The script cannot add IDs or change the output order: the catalog order and Codex `priority` stay as described in [Membership](#membership). `glob(pattern, id)` matches one standard glob with the `include_models` matcher (`*` inside a segment, `**` across segments, case-sensitive, no leading `!`). The global `select` replaces Lua's vararg `select`; use `table.pack(...)` and `#` instead.
+
+Sandbox and limits: Lua 5.4 (wasmoon) in a short-lived worker per collection. `io`, `os`, `package`, `require`, `load`, `loadstring`, `loadfile`, `dofile`, `debug`, `coroutine`, `collectgarbage`, `print` and `warn` are removed, and no JavaScript object is reachable. Fixed bounds: 1,000,000 instructions to load the script, 100,000 per `select` call, 20,000,000 per collection, 16 MiB Lua memory, 2 s wall time, 256 KiB script, 32 MiB worker heap. The default script uses at most 71 instructions per call.
+
+Failure behavior: a load or runtime error, an invalid return, a bound hit or a worker exit fails the collection. model-catalog logs one WARN with the error class and candidate ID (never the script text), keeps serving the previous generation unchanged, marks the table attempt failed, and retries on the next collection. Before the first generation `/readyz` stays not ready. A script that runs and rejects every candidate is not a failure: model-catalog publishes an empty catalog and logs INFO with the candidate and rejected counts.
+
+Check a script before deploying: `/model-catalog validate-config /app/config.yaml --script catalog.lua` (or `--script -` for stdin; only one input may be `-`). It dry-runs the script on a synthetic candidate set, prints `script_digest` (sha256 of the bytes), and warns on stderr when every synthetic candidate is rejected. Exit 0 valid, 1 invalid, 2 usage.
+
+Examples (each is checked by `tests/docs-examples.test.ts`):
+
+Admit every candidate:
+
+```lua
+function select(m) return true end
+```
+
+Exclude a few IDs, keep the rest of the default rule:
+
+```lua
+local HIDE = { "**/gpt-image-*", "codex/gpt-5.3-codex-spark" }
+local function listed(id, rules)
+  for _, rule in ipairs(rules) do if glob(rule, id) then return true end end
+  return false
+end
+function select(m)
+  if listed(m.id, HIDE) then return false, "excluded" end
+  if m.sources.cpa and (m.has_prefix or m.mode ~= "prefix" and m.id:find("/", 1, true)) then return true, { source = "cpa" } end
+  if m.sources.aisix or m.sources.static then return true end
+  return false, "CPA ID without a CPA prefix"
+end
+```
+
+Prefer the AISIX route on IDs that CPA and AISIX both list:
+
+```lua
+function select(m)
+  if m.sources.aisix then return true, { source = "aisix" } end
+  if m.sources.cpa and (m.has_prefix or m.mode ~= "prefix" and m.id:find("/", 1, true)) then return true end
+  if m.sources.static then return true end
+  return false, "CPA ID without a CPA prefix"
+end
+```
+
+Admit CPA IDs without a prefix (Devin): copy the default script and set its list, for example `local EXTRA_CPA = { "devin/*" }`. The last matching entry decides and a leading `!` excludes, so `{ "devin/*", "!devin/model_private_*" }` admits Devin IDs except the private ones.
 
 Source configuration is fully explicit (`services/routing/model-catalog/config.yaml`). The `metadata` block uses the [`openai-api-pi-extension`](https://github.com/xz-dev/openai-api-pi-extension) chain schema; the service bundles that project's host-neutral compile core from the `services/routing/model-catalog/vendor/openai-api-pi-extension` submodule, so the gateway and Pi resolve metadata with the same code:
 

@@ -21,7 +21,7 @@ ops/ansible/
 - `private-config/` holds the production inventory and the private desired state
   (`compose.yaml`, `compose.override.yaml`, `.env`, `services/routing/aisix/resources.yaml`,
   `services/cpa/cpa-model-sync/config.json`, `services/routing/model-catalog/config.yaml`,
-  `data/egress-proxy/policy.json`), adopted from production at baseline. Without the
+  the optional `services/routing/model-catalog/catalog.lua`, `data/egress-proxy/policy.json`), adopted from production at baseline. Without the
   private inventory no host matches `gateway` and nothing runs.
 - Roles: `ai_ops` (preflight, capacity gate, the shared Compose argv, the renderer pin),
   `ai_ops_managed_file` (drift gate, pre-deploy copy, baseline of one file),
@@ -75,8 +75,8 @@ ansible-playbook playbooks/deploy-config.yml -e component=cpa-model-sync --check
 ansible-playbook playbooks/deploy-config.yml -e component=cpa-model-sync \
   -e ai_ops_model_sync_approved_digest='<approved-digest>'
 
-# Model-catalog config: validate with the deployed binary, recreate only model-catalog,
-# verify digest + readiness.
+# Model-catalog profile (config.yaml, plus catalog.lua when the private file exists): validate
+# with the deployed binary, recreate only model-catalog once, verify both digests + readiness.
 ansible-playbook playbooks/deploy-config.yml -e component=model-catalog --check --diff
 ansible-playbook playbooks/deploy-config.yml -e component=model-catalog
 
@@ -451,6 +451,35 @@ retries, and whose namespace owner and adjacent relay container IDs stayed
 unchanged. Failure restores the protected pre-deploy YAML, recreates
 model-catalog, and proves the restored digest plus readiness; an unproven recovery is
 reported as recovery-required, never success.
+
+### The membership script (`catalog.lua`)
+
+The model-catalog profile has a second file, the [membership script](model-catalog.md#membership-script)
+`catalog.lua` (private path `ops/ansible/private-config/services/routing/model-catalog/catalog.lua`,
+remote `services/routing/model-catalog/catalog.lua`, mounted at `/app/catalog.lua`).
+
+- **Custom rule**: the script is custom when the private file exists, whatever its content. Only
+  then does the operation manage the remote file. Without it the remote file (the tracked default)
+  is left untouched and `metadata.include_models` stays allowed. Removing the private file does not
+  delete the remote one: to return to the default, copy the tracked sample to the private path,
+  deploy, then delete it.
+- **Combination check**: a custom `catalog.lua` together with `metadata.include_models` in the
+  private `config.yaml` fails before any comparison or upload, also under `--check`; the message
+  names both files. Move the hides into the script (`return false, "reason"`). The gateway itself
+  does not reject the combination.
+- **One operation**: each file keeps its own drift gate and baseline
+  (`.ai-ops-state/model-catalog__catalog.lua.baseline|.predeploy`). A changed script is validated
+  with `/model-catalog validate-config /app/config.yaml --script -`; then the changed files upload
+  and `model-catalog` is recreated once. Verification runs
+  `validate-config /app/config.yaml --script /app/catalog.lua` in the new container and compares
+  `config_digest` and `script_digest` and both remote checksums. A failed verification restores
+  every file uploaded in the run and recreates once on the restored pair.
+- **Rollback** (`rollback-config.yml -e component=model-catalog`) restores the pre-operation copy
+  of both files (a deploy saves a copy of an unchanged file too) and recreates once.
+- **Coupled changes**: a change that couples the image, the Compose definition and the profile
+  (such as the first `catalog.lua` cutover) goes through a reviewed manual window, not this
+  operation. Afterwards the operation adopts the deployed files as baselines.
+- The verification needs an image with `validate-config --script` (v1.3.0 and later).
 
 ## Operational notes
 
