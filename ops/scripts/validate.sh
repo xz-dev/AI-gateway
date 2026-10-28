@@ -19,7 +19,7 @@ done
 
 # The membership script mount source: a missing path would make the runtime create a directory.
 catalog_script=services/routing/model-catalog/catalog.lua
-[ -f "$catalog_script" ] && [ ! -L "$catalog_script" ] || { echo "$catalog_script must be a regular file" >&2; exit 1; }
+if [ ! -f "$catalog_script" ] || [ -L "$catalog_script" ]; then echo "$catalog_script must be a regular file" >&2; exit 1; fi
 
 value_from_env() {
   local key=$1
