@@ -10,7 +10,7 @@ argument_specs:
         description:
           - State label of the file; names .ai-ops-state/<label with / as __>.baseline|.predeploy.
           - One of compose.yaml, compose.override.yaml, .env, aisix/resources.yaml,
-            cpa-model-sync/config.json, model-catalog/config.yaml.
+            cpa-model-sync/config.json, model-catalog/config.yaml, model-catalog/catalog.lua.
       ai_ops_managed_file_local:
         type: path
         description: Controller path of the desired file.
@@ -61,6 +61,32 @@ argument_specs:
           recovery_expected:
             type: dict
             description: Expected state after a rescue restore.
+      ai_ops_managed_file_companions:
+        type: list
+        elements: dict
+        description:
+          - Files of the same operation uploaded earlier in this run without activation.
+          - A non-empty list activates the service also when this file is unchanged, and a failed
+            verification restores each companion's pre-deploy copy before the one reactivation.
+        options:
+          label:
+            type: str
+            required: true
+            description: State label of the companion file.
+          remote:
+            type: str
+            required: true
+            description: Remote path of the live companion file.
+          predeploy:
+            type: str
+            required: true
+            description: Remote path of its pre-deploy copy.
+          mode:
+            type: str
+            description: Restore mode; preserve when unset.
+          restore:
+            type: bool
+            description: False when the companion did not exist before this run (nothing to restore).
       ai_ops_managed_file_failure_receipt:
         type: dict
         description: Sanitized receipt written when activation fails.

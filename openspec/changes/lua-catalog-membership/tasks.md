@@ -75,7 +75,7 @@
 
 ## 3. Ansible
 
-- [ ] 3.1 Second managed file and combination check (D11):
+- [x] 3.1 Second managed file and combination check (D11):
   - `ai_ops_model_catalog` deploy, verify and rollback handle `model-catalog/catalog.lua` when the private file exists;
   - activation happens once;
   - verify runs `validate-config /app/config.yaml --script /app/catalog.lua`;
@@ -88,7 +88,7 @@
   - a script-only change recreates once;
   - both files changed with a failed verify restores both;
   - check mode uploads nothing.
-- [ ] 3.2 Lint and the full Ansible test set. Verify: the production lint gate and every `ops/scripts/tests/test-ansible-*` pass.
+- [x] 3.2 Lint and the full Ansible test set. Verify: the production lint gate and every `ops/scripts/tests/test-ansible-*` pass.
 
 ## 4. Docs
 

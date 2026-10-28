@@ -1,4 +1,7 @@
 ---
+# Profile: private services/routing/model-catalog/config.yaml, plus catalog.lua when that private
+# file exists (custom membership script). One deploy validates both, recreates model-catalog once
+# and restores both on a failed verification.
 # Bounded wait for the recreated container's readiness (/readyz through its
 # healthcheck subcommand) after a config-only force-recreate. Raise on slow hosts.
 ai_ops_model_catalog_verify_retries: 30

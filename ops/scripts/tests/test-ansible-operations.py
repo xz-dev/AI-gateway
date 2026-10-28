@@ -141,7 +141,8 @@ def check_state_labels(root):
                 if isinstance(value, dict) and "ai_ops_managed_file_label" in value:
                     labels.add(value["ai_ops_managed_file_label"])
     labels.discard("{{ __ai_ops_model_catalog_file.ai_ops_managed_file_label }}")
-    expected = {"aisix/resources.yaml", "cpa-model-sync/config.json", "model-catalog/config.yaml"}
+    labels.discard("{{ __ai_ops_model_catalog_script.ai_ops_managed_file_label }}")
+    expected = {"aisix/resources.yaml", "cpa-model-sync/config.json", "model-catalog/config.yaml", "model-catalog/catalog.lua"}
     if labels != expected:
         problems.append(f"managed-file labels {sorted(labels)} != {sorted(expected)}")
     managed = "".join(p.read_text() for p in (roles / "ai_ops_managed_file/tasks").glob("*.yml"))

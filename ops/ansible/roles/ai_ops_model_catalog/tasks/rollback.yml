@@ -1,12 +1,59 @@
 ---
-# rollback-config.yml -e component=model-catalog: restore the pre-deploy config and
-# prove readiness on the same image with neighbours unchanged.
+# rollback-config.yml -e component=model-catalog: restore the pre-deploy profile (config.yaml and,
+# when it was ever managed, catalog.lua) and prove readiness on the same image with neighbours
+# unchanged. The service is recreated once, after both files are restored.
 
 - name: Capture pre-rollback model-catalog identities
   ansible.builtin.include_tasks:
     file: identity.yml
     apply:
       tags: [always]
+  tags: [always]
+
+- name: Read the rollback state of both profile files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_model_catalog_rb
+  loop:
+    - "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+    - "{{ ai_ops_deploy_root }}/.ai-ops-state/model-catalog__config.yaml.baseline"
+    - "{{ ai_ops_deploy_root }}/.ai-ops-state/model-catalog__config.yaml.predeploy"
+    - "{{ ai_ops_deploy_root }}/services/routing/model-catalog/catalog.lua"
+    - "{{ ai_ops_deploy_root }}/.ai-ops-state/model-catalog__catalog.lua.predeploy"
+  tags: [always]
+
+- name: Name the rollback state
+  ansible.builtin.set_fact:
+    __ai_ops_model_catalog_rb_config: "{{ __ai_ops_model_catalog_rb.results[0].stat }}"
+    __ai_ops_model_catalog_rb_config_baseline: "{{ __ai_ops_model_catalog_rb.results[1].stat }}"
+    __ai_ops_model_catalog_rb_config_pre: "{{ __ai_ops_model_catalog_rb.results[2].stat }}"
+    __ai_ops_model_catalog_rb_script: "{{ __ai_ops_model_catalog_rb.results[3].stat }}"
+    __ai_ops_model_catalog_rb_script_pre: "{{ __ai_ops_model_catalog_rb.results[4].stat }}"
+  tags: [always]
+
+# The config.yaml gates run again in its rollback; checking them first keeps a refused rollback
+# from restoring catalog.lua alone.
+- name: Refuse a config.yaml rollback that cannot run
+  ansible.builtin.fail:
+    msg: >-
+      model-catalog/config.yaml cannot be rolled back (pre-deploy copy missing, or the remote file
+      changed independently after this deploy). Stop and reconcile manually; nothing was overwritten.
+  when: >-
+    not __ai_ops_model_catalog_rb_config_pre.exists
+    or (__ai_ops_model_catalog_rb_config.exists and __ai_ops_model_catalog_rb_config_baseline.exists
+        and __ai_ops_model_catalog_rb_config.checksum != __ai_ops_model_catalog_rb_config_baseline.checksum)
+  tags: [always]
+
+- name: Restore the pre-deploy catalog.lua without activation
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: rollback
+  vars:
+    ai_ops_managed_file_label: model-catalog/catalog.lua
+    ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/catalog.lua"
+    ai_ops_managed_file_mode: "0644"
+  when: __ai_ops_model_catalog_rb_script_pre.exists
   tags: [always]
 
 - name: Roll back model-catalog config and prove readiness
@@ -22,6 +69,9 @@
       role: ai_ops_model_catalog
       tasks_from: verify
       expected:
+        script_digest: >-
+          {{ __ai_ops_model_catalog_rb_script_pre.checksum if __ai_ops_model_catalog_rb_script_pre.exists
+             else __ai_ops_model_catalog_rb_script.checksum | default('') }}
         image_identity: "{{ __ai_ops_model_catalog_image_id }}"
         old_container: "{{ __ai_ops_model_catalog_container_id }}"
         protected: "{{ __ai_ops_model_catalog_protected_map }}"
@@ -34,6 +84,7 @@
     content: |
       operation=model-catalog-config-rollback
       config_digest={{ ai_ops_model_catalog_verified_policy_digest }}
+      script_digest={{ ai_ops_model_catalog_verified_script_digest }}
       image_identity={{ ai_ops_model_catalog_verified_image }}
       container_id={{ ai_ops_model_catalog_verified_container }}
       readiness_attempts={{ ai_ops_model_catalog_ready_attempts }}

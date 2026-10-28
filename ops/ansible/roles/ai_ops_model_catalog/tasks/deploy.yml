@@ -1,13 +1,81 @@
 ---
-# deploy-config.yml -e component=model-catalog: drift gate, static validation with the
-# deployed binary, single-service recreate, readiness and neighbour verification.
+# deploy-config.yml -e component=model-catalog: combination check, drift gates, static validation
+# with the deployed binary, one single-service recreate, readiness and neighbour verification.
+# The profile is config.yaml plus, when the private file exists (custom), catalog.lua.
 
-- name: Select model-catalog config paths
+- name: Select model-catalog profile paths
   ansible.builtin.set_fact:
     __ai_ops_model_catalog_file:
       ai_ops_managed_file_label: model-catalog/config.yaml
       ai_ops_managed_file_local: "{{ ai_ops_config_dir }}/services/routing/model-catalog/config.yaml"
       ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+    __ai_ops_model_catalog_script:
+      ai_ops_managed_file_label: model-catalog/catalog.lua
+      ai_ops_managed_file_local: "{{ ai_ops_config_dir }}/services/routing/model-catalog/catalog.lua"
+      ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/catalog.lua"
+      predeploy: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-catalog__catalog.lua.predeploy"
+      baseline: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-catalog__catalog.lua.baseline"
+  tags: [always]
+
+- name: Check for a custom catalog.lua
+  ansible.builtin.stat:
+    path: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_local }}"
+  delegate_to: localhost
+  register: __ai_ops_model_catalog_script_local
+  tags: [always]
+
+- name: Read the private config.yaml for the combination check
+  ansible.builtin.slurp:
+    src: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_local }}"
+  delegate_to: localhost
+  register: __ai_ops_model_catalog_private_config
+  when: __ai_ops_model_catalog_script_local.stat.exists
+  no_log: true
+  tags: [always]
+
+# Runs before any comparison or upload, also under --check.
+- name: Reject a custom catalog.lua combined with metadata.include_models
+  ansible.builtin.fail:
+    msg: >-
+      services/routing/model-catalog/catalog.lua is a custom membership script and
+      services/routing/model-catalog/config.yaml sets metadata.include_models: move the
+      include_models hides into catalog.lua (select returns false, "reason") and remove
+      metadata.include_models. Nothing was uploaded.
+  when:
+    - __ai_ops_model_catalog_script_local.stat.exists
+    - >-
+      ((__ai_ops_model_catalog_private_config.content | b64decode | from_yaml) is mapping)
+      and ((__ai_ops_model_catalog_private_config.content | b64decode | from_yaml).metadata | default({}, true) is mapping)
+      and ('include_models' in (__ai_ops_model_catalog_private_config.content | b64decode | from_yaml).metadata | default({}, true))
+  tags: [always]
+
+- name: Prepare model-catalog catalog.lua
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: prepare
+    apply:
+      tags: [always]
+  vars:
+    ai_ops_managed_file_label: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_label }}"
+    ai_ops_managed_file_local: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_local }}"
+    ai_ops_managed_file_remote: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_remote }}"
+  when: __ai_ops_model_catalog_script_local.stat.exists
+  tags: [always]
+
+- name: Read the remote catalog.lua checksum
+  ansible.builtin.stat:
+    path: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_remote }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_model_catalog_script_remote
+  tags: [always]
+
+- name: Record the catalog.lua comparison
+  ansible.builtin.set_fact:
+    __ai_ops_model_catalog_script_differs: "{{ __ai_ops_model_catalog_script_local.stat.exists and ai_ops_managed_file_differs | bool }}"
+    __ai_ops_model_catalog_script_remote_checksum: "{{ __ai_ops_model_catalog_script_remote.stat.checksum | default('') }}"
+    __ai_ops_model_catalog_script_expected: >-
+      {{ ai_ops_managed_file_local_checksum if __ai_ops_model_catalog_script_local.stat.exists
+         else __ai_ops_model_catalog_script_remote.stat.checksum | default('') }}
   tags: [always]
 
 - name: Prepare model-catalog config
@@ -22,8 +90,13 @@
     ai_ops_managed_file_remote: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_remote }}"
   tags: [always]
 
+- name: Record the config.yaml comparison
+  ansible.builtin.set_fact:
+    __ai_ops_model_catalog_config_differs: "{{ ai_ops_managed_file_differs | bool }}"
+  tags: [always]
+
 - name: Plan the model-catalog recreate
-  when: ai_ops_managed_file_differs
+  when: __ai_ops_model_catalog_config_differs or __ai_ops_model_catalog_script_differs
   tags: [always]
   block:
     - name: Read model-catalog identities
@@ -37,9 +110,10 @@
         src: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_local }}"
       delegate_to: localhost
       register: __ai_ops_model_catalog_candidate
+      when: __ai_ops_model_catalog_config_differs
       no_log: true
 
-    - name: Validate candidate with deployed model-catalog binary
+    - name: Validate candidate config with deployed model-catalog binary
       community.docker.docker_compose_v2_exec:
         service: model-catalog
         argv: [/model-catalog, validate-config, "-"]
@@ -50,21 +124,93 @@
       changed_when: false
       failed_when: __ai_ops_model_catalog_validate_raw.rc != 0
       check_mode: false
+      when: __ai_ops_model_catalog_config_differs
+      no_log: true
+
+    - name: Read candidate catalog.lua locally
+      ansible.builtin.slurp:
+        src: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_local }}"
+      delegate_to: localhost
+      register: __ai_ops_model_catalog_script_candidate
+      when: __ai_ops_model_catalog_script_differs
+      no_log: true
+
+    - name: Validate candidate catalog.lua with deployed model-catalog binary
+      community.docker.docker_compose_v2_exec:
+        service: model-catalog
+        argv: [/model-catalog, validate-config, /app/config.yaml, --script, "-"]
+        stdin: "{{ __ai_ops_model_catalog_script_candidate.content | b64decode }}"
+        stdin_add_newline: false
+        tty: false
+      register: __ai_ops_model_catalog_validate_script_raw
+      changed_when: false
+      failed_when: __ai_ops_model_catalog_validate_script_raw.rc != 0
+      check_mode: false
+      when: __ai_ops_model_catalog_script_differs
       no_log: true
 
     - name: Parse candidate validation
       ansible.builtin.set_fact:
-        __ai_ops_model_catalog_candidate_validation: "{{ __ai_ops_model_catalog_validate_raw.stdout | from_json }}"
+        __ai_ops_model_catalog_candidate_validation:
+          config_digest: >-
+            {{ (__ai_ops_model_catalog_validate_raw.stdout | from_json).config_digest
+               if __ai_ops_model_catalog_config_differs else 'unchanged' }}
+          script_digest: >-
+            {{ (__ai_ops_model_catalog_validate_script_raw.stdout | from_json).script_digest
+               if __ai_ops_model_catalog_script_differs else 'unchanged' }}
       no_log: true
 
     - name: Show candidate validation digest
       ansible.builtin.debug:
         msg:
           config_digest: "{{ __ai_ops_model_catalog_candidate_validation.config_digest }}"
+          script_digest: "{{ __ai_ops_model_catalog_candidate_validation.script_digest }}"
           image_identity: "{{ __ai_ops_model_catalog_image_id }}"
           recreation: model-catalog
 
-- name: Deploy model-catalog config
+# Rollback undoes the last operation: every profile file gets a pre-operation copy, also an
+# unchanged one, so a later rollback never restores an older file the operation did not touch.
+- name: Save pre-operation copies of unchanged profile files
+  ansible.builtin.copy:
+    src: "{{ item.remote }}"
+    dest: "{{ item.predeploy }}"
+    remote_src: true
+    mode: preserve
+  diff: false
+  loop:
+    - remote: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_remote }}"
+      predeploy: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-catalog__config.yaml.predeploy"
+      save: "{{ __ai_ops_model_catalog_script_differs and not __ai_ops_model_catalog_config_differs }}"
+    - remote: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_remote }}"
+      predeploy: "{{ __ai_ops_model_catalog_script.predeploy }}"
+      save: >-
+        {{ __ai_ops_model_catalog_config_differs and __ai_ops_model_catalog_script_local.stat.exists
+           and not __ai_ops_model_catalog_script_differs and __ai_ops_model_catalog_script_remote.stat.exists }}
+  loop_control:
+    label: "{{ item.predeploy | basename }}"
+  when:
+    - not ansible_check_mode
+    - item.save | bool
+  tags: [upload]
+
+- name: Upload model-catalog catalog.lua without activation
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: deploy
+  vars:
+    ai_ops_managed_file_label: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_label }}"
+    ai_ops_managed_file_local: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_local }}"
+    ai_ops_managed_file_remote: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_remote }}"
+    ai_ops_managed_file_mode: "0644"
+  when: __ai_ops_model_catalog_script_local.stat.exists
+  tags: [always]
+
+- name: Record the catalog.lua upload
+  ansible.builtin.set_fact:
+    __ai_ops_model_catalog_script_uploaded: "{{ __ai_ops_model_catalog_script_local.stat.exists and ai_ops_managed_file_uploaded | bool }}"
+  tags: [always]
+
+- name: Deploy model-catalog config and activate once
   ansible.builtin.include_role:
     name: ai_ops_managed_file
     tasks_from: deploy
@@ -72,20 +218,29 @@
     ai_ops_managed_file_label: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_label }}"
     ai_ops_managed_file_local: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_local }}"
     ai_ops_managed_file_remote: "{{ __ai_ops_model_catalog_file.ai_ops_managed_file_remote }}"
-    # model-catalog runs as 65532:65532 and reads the bind-mounted YAML at
+    # model-catalog runs as 65532:65532 and reads the bind-mounted files at
     # startup; a restrictive local mode must never propagate to production.
     ai_ops_managed_file_mode: "0644"
     ai_ops_managed_file_activate: {service: model-catalog, dependencies: false}
+    # A catalog.lua that did not exist before has no pre-deploy copy to restore.
+    ai_ops_managed_file_companions: >-
+      {{ [{'label': __ai_ops_model_catalog_script.ai_ops_managed_file_label,
+           'remote': __ai_ops_model_catalog_script.ai_ops_managed_file_remote,
+           'predeploy': __ai_ops_model_catalog_script.predeploy, 'mode': '0644',
+           'restore': __ai_ops_model_catalog_script_remote.stat.exists}]
+         if __ai_ops_model_catalog_script_uploaded else [] }}
     ai_ops_managed_file_verify:
       role: ai_ops_model_catalog
       tasks_from: verify
       expected:
         policy_digest: "{{ ai_ops_managed_file_local_checksum }}"
+        script_digest: "{{ __ai_ops_model_catalog_script_expected }}"
         image_identity: "{{ __ai_ops_model_catalog_image_id | default('') }}"
         old_container: "{{ __ai_ops_model_catalog_container_id | default('') }}"
         protected: "{{ __ai_ops_model_catalog_protected_map | default({}) }}"
       recovery_expected:
         policy_digest: "{{ ai_ops_managed_file_remote_checksum }}"
+        script_digest: "{{ __ai_ops_model_catalog_script_remote_checksum }}"
         image_identity: "{{ __ai_ops_model_catalog_image_id | default('') }}"
         old_container: "{{ __ai_ops_model_catalog_container_id | default('') }}"
         protected: "{{ __ai_ops_model_catalog_protected_map | default({}) }}"
@@ -94,10 +249,36 @@
       content: |
         operation=model-catalog-config-deploy mode=apply
         candidate_config_digest={{ __ai_ops_model_catalog_candidate_validation.config_digest | default('unknown') }}
+        candidate_script_digest={{ __ai_ops_model_catalog_candidate_validation.script_digest | default('unknown') }}
         recovery_config_digest={{ ai_ops_model_catalog_verified_policy_digest | default('unknown') }}
+        recovery_script_digest={{ ai_ops_model_catalog_verified_script_digest | default('unknown') }}
         recovery_verification={{ 'failed' if ai_ops_managed_file_recovery_failed | default(false) else 'passed' }}
         outcome={{ 'recovery-required' if ai_ops_managed_file_recovery_failed | default(false) else 'candidate-failed-recovered' }}
   tags: [always]
+
+- name: Read back the activated catalog.lua before recording its baseline
+  ansible.builtin.stat:
+    path: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_remote }}"
+    checksum_algorithm: sha256
+  register: __ai_ops_model_catalog_script_activated
+  when: __ai_ops_model_catalog_script_uploaded
+  tags: [upload]
+
+- name: Refuse a changed activated catalog.lua before advancing its baseline
+  ansible.builtin.assert:
+    that: __ai_ops_model_catalog_script_activated.stat.checksum == __ai_ops_model_catalog_script_expected
+    fail_msg: Activated catalog.lua drifted; baseline was not advanced.
+  when: __ai_ops_model_catalog_script_uploaded
+  tags: [upload]
+
+- name: Record the new catalog.lua baseline
+  ansible.builtin.copy:
+    src: "{{ __ai_ops_model_catalog_script.ai_ops_managed_file_local }}"
+    dest: "{{ __ai_ops_model_catalog_script.baseline }}"
+    mode: "0600"
+  diff: false
+  when: __ai_ops_model_catalog_script_uploaded
+  tags: [upload]
 
 - name: Write sanitized model-catalog deploy receipt
   ansible.builtin.copy:
@@ -106,10 +287,13 @@
     content: |
       operation=model-catalog-config-deploy mode=apply
       config_digest={{ ai_ops_model_catalog_verified_policy_digest }}
+      script_digest={{ ai_ops_model_catalog_verified_script_digest }}
+      uploaded={{ (([__ai_ops_model_catalog_script.ai_ops_managed_file_label] if __ai_ops_model_catalog_script_uploaded else [])
+                  + ([__ai_ops_model_catalog_file.ai_ops_managed_file_label] if ai_ops_managed_file_uploaded else [])) | join(',') }}
       image_identity={{ ai_ops_model_catalog_verified_image }}
       container_id={{ ai_ops_model_catalog_verified_container }}
       readiness_attempts={{ ai_ops_model_catalog_ready_attempts }}
       protected_containers_unchanged=true
       outcome=success
-  when: ai_ops_managed_file_uploaded
+  when: ai_ops_managed_file_uploaded or __ai_ops_model_catalog_script_uploaded
   tags: [activate]

@@ -1,11 +1,13 @@
 ---
 argument_specs:
   deploy:
-    short_description: Validate, deploy and verify the model-catalog configuration.
+    short_description: Validate, deploy and verify the model-catalog profile (config.yaml, catalog.lua).
     description:
-      - Validates the candidate with the deployed binary, recreates only model-catalog and
-        verifies image, mounted config digest, readiness and unchanged neighbours, restoring
-        the previous config on failure.
+      - catalog.lua is managed only when the private file exists (custom script); a custom
+        catalog.lua combined with metadata.include_models fails before upload, also under --check.
+      - Validates each changed candidate with the deployed binary, recreates only model-catalog
+        once and verifies image, both mounted file digests, readiness and unchanged neighbours,
+        restoring both files on failure.
     options: &ai_ops_model_catalog_options
       ai_ops_model_catalog_verify_retries:
         type: int
@@ -14,7 +16,7 @@ argument_specs:
         type: int
         description: Delay between readiness attempts.
   rollback:
-    short_description: Restore the pre-deploy model-catalog config and prove readiness.
+    short_description: Restore the pre-deploy model-catalog profile and prove readiness.
     options: *ai_ops_model_catalog_options
   verify:
     short_description: Verify the running model-catalog against ai_ops_managed_file_verify_expected.

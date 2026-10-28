@@ -1,8 +1,8 @@
 ---
 # Verify one freshly recreated model-catalog container after a config deploy/rollback.
 # Input: ai_ops_managed_file_verify_expected with policy_digest (sha256 of the expected
-# config.yaml bytes), image_identity, old_container (the new one must differ) and
-# protected (service -> container ID, must be unchanged).
+# config.yaml bytes), script_digest (sha256 of the expected catalog.lua bytes), image_identity,
+# old_container (the new one must differ) and protected (service -> container ID, unchanged).
 
 - name: Select the expected model-catalog state
   ansible.builtin.set_fact:
@@ -33,10 +33,10 @@
       (expected={{ __ai_ops_model_catalog_expected.image_identity }},
       observed={{ __ai_ops_model_catalog_now.container.Image }}).
 
-- name: Validate mounted config inside the replacement container
+- name: Validate mounted config and catalog.lua inside the replacement container
   community.docker.docker_compose_v2_exec:
     service: model-catalog
-    argv: [/model-catalog, validate-config, /app/config.yaml]
+    argv: [/model-catalog, validate-config, /app/config.yaml, --script, /app/catalog.lua]
     tty: false
   register: __ai_ops_model_catalog_validate_raw
   changed_when: false
@@ -49,30 +49,38 @@
     __ai_ops_model_catalog_validate: "{{ __ai_ops_model_catalog_validate_raw.stdout | from_json }}"
   no_log: true
 
-- name: Require mounted config to match expected bytes
+- name: Require mounted config and catalog.lua to match expected bytes
   ansible.builtin.assert:
     that:
       - __ai_ops_model_catalog_validate.version | int == 1
       - __ai_ops_model_catalog_validate.config_digest == __ai_ops_model_catalog_expected.policy_digest
+      - __ai_ops_model_catalog_validate.script_digest | default('') == __ai_ops_model_catalog_expected.script_digest
     fail_msg: >-
-      model-catalog loaded unexpected config bytes
-      (expected={{ __ai_ops_model_catalog_expected.policy_digest }},
-      observed={{ __ai_ops_model_catalog_validate.config_digest | default('missing') }}).
+      model-catalog loaded unexpected profile bytes
+      (config expected={{ __ai_ops_model_catalog_expected.policy_digest }},
+      observed={{ __ai_ops_model_catalog_validate.config_digest | default('missing') }};
+      catalog.lua expected={{ __ai_ops_model_catalog_expected.script_digest }},
+      observed={{ __ai_ops_model_catalog_validate.script_digest | default('missing') }}).
 
-- name: Re-check remote file checksum
+- name: Re-check remote profile checksums
   ansible.builtin.stat:
-    path: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/config.yaml"
+    path: "{{ ai_ops_deploy_root }}/services/routing/model-catalog/{{ item }}"
     checksum_algorithm: sha256
   register: __ai_ops_model_catalog_remote_stat
+  loop: [config.yaml, catalog.lua]
 
-- name: Require remote file unchanged after activation
+- name: Require remote profile files unchanged after activation
   ansible.builtin.assert:
     that:
-      - __ai_ops_model_catalog_remote_stat.stat.checksum == __ai_ops_model_catalog_expected.policy_digest
+      - >-
+        item.stat.checksum | default('') == (__ai_ops_model_catalog_expected.policy_digest
+        if item.item == 'config.yaml' else __ai_ops_model_catalog_expected.script_digest)
     fail_msg: >-
-      remote services/routing/model-catalog/config.yaml changed after activation
-      (expected={{ __ai_ops_model_catalog_expected.policy_digest }},
-      observed={{ __ai_ops_model_catalog_remote_stat.stat.checksum }}).
+      remote services/routing/model-catalog/{{ item.item }} changed after activation
+      (observed={{ item.stat.checksum | default('missing') }}).
+  loop: "{{ __ai_ops_model_catalog_remote_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
 - name: Wait for model-catalog readiness
   community.docker.docker_compose_v2_exec:
@@ -113,4 +121,5 @@
     ai_ops_model_catalog_verified_container: "{{ __ai_ops_model_catalog_now.container.Id }}"
     ai_ops_model_catalog_verified_image: "{{ __ai_ops_model_catalog_now.container.Image }}"
     ai_ops_model_catalog_verified_policy_digest: "{{ __ai_ops_model_catalog_validate.config_digest }}"
+    ai_ops_model_catalog_verified_script_digest: "{{ __ai_ops_model_catalog_validate.script_digest }}"
     ai_ops_model_catalog_ready_attempts: "{{ __ai_ops_model_catalog_ready.attempts | default(1) }}"

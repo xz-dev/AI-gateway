@@ -2,6 +2,9 @@
 # Drift gate + upload + activate for one managed file. Check mode uploads nothing:
 # the upload reports what would change, and every remote mutation below is apply-only.
 # Outputs: ai_ops_managed_file_uploaded, ai_ops_managed_file_recovery_failed.
+# A multi-file operation deploys its other files first without activation and passes them as
+# ai_ops_managed_file_companions: activation then also runs when only a companion was uploaded,
+# and a failed verification restores the companions together with this file.
 
 - name: Prepare {{ ai_ops_managed_file_label }}
   ansible.builtin.include_tasks:
@@ -53,7 +56,7 @@
 - name: Activate {{ ai_ops_managed_file_label }}
   when:
     - ai_ops_managed_file_activate is defined
-    - ai_ops_managed_file_uploaded
+    - ai_ops_managed_file_uploaded or (ai_ops_managed_file_companions | default([]) | length > 0 and not ansible_check_mode)
   tags: [activate]
   block:
     - name: Recreate the activated service without dependencies, builds or pulls
@@ -86,7 +89,20 @@
         remote_src: true
         mode: "{{ ai_ops_managed_file_mode | default('preserve') }}"
       diff: false
-      when: __ai_ops_managed_file_remote_stat.stat.exists
+      # An unchanged file was not uploaded; its pre-deploy copy may be older than the live file.
+      when: __ai_ops_managed_file_remote_stat.stat.exists and ai_ops_managed_file_uploaded
+
+    - name: "Activation failed: restore pre-deploy copies of companion files"
+      ansible.builtin.copy:
+        src: "{{ item.predeploy }}"
+        dest: "{{ item.remote }}"
+        remote_src: true
+        mode: "{{ item.mode | default('preserve') }}"
+      diff: false
+      loop: "{{ ai_ops_managed_file_companions | default([]) }}"
+      loop_control:
+        label: "{{ item.label }}"
+      when: item.restore | default(true)
 
     - name: Reactivate restored {{ ai_ops_managed_file_label }}
       ansible.builtin.include_tasks:

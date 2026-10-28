@@ -7,7 +7,8 @@
 # --- ai_ops: locations and runtime ------------------------------------------
 # Private desired state: compose.yaml, compose.override.yaml, .env,
 # services/routing/aisix/resources.yaml, services/cpa/cpa-model-sync/config.json,
-# services/routing/model-catalog/config.yaml, data/egress-proxy/policy.json.
+# services/routing/model-catalog/config.yaml, the optional
+# services/routing/model-catalog/catalog.lua, data/egress-proxy/policy.json.
 # Default: ops/ansible/private-config/ (gitignored).
 # ai_ops_config_dir: /some/external/path
 
@@ -55,6 +56,9 @@
 # ai_ops_model_sync_log_tail: 200
 
 # --- ai_ops_model_catalog: deploy-config.yml -e component=model-catalog -----
+# Profile: config.yaml always; catalog.lua too when the private file exists (custom script).
+# A custom catalog.lua with metadata.include_models in config.yaml fails before upload, also
+# under --check. Both files deploy in one operation with one model-catalog recreate.
 # ai_ops_model_catalog_verify_retries: 30
 # ai_ops_model_catalog_verify_delay_seconds: 2
 
