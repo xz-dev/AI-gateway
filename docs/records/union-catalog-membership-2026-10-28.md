@@ -185,9 +185,10 @@ Reviewed rollback procedure from `ops/ansible/`:
 ansible-playbook playbooks/rollback.yml -e component=cli-proxy-api --check --diff
 ansible-playbook playbooks/rollback.yml -e component=cli-proxy-api \
   -e ai_ops_component_approved_digest='<fresh-reviewed-rollback-digest>'
-# Restore AISIX together with CPA if undoing D9.
-ansible-playbook playbooks/rollback-config.yml -e component=aisix --check --diff
-ansible-playbook playbooks/rollback-config.yml -e component=aisix
+# Restore AISIX together with CPA if undoing D9: rollback-config.yml does not accept aisix,
+# so restore the private resources.yaml from the pre-B backup, then redeploy it.
+ansible-playbook playbooks/deploy-config.yml -e component=aisix --check --diff
+ansible-playbook playbooks/deploy-config.yml -e component=aisix
 # Catalog image rollback is separate, also previewed and digest-approved.
 ```
 
