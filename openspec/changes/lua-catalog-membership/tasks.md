@@ -71,7 +71,10 @@
 ## 2. Compose, publish and pin
 
 - [x] 2.1 `compose.yaml`: mount `./services/routing/model-catalog/catalog.lua:/app/catalog.lua:ro,Z` and set `CATALOG_SCRIPT_PATH: /app/catalog.lua`. `ops/scripts/validate.sh` checks the tracked sample exists and is a file. Verify: `ops/scripts/validate.sh .env.example` passes, with `compose.override.yaml` moved to `/var/tmp` and restored; deleting the sample makes it fail.
-- [ ] 2.2 Commit unsigned (`git -c commit.gpgsign=false`) and push, then publish `ai-gateway-model-catalog` with the current publish workflow. Pin the digest in `compose.yaml` and `.env.example`. Verify: CI is green for the commit, the publish run succeeds, and `podman pull` of the pinned digest works.
+- [x] 2.2 Commit unsigned (`git -c commit.gpgsign=false`) and push, then publish `ai-gateway-model-catalog` with the current publish workflow. Pin the digest in `compose.yaml` and `.env.example`. Verify: CI is green for the commit, the publish run succeeds, and `podman pull` of the pinned digest works.
+  - Done 2026-10-28: Validate run 40682582392 green on 4b2ff32; publish run 40685595200 succeeded as `v1.3.0-4b2ff32@sha256:60b32f94f17f8ab420a2a6fc056585e3bebb19c7930bf364f84e9be6ca926ee0`; `podman pull` by digest works and `validate-config /app/config.yaml --script /app/catalog.lua` exits 0 with `--read-only --network none`.
+  - The dispatch ran on main at e8db1d0 (two docs-only commits after 4b2ff32), so the image revision label is e8db1d0; `git diff 4b2ff32 e8db1d0 -- services/routing/model-catalog` is empty and the submodule pin is the same, so the build input equals 4b2ff32.
+  - Only the tracked `compose.yaml` and `.env.example` are pinned here; the private `.env` pin is part of task 5.3.
 
 ## 3. Ansible
 
