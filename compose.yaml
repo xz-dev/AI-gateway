@@ -724,7 +724,7 @@ services:
   openai-api-cache-keeper:
     build:
       context: ./services/middleware/openai-api-cache-keeper
-    image: ${OPENAI_API_CACHE_KEEPER_IMAGE:-ghcr.io/xz-dev/openai-api-cache-keeper:ade3d346de4c342d24996c058f3542d9a2bd3e1f@sha256:b8e12e6d8a5caf74a17b4615754655df3f409c7ad5721bae40eb3ac768964c0f}
+    image: ${OPENAI_API_CACHE_KEEPER_IMAGE:-ghcr.io/xz-dev/openai-api-cache-keeper:b49ad9ac6c1eb65b1785d66ecb7249413d4c82bf@sha256:eb21638bdfc65ea09c119baf62337bb8f7f7b421890eeb1e63c1815c60030872}
     pull_policy: build
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
