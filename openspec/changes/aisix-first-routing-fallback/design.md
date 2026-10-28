@@ -113,6 +113,29 @@ Mechanism comparison:
 
 **FIRST task, before further implementation is locked:** run a local APISIX **3.19** harness with synthetic AISIX/CPA stubs. Prove byte-identical replay including file-backed bodies; delayed/split SSE bytes and arrival timing before EOF; caller/service credential isolation, `session_id` and request correlation; non-miss 404/upstream-error/auth/429/5xx/transport boundaries; terminal CPA error; limits, large-body memory, cancellation and cleanup. Record actual hook/config wiring and observations. This task is not complete merely because unit tests or strict validation pass. If it fails, stop for mechanism review rather than weakening replay/SSE/security behavior or deploying an unproven alternative. No relay/plugin prototype has been executed in this planning update.
 
+### Prototype ablation: existing parser memory failure (2026-10-28)
+
+The implementation worker stopped at the first resource-gate failure and requested review. The supervisor directed a comparative ablation before any new parser mechanism and explicitly authorized recording a **no-worse-than-current** prototype criterion. This is a supervisor direction, not independent human approval of reduced body support; the advertised 16/64 MiB ingress limits are unchanged. Full prototype completion and mechanism lock remain pending. No production or tracked runtime files were changed by this experiment.
+
+Both runs used the pinned `apache/apisix:3.19.0-debian`, one worker, one CPU and the existing **134,217,728-byte (128 MiB)** memory/swap ceiling, with synthetic loopback AISIX/CPA stubs in another container. Baseline mounted the unmodified current selector and route template (only fixture CPA-key substitution), adapting listener addresses/custom Lua search path to the isolated test namespace. Candidate used `resty.http` in serverless `before_proxy`, existing full-body cjson validation, file-reader replay and bounded streaming. The candidate's health fixture replaced `request-termination`, which this pinned image did not contain; the baseline inference routes were not changed. This unrelated health-route finding is not repaired here.
+
+| Request body | Current selector outcome / cgroup peak | Relay candidate outcome / cgroup peak |
+| --- | --- | --- |
+| Exactly 16 MiB | Pass, one CPA attempt; 127,205,376 B | Pass, AISIX then CPA with identical SHA-256; 120,291,328 B |
+| Exactly 17 MiB Responses | Pass; 125,632,512 B | Not sampled |
+| Exactly 18 MiB Responses | Pass; 128,798,720 B | Not sampled |
+| Exactly 19 MiB Responses | Pass; 134,217,728 B, no OOM | Pass, identical replay; 134,217,728 B, no OOM |
+| 20, 24 and 32 MiB Responses | Worker OOM; no backend attempt | Not sampled |
+| Exactly 64 MiB Responses | Worker OOM; peak 134,217,728 B, `oom=1`, `oom_kill=1` | Same worker OOM, same peak/events; client disconnected |
+
+These are single isolated samples with one large request in flight, not a capacity guarantee. The largest passing body in the **integer-MiB sweep** was 19 MiB; no byte-exact maximum is claimed. Peaks include charged page cache and need repeated paired measurements; a saturated peak alone cannot quantify allocations beyond the ceiling. The existing full-body reader plus cjson extraction already fails before dispatch at 64 MiB. Do not attribute that pre-existing failure to fallback or claim 64 MiB success. Track a separate bounded parsing/sanitization follow-up; do not raise memory or lower ingress limits silently.
+
+Comparative resource gate directed by the supervisor: retain the existing cgroup; at 16 MiB and the largest reproducibly passing baseline size, the relay must complete with no OOM and peak growth no more than **8 MiB** above a paired baseline, while remaining within the existing cgroup ceiling. Repeat paired runs and concurrency checks before completion. Any baseline failure remains explicit evidence, not a passing near-limit replay assertion. A new bounded streaming JSON parser is not authorized by this ablation.
+
+The initial small-body candidate passed ten attempt/error boundary assertions, including terminal CPA miss, non-miss 404 with `upstream_error/code=model_not_found`, 400/401/403/429/500 and connection closure. Both delayed SSE cases produced SHA-256 `f72689f1056e78e26d9247275d5f094f611ce6ed5f8053543d96bc26022f1661`; first-byte/EOF arrival was 0.001/1.201 s on an AISIX hit and 0.043/1.243 s after fallback. Caller/service credential isolation and `session_id` passed. Cancellation, concurrent large bodies, split/ambiguous candidate bodies, one-time retention and limit-plus-one/chunked checks remain unproven; task 0.1 remains unchecked.
+
+Private reproducible harness and logs: `/var/tmp/ai-aisix-first/prototype/` (`relay.lua`, `run.sh`, `baseline-run.sh`, `stub.py`, `probe.py`, baseline/candidate resource and probe logs). No production access was used.
+
 ### D3. One ordered list, exact bounded replay, safe logs
 
 Use one Lua list with entries supplying upstream identity, credential mode and a miss predicate: AISIX uses caller credential and the exact 404/type predicate; terminal CPA uses the service credential and a never-advance predicate. A future component needs one entry plus its proven miss signature, address and credential mode, not per-model naming maps or top-level backend-name conditionals. No runtime switches for rejected mechanisms.
