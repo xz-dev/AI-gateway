@@ -46,7 +46,7 @@
   - the model-catalog README.
 
   Verify: the local link check reports 0 broken links, and `git grep -nE 'supplementalIDs|oauth-model-alias|force-model-prefix: true'` hits only `docs/records` and `openspec/changes/archive`.
-- [ ] 2.3 Commit unsigned and push, then publish the model-catalog image with the current publish workflow and pin its digest. Verify: CI is green for the commit, the publish run succeeds, and the image pulls by digest.
+- [x] 2.3 Commit unsigned and push, then publish the model-catalog image with the current publish workflow and pin its digest. Verify: CI is green for the commit, the publish run succeeds, and the image pulls by digest.
 
 ## 3. Production
 
