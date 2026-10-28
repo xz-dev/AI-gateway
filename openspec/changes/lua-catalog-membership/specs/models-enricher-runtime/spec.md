@@ -9,7 +9,7 @@ The image SHALL provide the executable `/model-catalog` with these subcommands:
   - Usage errors, including two `-` inputs: exit 2.
   - Diagnostics go only to stderr, without YAML contents, script text or secrets.
 
-The dry-run SHALL call `select` for a fixed synthetic candidate set that covers every source combination and every prefix mode, plus the configuration's static model slugs, under the same limits as a real collection. Every call SHALL return a valid value, and the dry-run SHALL NOT read CPA or AISIX.
+The dry-run SHALL call `select` for a fixed synthetic candidate set that covers every source combination and every prefix mode, plus the configuration's static model slugs, under the same limits as a real collection. Every call SHALL return a valid value, and the dry-run SHALL NOT read CPA or AISIX. A dry-run in which the script rejects every synthetic candidate SHALL still exit 0 and SHALL print a WARN to stderr, because real candidates differ and an empty catalog is allowed.
 
 Starting without a subcommand SHALL run the server. Startup with an invalid configuration, or with a membership script that fails to load or dry-run, SHALL exit non-zero before listening.
 
@@ -22,6 +22,10 @@ Starting without a subcommand SHALL run the server. Startup with an invalid conf
 - **WHEN** the Ansible operation pipes a candidate `catalog.lua` to `/model-catalog validate-config /app/config.yaml --script -`
 - **THEN** a valid script exits 0 and prints `script_digest` matching the file's `sha256sum`
 - **AND** a script with a syntax error, a missing `select` or an invalid return value exits 1 with the error class on stderr and no script text
+
+#### Scenario: Script that rejects everything passes with a warning
+- **WHEN** a candidate script returns `false, reason` for every synthetic candidate
+- **THEN** `validate-config --script` exits 0, prints the digest JSON, and writes a WARN naming the rejected count to stderr
 
 #### Scenario: Compose healthcheck keeps working
 - **WHEN** Docker runs `/model-catalog healthcheck` against a serving container

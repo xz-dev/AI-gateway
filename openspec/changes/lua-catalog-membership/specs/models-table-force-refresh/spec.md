@@ -27,6 +27,10 @@ The table SHALL summarize kept, hidden and referenced-only counts, and SHALL cou
 - **WHEN** the default script rejects the bare CPA ID `gpt-6.1-sol` with the reason "CPA ID without a CPA prefix"
 - **THEN** the row for `gpt-6.1-sol` is marked hidden by `catalog.lua` with that reason, shows no compiled metadata, and is counted as script-rejected
 
+#### Scenario: Empty catalog from the script
+- **WHEN** the script successfully rejects every candidate
+- **THEN** the table lists every candidate as hidden by `catalog.lua` with its reason, the kept count is 0, and no failed attempt is shown
+
 #### Scenario: Failed script attempt shown
 - **WHEN** the latest collection failed with a membership script error
 - **THEN** the table shows the failed attempt and its error class, and its rows are those of the generation still served

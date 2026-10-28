@@ -42,13 +42,15 @@
   - `membership.cpa_include` rejected with the hint.
 - [ ] 1.5 Default-script parity: run the 1.1 fixture through the Lua path with the default script, with `EXTRA_CPA = { "devin/*" }` and the hides moved into the script. Verify: members (id, origin, preserveNative), the standard list bytes and the Codex manifest bytes equal `membership-golden.json` in all three prefix modes.
 - [ ] 1.6 Failure fallback and memory (D7, D8):
-  - a script error, a bound hit, a worker exit and an all-rejected result each keep the previous generation;
+  - a load error, a runtime error, an invalid return, a bound hit and a worker exit each keep the previous generation;
   - each logs one WARN with class and candidate ID and without script text;
   - each marks the table attempt failed;
-  - a failure before the first generation keeps `/readyz` not ready and retries on the cadence.
+  - a failure before the first generation keeps `/readyz` not ready and retries on the cadence;
+  - a script that validly rejects every candidate is NOT a failure: it publishes an empty membership, logs INFO with the candidate and rejected counts, and the table shows every candidate hidden with its reason.
 
   Verify:
-  - `catalog.test.ts`/`server.test.ts` cover each case, and the old `/v1/models` body is served byte-identical after the failure;
+  - `catalog.test.ts`/`server.test.ts` cover each failure case, and the old `/v1/models` body is served byte-identical after the failure;
+  - a test with a reject-all script shows the empty catalog is published (an empty `data` list, ready), the INFO line, and no failed attempt in the table;
   - a measurement script runs 50 forced refreshes on the production-shaped fixture, with a build overlapping one collection;
   - it records peak and settled RSS in design D7: peak under 384 MiB, and no upward trend over the last 10 refreshes.
 - [ ] 1.7 `validate-config --script` and startup (D9): add the option, the synthetic dry-run set, `script_digest`, the two-`-` usage error, `CATALOG_SCRIPT_PATH`, and the startup dry-run. Verify:
@@ -57,8 +59,9 @@
   - stderr carries no script text;
   - a directory, a missing file and a 257 KiB file are rejected;
   - startup with a script without `select` exits non-zero before listening;
+  - a script that rejects every synthetic candidate exits 0 with the digest JSON and one WARN with the rejected count on stderr;
   - output without `--script` is byte-identical to today's.
-- [ ] 1.8 Models table (D10): rejected rows `hidden by catalog.lua: <reason>`, the `rejected` summary count, `include_models` text unchanged. Verify: render tests for both scenarios of the models-table-force-refresh delta, and a JSON-catalog comparison shows the markings do not change catalog bytes.
+- [ ] 1.8 Models table (D10): rejected rows `hidden by catalog.lua: <reason>`, the `rejected` summary count, `include_models` text unchanged. Verify: render tests for every scenario of the models-table-force-refresh delta (including the empty-catalog one), and a JSON-catalog comparison shows the markings do not change catalog bytes.
 - [ ] 1.9 Full suite and image. Verify:
   - `npm ci && npm run typecheck && npm test && npm run build` pass in `services/routing/model-catalog`;
   - `podman build` succeeds;
@@ -85,20 +88,15 @@
   - a script-only change recreates once;
   - both files changed with a failed verify restores both;
   - check mode uploads nothing.
-- [ ] 3.2 Staging (D11): `ai_ops_model_catalog_stage` and `ai_ops_model_catalog_validate_image`, with the throwaway validation container, a temporary directory removed afterwards, and no recreate. Verify:
-  - shim tests show the exact `docker run` argv (`--rm --network none --read-only --user 65532:65532`, read-only candidate mount);
-  - no compose recreate call is made;
-  - the baselines are recorded;
-  - a missing `validate_image` fails with a usage message;
-  - a validation failure leaves the remote files untouched.
-- [ ] 3.3 Lint and the full Ansible test set. Verify: the production lint gate and every `ops/scripts/tests/test-ansible-*` pass.
+- [ ] 3.2 Lint and the full Ansible test set. Verify: the production lint gate and every `ops/scripts/tests/test-ansible-*` pass.
 
 ## 4. Docs
 
 - [ ] 4.1 Docs (D12):
   - `services/routing/model-catalog/README.md` gets one line and a link;
   - `docs/model-catalog.md` gets the "Membership script" section: fields, return values, `glob`, sandbox and limits, failure behavior, `validate-config --script`, and the examples admit all, exclude a few, prefer AISIX on same-name IDs, and the extra CPA list;
-  - `docs/ansible-operations.md` and `ops/ansible/README.md` list the second file, the custom rule, the combination check and staging;
+  - `docs/ansible-operations.md` and `ops/ansible/README.md` list the second file, the custom rule, the combination check, and that coupled image/Compose/profile changes use a reviewed manual window;
+  - the script reference states that a script rejecting everything publishes an empty catalog;
   - `docs/catalog.md` membership wording points to the script.
 
   Verify:
@@ -109,7 +107,7 @@
 
 ## 5. Production
 
-Run every step on an `openai/*` model with the playbooks current at apply time. Run `--check --diff` first for each playbook.
+Run every step on an `openai/*` model. The cutover itself (5.3) is a one-time reviewed manual window, because it couples the image, the Compose definition and the profile (design D11, Migration Plan step 4). Playbooks are used afterwards, `--check --diff` first.
 
 - [ ] 5.1 Private profile (local only):
   - write the private `catalog.lua` per Migration Plan step 2, and delete `membership` and `metadata.include_models` from the private `config.yaml`;
@@ -120,19 +118,19 @@ Run every step on an `openai/*` model with the playbooks current at apply time. 
   - a local run of the 1.5 harness on the private profile and a capture of the live native manifest and AISIX IDs gives the live member set;
   - the matcher check reports 0 conflicts.
 - [ ] 5.2 Pre-capture, read-only, to `/var/tmp`: native manifest IDs, AISIX IDs, standard list bytes, Codex manifest bytes for the pinned client versions, member and passthrough sets, public `/v1/models` count for a test key, Sub2API count, `:9083/models-table` summary. Verify: every capture is non-empty, and the catalog count is recorded.
-- [ ] 5.3 Stage: `deploy-config.yml -e component=model-catalog -e ai_ops_model_catalog_stage=true -e ai_ops_model_catalog_validate_image=<pinned digest>`, `--check --diff` first. Verify:
-  - both remote checksums equal the private files;
-  - `model-catalog` container ID and start time are unchanged;
-  - `/v1/models` bytes still equal the pre-capture.
-- [ ] 5.4 Image: `deploy.yml -e component=model-catalog`, with the private `compose.yaml` pinning the new digest and adding the mount and `CATALOG_SCRIPT_PATH`. Run `--check --diff`, then apply with the approval digest, then `POST :9083/models-table/refresh`. Verify:
+- [ ] 5.3 Manual window (Migration Plan step 4): back up the host `compose.yaml`, `.env`, `config.yaml` and any `catalog.lua`; pull the new image by digest and validate the private pair with a throwaway container of it; pause the recovery timer; upload the private `config.yaml`, `catalog.lua`, `compose.yaml` (mount and `CATALOG_SCRIPT_PATH`) and the `.env` image pin; `docker compose config -q`; one `docker compose up -d --no-deps --no-build model-catalog`; `POST :9083/models-table/refresh`; restart the recovery timer. Verify:
+  - the uploaded `compose.yaml` differs from the backup only by this change's lines;
+  - `model-catalog` is recreated once and no other container ID changes;
   - healthy, restarts=0;
   - logs show the script loaded and no WARN;
   - in-container `validate-config /app/config.yaml --script /app/catalog.lua` exits 0;
-  - the time from 5.3 to this step is recorded.
+  - the window start, recreate and ready times are recorded.
+- [ ] 5.4 Adopt baselines: run `deploy-config.yml -e component=model-catalog --check --diff` and `deploy.yml -e component=model-catalog --check --diff`. Verify: both report `changed=0 failed=0`; any stale baseline is re-adopted through the documented first-adoption path and the checks are rerun.
 - [ ] 5.5 Post-capture and diff: repeat the 5.2 captures. Verify:
   - standard list bytes and Codex manifest bytes are byte-identical to the pre-capture (`cmp`);
   - the member and passthrough sets are equal;
   - the public and Sub2API counts are equal;
   - the table differs only by `catalog.lua`-rejected rows, the hide reason text and the new count.
   - If the native or AISIX captures changed between 5.2 and 5.5, stop and explain the diff from them before continuing.
+  - If the catalog bytes differ for any other reason, roll back with the manual steps of Migration Plan step 8 and stop for a user decision.
 - [ ] 5.6 Write `docs/records/lua-catalog-membership-deployment-<date>.md` with digests, timings, the diff summary, the 1.6 memory numbers and the rollback commands (Migration Plan step 8), without private values or the public hostname. Commit unsigned and push. Verify: CI is green, and `git grep` of the record finds no private hostnames or keys.

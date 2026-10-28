@@ -201,6 +201,8 @@ A script load error, runtime error, invalid return value, exceeded limit or work
 
 The sidecar SHALL NOT publish a generation with zero members because of a script failure. Before the first generation, a failing script SHALL keep `/readyz` not ready, and collection SHALL retry on the bounded cadence.
 
+A successful run that rejects every candidate is not a failure. The sidecar SHALL publish the resulting empty membership as is, SHALL log it at INFO with the candidate and rejected counts, and SHALL NOT block it.
+
 At startup, the sidecar SHALL load and dry-run the script as `validate-config --script` does, and SHALL exit non-zero before listening when that fails.
 
 #### Scenario: Runtime error keeps the previous catalog
@@ -215,8 +217,8 @@ At startup, the sidecar SHALL load and dry-run the script as `validate-config --
 
 #### Scenario: Script rejects everything
 
-- **WHEN** an edited script returns `false` for every candidate
-- **THEN** the collection fails as a script error, no empty generation is published, and the previous generation keeps serving
+- **WHEN** an edited script returns a valid `false, reason` for every candidate
+- **THEN** the collection succeeds and publishes a generation with no members, an INFO line reports the candidate and rejected counts, and the models table shows every candidate as hidden by `catalog.lua` with its reason
 
 ## REMOVED Requirements
 

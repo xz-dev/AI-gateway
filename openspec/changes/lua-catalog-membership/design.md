@@ -13,7 +13,7 @@ See proposal.md for the motivation. This change starts after `union-catalog-memb
 **Goals:**
 - Membership is a profile file, `catalog.lua`, that an operator can edit without an image release.
 - The default script reproduces today's membership exactly, including passthrough and compatibility mode.
-- A broken or hostile script cannot take the service down, read the host, or publish an empty catalog.
+- A broken or hostile script cannot take the service down or read the host, and a script failure never replaces the served catalog. A script that deliberately rejects everything is honoured.
 - Production moves to the script with a byte-identical catalog.
 
 **Non-Goals:**
@@ -58,7 +58,9 @@ The script only sees a copy of each candidate and returns a decision for it. Ext
 
 The script's global `select` replaces Lua's built-in `select`. The docs say to use `table.pack`/`#` instead.
 
-Why `compile`: in `forced` mode the union code compiles OAuth IDs matched by `cpa_include` (`devin/*`) and emits other OAuth IDs as-is. The host cannot tell these apart without the list, so the script must say it. This only extends the keep shape of the binding interface (`true` plus optional options) and is listed under Open Questions.
+Why the options (user decision, 2026-10-28: keep both):
+- `source`: without it, "prefer AISIX on same-name IDs" cannot be expressed.
+- `compile`: in `forced` mode the union code compiles OAuth IDs matched by `cpa_include` (`devin/*`) and emits other OAuth IDs as-is. The host cannot tell these apart without the list, so the script must say it. Without it, a CPA rollback to `force-model-prefix: true` would change the catalog.
 
 ### D3 Default script
 
@@ -175,9 +177,13 @@ The per-call budget is about 100 times what the default script uses for one cand
 ### D8 Failure fallback
 
 Each of these fails the collection with a `MembershipScriptError`:
-- a script error, an invalid return or an exceeded bound;
-- a worker exit, a wall-time termination;
-- zero members while there are candidates.
+- a load error, a runtime error, an invalid return or an exceeded bound;
+- a worker exit, a wall-time termination.
+
+An empty result is not a failure (user decision, 2026-10-28). When every `select` call returns a valid `false, reason`, the collection succeeds:
+- the empty membership is published as is, and the gateway does not block it;
+- an INFO line reports the candidate and rejected counts;
+- the models table lists every candidate as hidden by `catalog.lua` with its reason.
 
 In that case:
 - `AuthorityOwner` does not publish. The previous generation keeps serving, including its `/v1/models` files.
@@ -185,14 +191,14 @@ In that case:
 - The models table records the failed attempt with its error class, like a worker crash today.
 - Before the first generation, `/readyz` stays not ready and the bounded retry applies.
 
-CPA unavailability keeps its existing path (502 `native_manifest_failed`). A script failure never turns into an empty or CPA-only catalog.
+CPA unavailability keeps its existing path (502 `native_manifest_failed`). A script failure never turns into an empty or CPA-only catalog; only a successful run can produce an empty one.
 
 Startup loads and dry-runs the script (D9) and exits non-zero before listening on failure. So a broken script is caught at deploy time, not at the first collection.
 
 ### D9 `validate-config --script`
 
 - `validate-config <config|-> [--script <path|->]`, at most one `-`.
-- It parses the config as today. With `--script`, it then runs the worker with a fixed synthetic candidate set: CPA-only, AISIX-only, static-only and every pair of sources, each in `prefix`, `forced` and `fallback` modes, with and without a prefix, plus the config's static slugs. Every return must be valid. Rejecting all synthetic candidates is allowed, because real data differs.
+- It parses the config as today. With `--script`, it then runs the worker with a fixed synthetic candidate set: CPA-only, AISIX-only, static-only and every pair of sources, each in `prefix`, `forced` and `fallback` modes, with and without a prefix, plus the config's static slugs. Every return must be valid. Rejecting all synthetic candidates is allowed: it exits 0 and writes a WARN with the rejected count to stderr, because real data differs and an empty catalog is a legitimate operator choice.
 - Output: one JSON line `{"version":1,"config_digest":…,"script_digest":…}` (`script_digest` only with `--script`). Existing callers without `--script` see the same output.
 - Ansible validates a candidate config with `validate-config -` and a candidate script with `validate-config /app/config.yaml --script -` (D11). The dry-run does not depend on the config beyond static slugs, so validating each candidate against the live other file is enough.
 
@@ -203,7 +209,7 @@ Startup loads and dry-runs the script (D9) and exits non-zero before listening o
 - `project.ts` keeps the `include_models[i]` text for include hides.
 - With the default script in production, the table gains a few hundred rejected rows, mostly CPA bare copies of prefixed IDs. Rows are small: ID, sources and reason.
 
-### D11 Ansible: second managed file, combination check, staging
+### D11 Ansible: second managed file and combination check
 
 - `ai_ops_model_catalog` handles a list of managed files: `model-catalog/config.yaml` always, and `model-catalog/catalog.lua` when the private file exists.
 - **Custom script**: `{{ ai_ops_config_dir }}/services/routing/model-catalog/catalog.lua` exists on the controller. Content does not matter, so the rule is simple to test and to explain.
@@ -215,16 +221,12 @@ Startup loads and dry-runs the script (D9) and exits non-zero before listening o
   5. **Verify** (`verify.yml`): checksum of both remote files, `validate-config /app/config.yaml --script /app/catalog.lua` in the new container, readiness and neighbours.
   6. **On failure**: restore every file deployed in this run from its baseline, then recreate once.
 - Without a custom script the remote `catalog.lua` is not managed, and `include_models` stays allowed. Removing a private override does not delete the remote file: the operator restores the default by copying the tracked sample into the private directory, deploying, and then deleting it.
-- **Staging for an image cutover**: `-e ai_ops_model_catalog_stage=true -e ai_ops_model_catalog_validate_image=<ref@sha256>`.
-  - It uploads the candidates to a remote 0700 temporary directory and validates them with a throwaway container of the given image: `--rm --network none --read-only --user 65532:65532`, temporary directory mounted read-only, `validate-config /candidate/config.yaml --script /candidate/catalog.lua`.
-  - It then installs the files and records baselines without recreating `model-catalog`.
-  - The running process read its files at startup, so staging does not change what it serves until the next recreate. The next `deploy.yml -e component=model-catalog` does that recreate.
+- There is no staging mode. A change that couples the image, the Compose definition and the profile (such as this change's cutover) goes through a one-time reviewed manual window, as in earlier migrations (layout move, CPA plugins). After that window, the managed-file operation adopts the deployed files as baselines.
 - Tests extend `ops/scripts/tests/test-ansible-model-catalog-config.sh` with the docker shim:
   - the combination check, also under `--check`;
   - a script-only change;
   - both files changed;
-  - restore of both on a failed verify;
-  - staging without recreate.
+  - restore of both on a failed verify.
 
 ### D12 Docs
 
@@ -233,7 +235,7 @@ Startup loads and dry-runs the script (D9) and exits non-zero before listening o
   - the `m` fields and return values, `glob`, the sandbox and limits, and failure behavior;
   - `validate-config --script`;
   - examples: admit all; exclude a few (`listed(m.id, HIDE)` → `false, "excluded"`); prefer AISIX on same-name IDs (`if m.sources.aisix then return true, {source = "aisix"} end` first); the extra CPA list.
-- `docs/ansible-operations.md` and `ops/ansible/README.md` list the second file, the custom rule and the combination check.
+- `docs/ansible-operations.md` and `ops/ansible/README.md` list the second file, the custom rule, the combination check, and that coupled image/Compose/profile changes use a reviewed manual window.
 
 ## Risks / Trade-offs
 
@@ -242,7 +244,8 @@ Startup loads and dry-runs the script (D9) and exits non-zero before listening o
 - [Script freezes CPA updates] → a script that fails on new real data blocks new generations until fixed. The WARN and the table make it visible. The default script cannot fail on valid inputs (task 1.3 fuzzes it).
 - [Extra memory during collection] → about 25 MiB for at most 2 s per collection. It is measured in task 1.6 with an overlapping build.
 - [Bind-mount of a missing file creates a directory] → D1 fails closed on a directory. Production always deploys the file (D11). `validate.sh` checks the tracked sample exists.
-- [Restart between staging and image deploy] → the old image would read the staged config, which has no `cpa_include` and no `include_models`. It would serve without `devin/*` and with image models until the image deploy. Mitigation: the image deploy follows the staging immediately, and the record notes the window.
+- [Coupled cutover: the old image does not read `catalog.lua`, and the new image rejects `membership.cpa_include`] → the profile files, the Compose file and the image switch happen in one manual window with one recreate, so neither image ever runs with the other's profile. Rollback restores all three together.
+- [An operator script that rejects everything empties the catalog] → this is allowed by design. The INFO line, the models table and the `validate-config` WARN make it visible before and after deploy.
 - [Hidden-by-script models cannot be `inherit`/`metadata_from` targets] → include hides can still be referenced; script rejects cannot. Production has no such reference (checked in Context; task 4.1 re-checks with the real matcher). The docs say to keep such hides in `include_models`, which then needs the default script.
 
 ## Migration Plan
@@ -252,19 +255,21 @@ All production steps run on an `openai/*` model with the playbooks current at ap
 1. **Repository**: implement D1–D10 with tests. Publish the image and pin its digest. Implement D11 with tests. Write the docs. CI green.
 2. **Private profile** (local): write the private `catalog.lua` as the default script with `EXTRA_CPA = { "devin/*" }` and a `HIDE` list holding the 11 `include_models` hide patterns. Rejections use the reason `hidden by profile`. Delete `membership` and `metadata.include_models` from the private `config.yaml`. Check with the new image locally: `validate-config` and a dry-run.
 3. **Pre-capture** (read-only, `/var/tmp`): native manifest IDs, AISIX IDs, the standard list bytes, Codex manifest bytes for the pinned client versions, member and passthrough sets, public `/v1/models` count for a test key, the Sub2API count, `:9083/models-table` summary.
-4. **Stage**: `deploy-config.yml -e component=model-catalog -e ai_ops_model_catalog_stage=true -e ai_ops_model_catalog_validate_image=<new digest>`, first with `--check --diff`.
-5. **Image**: `deploy.yml -e component=model-catalog` with the private `compose.yaml` pinning the new image, the `catalog.lua` mount and `CATALOG_SCRIPT_PATH`; `--check --diff`, then apply with the approval digest. Then `POST :9083/models-table/refresh`.
-6. **Post-capture and diff**: the same captures as step 3. The JSON catalogs must be byte-identical, the member and passthrough sets equal, and the counts equal. The table may differ only by script-rejected rows and the hide reason text.
+4. **Manual window** (reviewed, one recreate). The Compose change (mount and `CATALOG_SCRIPT_PATH`) is a structure change that the component gate rejects, and the old and new images need different profiles, so this cutover does not use the deploy playbooks:
+   1. Before the window: back up the host `compose.yaml`, `.env`, `config.yaml` and any `catalog.lua`; pull the new image by digest; validate the private pair with a throwaway container of the new image (`--rm --network none --read-only`, `validate-config /candidate/config.yaml --script /candidate/catalog.lua`).
+   2. Pause the recovery timer.
+   3. Upload the private `config.yaml`, `catalog.lua` and `compose.yaml` (diff against the host = only this change's lines) and the `.env` image pin; `docker compose config -q`.
+   4. `docker compose up -d --no-deps --no-build model-catalog`: one recreate.
+   5. `POST :9083/models-table/refresh`; restart the recovery timer.
+5. **Post-capture and diff**: the same captures as step 3. The JSON catalogs must be byte-identical, the member and passthrough sets equal, and the counts equal. The table may differ only by script-rejected rows and the hide reason text.
+6. **Adopt baselines**: `deploy-config.yml -e component=model-catalog --check --diff` and `deploy.yml -e component=model-catalog --check --diff` report `changed=0`; any stale baseline is re-adopted per the documented first-adoption path.
 7. **Record**: `docs/records/lua-catalog-membership-deployment-<date>.md` with digests, timings, the diff summary and rollback commands.
-8. **Rollback**:
-   - stage the previous `config.yaml` (with `cpa_include` and `include_models`) through `rollback-config.yml -e component=model-catalog`;
-   - then `rollback.yml -e component=model-catalog` to the previous image digest;
-   - a remaining `catalog.lua` is ignored by the old image.
+8. **Rollback**: in the same manual way, restore the backed-up `compose.yaml`, `.env` and `config.yaml` (with `cpa_include` and `include_models`), then one `up -d --no-deps --no-build model-catalog`. A remaining `catalog.lua` is ignored by the old image.
 
-## Open Questions
+## Resolved decisions (user, 2026-10-28)
 
-- **`compile` option**: the binding interface is "true to keep, or false plus a reason". D2 adds an optional options table on keep (`source`, `compile`). Without `source`, "prefer AISIX on same-name IDs" is impossible. Without `compile`, forced mode changes `devin/*` from compiled to passthrough. The alternative is to drop forced-mode parity and `compile`, but then a CPA rollback to `force-model-prefix: true` would change the catalog. Recommendation: keep both options.
-- **Custom = present**: a private `catalog.lua` identical to the default still counts as custom and blocks `include_models`. The alternative is to compare against the default's digest. It is more permissive, but its behaviour depends on the image version. Recommendation: present means custom.
-- **Staging vs a short window**: D11 staging adds two role variables for a one-time cutover, which keeps the catalog identical except on an unplanned restart. The alternative is to deploy the profile on the old image, then the image right after. The catalog would then visibly change for that minute (`devin/*` gone, image models shown). Recommendation: staging, because the variables are reusable for any image plus profile change.
-- **All-rejected is an error**: D8 treats zero members as a script failure. An operator who wants an empty catalog cannot have one. Recommendation: keep it, because "never an empty catalog" is the safer default.
-- **Limit values**: 100,000 instructions per call, 20,000,000 per collection, 16 MiB and 2 s are first values, fixed in code, not configurable. Task 1.3 checks the default script uses under 1% of each. Making them configurable is left out until someone needs it.
+- Keep both optional keep options, `source` and `compile` (D2).
+- Custom means a private `catalog.lua` exists, whatever its content (D11).
+- The production cutover uses a one-time reviewed manual window, with no Ansible staging mode (D11, Migration Plan step 4).
+- An empty result from a successful run is published, not blocked (D8). Only script failures keep the previous generation.
+- The limit values stay fixed in code (D6). Task 1.3 checks the default script uses under 1% of each.

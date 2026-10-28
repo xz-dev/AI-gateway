@@ -11,11 +11,11 @@ The membership filter should be part of the operator's profile, as a small Lua s
 - **Lua is the membership stage.** It runs during authority collection, before `include_models`, chain metadata and post-processing.
 - **BREAKING (config)**: `membership.cpa_include` and the `membership` block are removed. They are rejected as legacy fields with a hint that points to `catalog.lua`.
 - **Runtime**: wasmoon 1.16.0 (Lua 5.4 compiled to WebAssembly, MIT), pinned. The script runs in a sandbox with no `io`, `os`, `require`, code loading, `debug` or `coroutine`. Instructions, memory and wall time are bounded. It runs in a short-lived worker thread per authority collection.
-- **Failure is safe.** A script error, limit or invalid return fails that collection only. The last good generation keeps serving, a WARN is logged and the models table shows the failed attempt. An empty catalog is never published.
-- `validate-config` accepts `--script <path|->` and loads and dry-runs the script.
+- **Failure is safe.** A script load error, runtime error, exceeded limit or invalid return fails that collection only. The last good generation keeps serving, a WARN is logged and the models table shows the failed attempt. A successful run that rejects every candidate is the operator's choice: the empty catalog is published, logged at INFO, and not blocked.
+- `validate-config` accepts `--script <path|->` and loads and dry-runs the script. A dry-run that rejects everything is a WARN, not a failure.
 - `/models-table` lists IDs that the script rejects as hidden, with the script's reason.
 - **Operations**: `deploy-config.yml -e component=model-catalog` deploys `catalog.lua` as a second managed file, with the same drift gate, baseline and rollback as `config.yaml`. The check rejects a profile that has both a custom `catalog.lua` and `metadata.include_models`.
-- **Production migration**: the private profile moves `cpa_include: ["devin/*"]` and today's `include_models` hides into its `catalog.lua`. The served catalog stays byte-identical.
+- **Production migration**: the private profile moves `cpa_include: ["devin/*"]` and today's `include_models` hides into its `catalog.lua`. The image, Compose and profile switch in one reviewed manual window with one recreate, because the old and new images need different profiles. The served catalog stays byte-identical.
 - `include_models` stays in the gateway config and in openai-api-pi-extension. The extension gets no change.
 
 ## Capabilities
@@ -39,6 +39,6 @@ The membership filter should be part of the operator's profile, as a small Lua s
 - **Compose**: `compose.yaml` mounts `./services/routing/model-catalog/catalog.lua` read-only and sets `CATALOG_SCRIPT_PATH`.
 - **Ansible**: `ai_ops_model_catalog` deploy, verify and rollback handle two managed files; the combination check; `test-ansible-model-catalog-config.sh`.
 - **Docs**: `services/routing/model-catalog/README.md` stays short; `docs/model-catalog.md` gets the script reference with examples; `docs/ansible-operations.md` and `ops/ansible/README.md` list the new file.
-- **Production**: one image publish and one coordinated model-catalog cutover (image and private profile), on an `openai/*` model with the current playbooks.
+- **Production**: one image publish and one coordinated model-catalog cutover (image, Compose and private profile) in a reviewed manual window, on an `openai/*` model. The playbooks check it afterwards with `--check --diff`.
 - **Sequencing**: starts after `union-catalog-membership` has landed in production and is archived.
 - **Unchanged**: openai-api-pi-extension; the `include_models` semantics; routing.
