@@ -106,7 +106,9 @@
   - every docs example is executed by a test against the fixture and gives the documented result;
   - a link check finds 0 broken links;
   - `git grep -n cpa_include -- ':!openspec/changes/archive' ':!docs/records'` finds only the legacy-field table, its tests and this change.
-- [ ] 4.2 Commit unsigned and push. Verify: CI is green, and `git status` shows no private-config file staged.
+- [x] 4.2 Commit unsigned and push. Verify: CI is green, and `git status` shows no private-config file staged.
+  - Done 2026-10-28: Validate runs green on 8211fca…40efef0 after the SC2015 fix (f406fe7): a111f3c 40681787670, 4b2ff32 40682582392, 40efef0 40686168620; no private-config, `.env` or `compose.override.yaml` path in any commit of this change; nothing staged.
+  - 4.1 grep note: besides the legacy table, its tests and this change, `cpa_include` remains in the main specs `codex-models-enricher` and `aisix-route-lifecycle`; both are rewritten by this change's deltas at archive.
 
 ## 5. Production
 
