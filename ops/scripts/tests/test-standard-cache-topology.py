@@ -54,12 +54,17 @@ class StandardCacheTopology(unittest.TestCase):
         self.assertIn("client_max_body_size: 64m", (ROOT / "services/routing/apisix-models/config.yaml").read_text())
         self.assertNotIn("upstream_id: response-keeper", self.inner)
         self.assertNotIn('"127.0.0.1:8085"', self.inner)
-        route = section(self.inner, "  - id: responses-routing-selector\n")
-        for value in ("uri: /v1/responses", "methods: [POST]", "max_body_size: 67108864", 'require("routing_selector").run', "disable_proxy_buffering: true"):
-            self.assertIn(value, route)
-        native = section(self.inner, "  - id: catch-all\n")
-        self.assertIn("enable_websocket: true", native)
-        self.assertIn("upstream_id: cpa", native)
+        # Constant pipe: AISIX resolves priority (exact, narrower glob, then * -> CPA).
+        self.assertEqual(re.findall(r"(?m)^  - id: ([\w-]+)$", self.inner), ["model-catalog", "aisix", "local-health", "codex-models", "aisix"])
+        for value in ("global_rules", "serverless-", "client-control", "__CPA_API_KEY__", "routing_selector", "cpa", "8317"):
+            self.assertNotIn(value, self.inner)
+        models = section(self.inner, "  - id: codex-models\n")
+        for value in ("uri: /v1/models", "methods: [GET]", "upstream_id: model-catalog"):
+            self.assertIn(value, models)
+        routes = self.inner[self.inner.index("routes:\n"):]
+        pipe = section(routes, "  - id: aisix\n")
+        for value in ("uri: /*", "priority: 1\n", "enable_websocket: true", "disable_proxy_buffering: true", "upstream_id: aisix"):
+            self.assertIn(value, pipe)
 
     def test_chain_has_one_front_keeper(self):
         keepalive = section(self.compose, "  ai-sse-keepalive-proxy:\n")

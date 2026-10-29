@@ -1,0 +1,35 @@
+# Intentional break for check-apisix-models-no-cpa.py: re-adds the removed
+# apisix-models -> CPA relay edge. validate.sh requires the check to FAIL on it.
+services:
+  apisix-models-cpa-relay:
+    image: ${SOCAT_IMAGE:-docker.io/alpine/socat:1.8.1.3}
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["TCP4-LISTEN:8317,bind=172.30.35.3,reuseaddr,fork", "TCP4:172.30.36.2:8317,connect-timeout=10"]
+    networks:
+      apisix-models-cpa-source:
+        ipv4_address: 172.30.35.3
+      apisix-models-cpa-target:
+        ipv4_address: 172.30.36.3
+  apisix-models-netns:
+    networks:
+      apisix-models-cpa-source:
+        ipv4_address: 172.30.35.2
+  cpa-netns:
+    networks:
+      apisix-models-cpa-target:
+        ipv4_address: 172.30.36.2
+
+networks:
+  apisix-models-cpa-source:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.35.0/29
+  apisix-models-cpa-target:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.36.0/29

@@ -1,9 +1,7 @@
 apisix:
-  # Bind only the inbound relay targets: healthcheck/self, host relay target, Sub2API relay target, front-door catalog leg (front-catalog).
+  # Bind only the inbound relay targets: healthcheck/self, Sub2API relay target, front-door catalog leg (front-catalog).
   node_listen:
     - ip: 127.0.0.1
-      port: 9080
-    - ip: 172.30.34.2
       port: 9080
     - ip: 172.30.12.2
       port: 9080
@@ -12,10 +10,9 @@ apisix:
   enable_admin: false
   enable_control: false
   enable_ipv6: false
-  # Internal plaintext selector; do not open the default 9443 TLS listener.
+  # Internal plaintext pipe; do not open the default 9443 TLS listener.
   ssl:
     enable: false
-  extra_lua_path: "/opt/apisix/custom/?.lua"
   dns_resolver:
     - 127.0.0.11
 
@@ -23,7 +20,7 @@ nginx_config:
   worker_processes: 1
   error_log_level: warn
   http:
-    # Expanded history stays internal; route/global client-control retains other limits.
+    # Keeper-expanded Responses history stays internal; the front door keeps 16 MiB for clients.
     client_max_body_size: 64m
 deployment:
   role: data_plane

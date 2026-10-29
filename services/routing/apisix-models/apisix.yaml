@@ -15,125 +15,34 @@ upstreams:
       connect: 3600
       send: 3600
       read: 3600
-  - id: cpa
-    type: roundrobin
-    nodes:
-      "cpa:8317": 1
-    timeout:
-      connect: 3600
-      send: 3600
-      read: 3600
 
-# Other routes keep 16 MiB; Responses may carry keeper-expanded history up to 64 MiB.
-global_rules:
-  - id: non-responses-body-limit
-    plugins:
-      client-control:
-        max_body_size: 16777216
-        _meta:
-          filter:
-            - ["route_id", "~=", "responses-routing-selector"]
-
+# Constant pipe: no body is read here. AISIX resolves every model by priority
+# (exact route or direct row, then a narrower glob, then its single * fallback row).
 routes:
-  # 本组件存活检查不访问CPA；依赖故障由各组件自身检测，避免级联重启。
+  # Liveness is local and never touches a dependency, so failures do not cascade.
+  # The pinned APISIX 3.19 ships no termination plugin; fault-injection abort answers locally.
   - id: local-health
     uri: /healthz
     methods: [GET, HEAD]
     priority: 1000
     plugins:
-      request-termination:
-        status_code: 200
-        content_type: application/json
-        body: '{"status":"ok"}'
-  # Keeper is before Sub2API; HTTP model selection remains at this boundary.
-  - id: responses-routing-selector
-    uri: /v1/responses
-    methods: [POST]
-    priority: 110
-    plugins:
-      client-control:
-        max_body_size: 67108864
-      proxy-buffering:
-        disable_proxy_buffering: true
-      serverless-pre-function:
-        phase: rewrite
-        functions:
-          - >-
-            return function(_, ctx)
-              local status, body, headers = require("routing_selector").run(_, ctx, "__CPA_API_KEY__")
-              if status then
-                return status, body, headers
-              end
-            end
-    upstream_id: cpa
-  # 仅模型承载的HTTP推理入口做目录选路；优先级高于所有历史别名规则。
-  # 原始model不改写；WS GET升级保持下方独立路径。
-  - id: catalog-routing-selector
-    uris:
-      - /v1/chat/completions
-      - /v1/images/generations
-    methods:
-      - POST
-    priority: 100
-    plugins:
-      proxy-buffering:
-        disable_proxy_buffering: true
-      serverless-pre-function:
-        phase: rewrite
-        functions:
-          - >-
-            return function(_, ctx)
-              local status, body, headers = require("routing_selector").run(_, ctx, "__CPA_API_KEY__")
-              if status then
-                return status, body, headers
-              end
-            end
-    upstream_id: cpa
-  # multipart 无法交给 JSON 选路器；AISIX 解析 model 并映射裸名。
-  # 保留调用方的 AISIX 凭证，不换成 CPA 凭证。
-  - id: aisix-images-edits
-    uri: /v1/images/edits
-    methods:
-      - POST
-    priority: 90
-    upstream_id: aisix
-  # 标准OpenAI与Codex目录都交给model-catalog；最终富目录不缓存。
-  # /models-table 不经本平面：由前门 9083 运维监听直连 model-catalog。
+      fault-injection:
+        abort:
+          http_status: 200
+          body: '{"status":"ok"}'
+  # Sub2API reads the Codex manifest and the plain list from its inference base URL.
   - id: codex-models
     uri: /v1/models
-    methods:
-      - GET
+    methods: [GET]
     priority: 20
     upstream_id: model-catalog
-  - id: catch-all
+  # The caller's AISIX credential passes through unchanged.
+  - id: aisix
     uri: /*
     priority: 1
     enable_websocket: true
     plugins:
       proxy-buffering:
         disable_proxy_buffering: true
-      # 2026-09-10: Kimi 上游不支持 prompt_cache_retention（400 invalid_request_error），
-      # CPA kimi_executor 不剥字段，导致 400→500 转换后 sub2api 重试 10 次、
-      # 客户端表现为长时间 hang + 最终 Connection error。
-      # 在此统一剥除该字段，避免无效上游调用和重试风暴。
-      # 注意：APISIX 的 WS 代理跳过 body 插件；WS 帧不做此字段改写。
-      serverless-pre-function:
-        phase: rewrite
-        functions:
-          - >-
-            return function()
-              local ct = ngx.var.http_content_type or ""
-              if not ct:find("json") then return end
-              ngx.req.read_body()
-              local body = ngx.req.get_body_data()
-              if not body or body == "" then return end
-              local dkjson = require("dkjson")
-              local obj, pos, err = dkjson.decode(body, 1, nil)
-              if err or type(obj) ~= "table" then return end
-              if obj.prompt_cache_retention == nil then return end
-              obj.prompt_cache_retention = nil
-              local nb = dkjson.encode(obj)
-              if nb then ngx.req.set_body_data(nb) end
-            end
-    upstream_id: cpa
+    upstream_id: aisix
 #END

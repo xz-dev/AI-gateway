@@ -287,9 +287,9 @@ def run(apply):
     if len(by_service) != len(CHECKS):
         raise RuntimeError("application ownership mismatch")
     # Existing service key stays in this process's memory, never argv or logs.
-    # The cache keeper holds no CPA key; apisix-models still carries the client key.
-    key = next((item.partition("=")[2] for item in by_service["apisix-models"]["Config"].get("Env") or []
-                if item.startswith("CPA_API_KEY=")), None)
+    # model-catalog is the only checked service holding the CPA client key.
+    key = next((item.partition("=")[2] for item in by_service["model-catalog"]["Config"].get("Env") or []
+                if item.startswith("CPA_CLIENT_KEY=")), None)
     filename = STATE_DIR / "state.json"
     state = json.loads(filename.read_text()) if filename.exists() else {}
     now = time.time()
