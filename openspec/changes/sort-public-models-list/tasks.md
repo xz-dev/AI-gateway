@@ -49,11 +49,11 @@ This change is independent of union-catalog-membership (design D6). It has no sp
 ## 2. Docs and commit
 
 - [x] 2.1 Update `docs/catalog.md`. The "Unparameterized `/v1/models`" note becomes: the front door fetches Sub2API's list and returns it in the catalog output order, with members and records unchanged; it covers pass-through, cache headers, and the admission slot. Also update the front APISIX README if it describes the plain route. Verify: the local link check reports 0 broken links, and `git grep -n 'keeps going straight' -- docs services/firewall/apisix/README.md` returns nothing.
-- [ ] 2.2 Commit unsigned with explicit pathspecs (`git -c commit.gpgsign=false commit -- <paths>`) and push. Verify: the Validate CI run for the commit is green.
+- [x] 2.2 Commit unsigned with explicit pathspecs (`git -c commit.gpgsign=false commit -- <paths>`) and push. Verify: the Validate CI run for the commit is green. Evidence: implementation `e9ec1f7`, Validate run `40886153407`, completed/success.
 
-## 3. Production (reviewed manual window, `openai/*` model)
+## 3. Production (reviewed manual window, `openai-codex/gpt-6.1-sol` model)
 
-- [ ] 3.1 Pre-checks and pre-capture, read-only, into `/var/tmp`:
+- [x] 3.1 Pre-checks and pre-capture, read-only, into `/var/tmp`:
   - `ansible-playbook playbooks/deploy.yml -e component=apisix --check --diff` from `ops/ansible/` reports `changed=0`;
   - the live Lua file's and `apisix.yaml`'s SHA-256 equal the parent of the change commit (neither is drifted);
   - create one temporary normal-client key;
@@ -63,7 +63,7 @@ This change is independent of union-catalog-membership (design D6). It has no sp
   - record the front APISIX container ID, StartedAt, health and restarts.
 
   Verify: all captures are present, and the playbook reports `changed=0`.
-- [ ] 3.2 Window (design D5):
+- [x] 3.2 Window (design D5):
   - back up the live `services/firewall/apisix/lua/model_list_intersection.lua` and `services/firewall/apisix/apisix.yaml` under `.ai-ops-state/sort-public-models-list-<ts>/` on the host (mode 0600 in a 0700 directory);
   - upload both reviewed files and check that each SHA-256 equals the commit;
   - sample the front listener's established connections three times, 10 s apart, and proceed at a low point; if traffic stays high, stop and ask the supervisor;
@@ -72,8 +72,10 @@ This change is independent of union-catalog-membership (design D6). It has no sp
   Verify:
   - the connection samples are recorded;
   - health is `healthy` with restarts=0 on the new container, and `cloudflared-apisix-relay` was not restarted;
-  - the error log since the recreate has no Lua or route-load errors.
-- [ ] 3.3 Post-capture and compare against 3.1. Verify:
+  - the error log since the recreate has no Lua stack traces, module/route-load errors or ordering WARN. A separate auth-status-shaping error is recorded explicitly; its pre-window occurrence could not be proved. The supervisor accepted it as a follow-up because the client-visible opaque 404 remains correct.
+
+  Evidence (2026-10-29): connection samples `4 / 4 / 4`; only APISIX changed identity and became healthy with restarts=0. Actual listener outage is **unmeasured**: host-to-container probes failed both before and after and were discarded. The supervisor approved recording lifecycle timing instead (recreate-to-healthy about 23.1 seconds), without another disruptive recreate.
+- [x] 3.3 Post-capture and compare against 3.1. Verify:
   - the plain `/v1/models` and `/models` ID **sets** and counts are identical to the pre-capture;
   - every entry parses equal to its pre-capture entry by ID;
   - the ID **order** equals bare-first code-point order, computed independently in Python by sorting the IDs by `(("/" in id), id)` with code-point string comparison;
@@ -83,7 +85,9 @@ This change is independent of union-catalog-membership (design D6). It has no sp
   - the unauthenticated request still returns the opaque 404;
   - the error log has no WARN for an unrecognized body.
 
-  Any mismatch: roll back (design Migration Plan step 5: restore both files, check their SHA-256, recreate `apisix`), repeat the comparison against the pre-capture order, then stop and report.
+  Behavior-based acceptance (supervisor reconciliation of the user's migration policy, 2026-10-29): investigate and record deviations rather than requiring unconditional before/after identity. Small membership/count deltas are benign only when fresh upstream inventory or catalog captures explain them; re-capture the parameterized Codex manifest or compare with the live inventory, record the cause, then continue. No unexplained membership loss is accepted.
+
+  Roll back (design Migration Plan step 5: restore both files, check their SHA-256, recreate `apisix`) for real breakage: APISIX unhealthy or restarting; a plain list not returning 200; unexplained missing entries; altered record content; incorrect order or cache/ETag policy; a changed Codex manifest order; loss of the opaque unauthenticated 404; or Lua/route-load errors. Repeat the comparison against the pre-capture order after rollback, then stop and report.
 - [ ] 3.4 Close-out. Verify all of these:
   - the temporary key is deleted, with proof: DELETE 200, then GET 404, then the local key file is gone;
   - `deploy.yml -e component=apisix --check --diff` still reports `changed=0`;
