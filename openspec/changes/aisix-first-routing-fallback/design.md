@@ -1,276 +1,196 @@
 ## Context
 
-**Decision A is revised by the user: routing must be a streaming pipe, not a bigger bucket, and legal field order must not change routing.** Error-based fallback/replay remains rejected. Read incrementally until a complete model or uncertainty, using one spooled sliding-window buffer: a fixed 64 KiB memory window with automatic lazy disk overflow. A background-refreshed AISIX membership set permits selection as soon as the model is available. Late models add upload/disk latency, not a speculative AISIX decision. Decisions B/C remain: pure priority for AISIX-defined slash IDs, and authorized CPA-only bare IDs may reach CPA without entering the catalog.
+The public chain is: public APISIX → keepalive → keeper → responses-ws-sse-bridge → Sub2API → (account `base_url http://cli-proxy-api:8317/v1`) `sub2api-cpa-relay` → `apisix-models` → AISIX or CPA. Today `apisix-models` reads and decodes every classified JSON body in Lua and applies the slash rule: an ID with `/` goes to CPA with `CPA_API_KEY`; otherwise it goes to AISIX with the caller key. The user asked for priority routing instead (AISIX first, otherwise CPA) without per-component special configuration, and for a pipe, not a bucket.
 
-This document is a planning update, not an implementation or prototype approval. The next prototype must not run until the supervisor confirms this plan. `MAX_ROUTING_PREFIX_BYTES=65,536` is the single named **in-memory window bound**, not a model-search cutoff. The completed client survey and separately approved keeper model-first work support that size, but do not establish production offset percentiles or final Sub2API ordering. User decisions recorded 2026-10-28 resolve retention ownership (targeted CPA config, no gateway filter), post-dispatch validation/cancellation, HTTP passthrough OFF and a 1 GiB aggregate spool quota. Prototype/storage implementation evidence and supervisor review remain gates, not permission to run.
+### Evidence: AISIX resolves priority natively
 
-### Existing routing and compatibility responsibilities
+The source is identical at tags v1.5.0 and v1.6.0:
+- `crates/aisix-proxy/src/model_resolve.rs`: exact names always win; among wildcards, the most specific (longest literal) pattern wins. A wildcard match clones the row with `model_name` resolved to the requested ID. Attribution stays on the wildcard row, and the client sees the name it requested.
+- `crates/aisix-core/src/wildcard.rs`: a bare `*` matches any candidate.
+- Every model-bearing handler uses `resolve_model`, including `/v1/images/generations` and `/v1/images/edits` (multipart).
 
-The current code was inspected, not inferred from desired behavior:
+### Evidence: local tests (scratch in `/var/tmp/ai-aisix-star/`)
 
-| Location | Routes | Current semantics |
-| --- | --- | --- |
-| `services/routing/apisix-models/routing_selector.lua`, called by two rewrite hooks in `apisix.yaml` | POST `/v1/responses`, `/v1/chat/completions`, `/v1/images/generations`, regardless of Content-Type | `ngx.req.read_body()` collects the complete upload; read memory or entire bounded body file; cjson decodes the complete object. Reject malformed JSON, scalar/null/array, absent/empty/non-string `model`, model over 1,024 bytes and over-limit standalone reader with local 400 before forwarding. Nonstandard numeric values are disabled. |
-| Same selector, `strip_prompt_cache_retention` | Same three classified routes | Remove the top-level field whenever present, including JSON null; encode the complete remaining object once and replace the request body. Nested fields remain; arrays preserve their type. If absent, original body bytes remain unchanged. Model value is not rewritten. |
-| `services/routing/apisix-models/apisix.yaml`, catch-all rewrite hook | Otherwise matched requests, including `/v1/messages`; only Content-Type containing the case-sensitive text `json` | Read the complete body, but process only an in-memory nonempty body. `dkjson` decodes a table; malformed/non-table/file-backed bodies are left alone, not locally rejected. If a top-level retention field exists, remove it and re-encode. No model validation. |
-| Separate images-edits/catalog/WS routes | Multipart POST `/v1/images/edits`; GET `/v1/models`; direct WS upgrades | No classified JSON rewrite. Edits go to AISIX; catalog to model-catalog; WS frames pass to CPA without inspection. Front-door APISIX has no `prompt_cache_retention` remover. |
-| nginx/global and route `client-control` | Responses: 64 MiB; other routes: 16 MiB | Existing size ceilings. With the current whole-body reader, normal oversized requests can be rejected before forwarding. The pipe cannot promise that for an upload whose length is initially unknown. |
+The tests used the production-shaped 77-row resources (secrets replaced) plus one `*` row, a CPA stub, the production AISIX limits (192m, 256m memswap) and one CPU. Results were the same on AISIX 1.6.0 (production) and 1.5.0 (old tracked pin):
 
-The new pipe removes whole-body cjson decoding/retention stripping on the **classified** routes. Also remove the catch-all `dkjson` decode/strip/re-encode hook in `services/routing/apisix-models/apisix.yaml`: retention ownership moves to targeted CPA config, not the scanner. Other non-classified routing remains unchanged; this is not a gateway-wide streaming rewrite. The followup2 report says only catch-all strips retention, but the current selector's `strip_prompt_cache_retention` and its call prove classified routes strip it too; both removals are required. Sub2API authorization, catalog membership/order/priority and WS/keeper chain placement remain unchanged. The separately delivered keeper serialization-order optimization is a rollout prerequisite, not a topology change.
+| Check | Result |
+| --- | --- |
+| AISIX loads `*` → `cpa-pool`, `model_name: "*"` | pass |
+| Repo policy validator | rejects `*` without the shared cooldown block; passes with it |
+| Normalizer and orphan report | normalized 0; 23 routes; 0 orphans |
+| `claude-opus-5-5` (logical route) | upstream `xl/claude-opus-5-5`, not `*` |
+| `codex/gpt-6-luna` (direct row) | exact row, not `*` |
+| A more specific `devin/*` row | beats `*` |
+| CPA-only bare and slash IDs | reach CPA with the ID unchanged |
+| Body fields (Responses, rich fields incl. `prompt_cache_retention`) | none dropped, added or changed; Chat adds `stream:false`; AISIX re-serializes, so bodies are not byte-identical |
+| SSE, Responses and Chat, `*` and route | incremental, events at 0.3 s steps |
+| Images generations and multipart edits: route, direct, `*` | pass; edits stay multipart and the model is mapped |
+| Unknown everywhere, Responses | 400 `{"error":{"message":"<CPA error JSON as a string>","type":"upstream_error"}}` |
+| Unknown everywhere, Chat | 400 `{"error":{"message":"unknown provider for model X","type":"upstream_error","param":"model","code":"model_not_found"}}` |
+| Today: unknown bare via AISIX / slash via CPA | 404 `model_not_found` / 400 `invalid_request_error`, `code=model_not_found` |
+| Cooldown on `*` after a 429 | next request through `*` or a direct row still goes upstream; cooldown filters only routing-group targets |
+| Added loopback latency | p50 0.22 ms vs 0.23 ms direct; p95 0.37 vs 0.42 ms |
+| Attribution | access log keeps the requested ID; Prometheus series carry `model="*"` |
+| AISIX `/v1/models` | 76 IDs, no `*`; model-catalog membership is unaffected |
+| Caller keys | production `sub2api` and `model-catalog` keys already allow `["*"]` |
+| 64 MiB Responses at production limit | **OOM kill**; 16 MiB already reaches the 192 MiB limit |
 
-### Evidence: AISIX cannot supply an early miss for replay-free fallback
+Memory scaling, 1.6.0, fresh container, 1 GiB limit (peak `memory.peak`): idle 147.6 MB; 4 MiB 177.5 MB; 16 MiB 232.1 MB; 64 MiB 457.3 MB. AISIX holds about 4.6–7× the body. Production AISIX before the change: anon 84 MB plus swap 67 MB (its 64 MiB swap is full), `memory.peak` 195 MB of 201 MB. The host has 2 vCPU and 1,962 MiB RAM, about 829 MiB available.
 
-Read-only source checked at exact tag **v1.5.0** in `/var/tmp/ai-aisix-first/aisix`:
+### Evidence: production read-only
 
-- `crates/aisix-proxy/src/responses.rs:189`: `Result<Json<Value>, ...>` extractor; unpack at 192; model resolution at 599.
-- `crates/aisix-proxy/src/chat.rs:101`: `Result<Json<ChatFormat>, ...>` extractor; model resolution at 1509.
-- `crates/aisix-proxy/src/images.rs:73`: `Result<Json<Value>, ...>` extractor; unpack at 76; model resolution at 323.
-
-Axum's JSON extractor collects and parses the complete body before these handlers dispatch. Therefore AISIX's local model-not-found response follows the entire accepted upload, not just its early model field. Authentication or body-size failures can reject earlier, but are not absence signals.
-
-Saved production research, not repeated for this update, found unknown bare/slash models return pre-SSE HTTP 404 JSON `{"error":{"message":"model not found","type":"model_not_found"}}` on these three endpoints. Actual message includes the requested model. A defined model with a failed target returns `error.type=upstream_error`, including cases with `error.code=model_not_found`. This exact distinction remains useful research but **does not authorize a retry in the selected design**. All backend errors are terminal.
-
-### Evidence: list semantics, latency and load
-
-AISIX `/v1/models` authenticates the key, filters accessible models and omits wildcard definitions (`models.rs:55–105`, tag v1.5.0). The saved list has **76 exact IDs, 6,567 bytes**: 53 direct slash IDs plus 23 logical routes. No ETag/Last-Modified/Cache-Control was present; `created` varies with request time. It is a definition list, not a health oracle: intentionally unavailable Axis models still appear.
-
-Saved `timing2.lua` measurements used LuaJIT/resty inside the existing production selector namespace, 300 sequential samples per row, milliseconds:
-
-| Operation | p50 | p95 | p99 | max |
-| --- | ---: | ---: | ---: | ---: |
-| List request, reused connection | 1.122 | 63.357 | 86.513 | 156.396 |
-| Separate decode + set construction | 0.116 | 0.645 | 1.422 | 59.381 |
-| List request, fresh connection | 2.736 | 92.230 | 263.265 | 482.689 |
-| Unknown-model Responses request, reused connection | 1.409 | 100.123 | 115.721 | 184.218 |
-| Unknown-model request, fresh connection | 2.331 | 102.075 | 263.413 | 556.739 |
-
-Fresh-connection timers started **after connect**, so those rows exclude TCP/DNS setup. Independent percentiles must not be added. No end-to-end pipe, cache-hit, scanner or atomic-snapshot lookup benchmark exists yet. A local set lookup removes the discovery round trip from each request, not all selector CPU, scheduling, or upload-prefix delay.
-
-Retained access logs showed 15,275 classified requests in the requested 24-hour window (actual retained timestamp span about 21 h 42 min), 0.177/s over that requested window, peak fixed second **5/s**, busiest fixed minute **67/min**. A separate broader Sub2API sample contained 1,746 invocations of AISIX slash IDs; it has a different denominator. These are observed loads, not capacity guarantees.
-
-### Rejected replay prototype and pre-existing OOM
-
-Private harness/evidence is in `/var/tmp/ai-aisix-first/prototype/`. It used APISIX 3.19.0, one CPU, one worker and the existing **134,217,728-byte** container memory/swap ceiling, with loopback stubs in another container. Baseline mounted the unmodified current selector and route template (fixture-key substitution only), adapting listeners and Lua module path to the isolated namespace. Candidate used `resty.http` in serverless `before_proxy`, existing cjson validation and file-reader replay.
-
-| Body | Current selector | Rejected relay |
-| --- | --- | --- |
-| 16 MiB, one request | Pass; peak 127,205,376 B | Byte-identical replay; peak 120,291,328 B |
-| 19 MiB Responses, one request | Pass; peak 134,217,728 B, no OOM | Byte-identical replay; same peak, no OOM |
-| 20/24/32 MiB Responses | Worker OOM before dispatch | Not sampled |
-| 64 MiB Responses | Worker OOM; peak at cap, `oom=1/oom_kill=1` | Same OOM and client disconnect |
-
-An integer-MiB sweep also passed 17/18 MiB in baseline; 19 MiB was largest passing sample, not a byte-exact maximum. Three paired runs at 16/19 MiB with one large upload plus six small hits at 5/s all completed without OOM; candidate peaks ranged 120,582,144–122,003,456 B at 16 MiB and 133,038,080–134,201,344 B at 19 MiB. This established a pre-existing full-body parser problem, not proof that replay caused it. A supervisor had temporarily allowed comparative no-worse-than-baseline testing; **the revised pipe contract supersedes that allowance** and requires 64 MiB success under the same cap.
-
-The rejected small-body relay passed ten status/attempt checks and two incremental SSE cases. SSE SHA-256 was `f72689f1056e78e26d9247275d5f094f611ce6ed5f8053543d96bc26022f1661`, first byte/EOF 0.001/1.201 s on a hit and 0.043/1.243 s after replay. Retention, cancellation and later fault additions were not completed before the pause. These are not pipe acceptance tests and do not lock a mechanism.
-
-Incidental local finding: the image reported `module 'apisix.plugins.request-termination' not found` for the current health route. The isolated candidate used a test-only serverless health fixture; baseline inference routes stayed unchanged. Production plugin/config/image identity has **not** been checked by this worker; production was previously reported healthy. Do not infer production health failure or change its health route from this local observation. A read-only production correlation remains pending.
+- `apisix-models` 37 h log (since its last start): only `POST /v1/responses`, `GET /v1/models`, one `POST /v1/images/generations` and `GET /healthz`. Zero catch-all, WebSocket, compact, `/v1/responses/{id}` or embeddings requests.
+- Sub2API, last 7 days, through the 8 accounts on this hop (1,4,5,6,9,10,11,12): `/v1/responses` 54.6k, `/v1/chat/completions` (sent upstream as Responses) 49.3k, images 1. Embeddings and rerank use account 3, which has its own URL. All 8 account API keys hash to the AISIX `sub2api` caller key.
+- Image traffic, last 30 days: generations for `gpt-image-1.5/2/2.5/2.5-flare` and `grok-imagine-image(/2.0)`, plus edits for `gpt-image-2`. All are bare AISIX routes today and are unchanged.
+- Sub2API reads `GET /v1/models` from the account base URL: the Codex manifest with `client_version` (46 in 37 h) and the plain list (82 in 37 h). Both must keep reaching model-catalog. AISIX's typed `/v1/models` returns its own 76-ID list, and its passthrough routes cannot shadow `/v1/*`.
+- The front-door catalog leg reads `apisix-models` over `front-catalog` (51 in 37 h). The `127.0.0.1:9081` host relay had 2 operator calls, and no runbook in docs or ops uses it.
+- AISIX reaches CPA through its own `aisix-cpa-relay` and does not depend on `apisix-models-cpa-relay`.
+- AISIX request bodies in 16 h: Responses p50 0.82 MB, p99 3.38 MB, max 3.95 MB.
+- Production AISIX runs `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690` from the private `.env`; tracked Compose and `.env.example` still pin 1.5.0.
 
 ## Goals / Non-Goals
 
-Goals: bounded-memory request and response pipes through one sliding-window spool, field-order-independent selection from one ordered backend list, no full-body model decoder/replay, no inference-path discovery request, full 64 MiB support under 128 MiB, explicit uncertainty/refresh/compatibility/storage semantics.
+**Goals**
+- AISIX-first priority for every ID: exact route or direct row, then a more specific glob, then `*` → CPA with the ID unchanged. Decisions B and C hold.
+- `apisix-models` becomes a constant pipe: no body read, no Lua, no CPA upstream, no CPA credential, no network path to CPA.
+- Codex manifest, plain model list, public list intersection and catalog membership stay byte-identical.
+- Image generation and multipart edits keep working.
+- AISIX admits one 64 MiB Responses body.
+- The tracked AISIX pin matches production.
 
-Non-goals: health-based failover, provider registration lookup, catalog membership changes, extending wildcard matching, Sub2API patches or passthrough/WS-mode/account-mapping changes, revisiting Axis, unclassified streaming redesign beyond removing catch-all retention processing, overlapping production windows, dependency updates or deferred unrelated work.
+**Non-goals**
+- Sub2API changes: passthrough stays OFF; account URLs, WS mode, mappings and code are unchanged.
+- AISIX, CPA or keeper source changes. CPA only gets a config rule.
+- Deleting `apisix-models`: Sub2API's `/v1/models` contract needs it.
+- Making two concurrent 64 MiB requests safe, and AISIX `request_body_limit_bytes` (the 64m `client_max_body_size` in `apisix-models` stays the backstop).
+- Disabling nginx request buffering in `apisix-models`. It buffers to disk up to 64m, and AISIX reads the whole body anyway.
+- The public sshd key-exchange closure (see Risks).
 
 ## Decisions
 
-### D1. One backend, no retry
+### D1. AISIX `*` is the only fallback
 
-Use one ordered Lua list: AISIX (upstream, caller credential, exact snapshot membership source), then CPA (upstream, service credential, terminal/no membership source). Slash characters have no special meaning. A future backend adds an entry with a bounded membership source rather than per-model naming branches.
-
-If a usable snapshot contains the exact model, choose AISIX. If it does not, choose terminal CPA. If routing is uncertain, choose the first priority AISIX directly. Inference always uses exactly one backend. Never inspect its error to select another; 404, `upstream_error`, ACL/auth failure, 429, 5xx, transport failure and mid-stream failure are terminal. Missing CPA key fails closed with local 503 only when CPA would be selected, never by substituting the discovery key.
-
-### D2. One spooled sliding-window request pipe
-
-Before any `ngx.req.read_body`, use `ngx.req.socket()` and a fixed-size chunk reader (initial candidate 8 KiB). No earlier plugin/nginx body reader may collect the complete classified upload. Use **one code path for every model position**, not `if early then pipe else spill`. Its buffer and scanner are separate narrow interfaces:
-
-- `spool.append(chunk)`: retain byte order with at most `MAX_ROUTING_PREFIX_BYTES=65,536` bytes in its sliding in-memory window. When full, flush oldest bytes to a private temp file automatically. Create the file lazily at first overflow; this is a buffer detail, never a routing branch. Do not join/copy the complete retained prefix. Reader/drain chunks and scanner state are separately fixed-size overhead, not falsely included in a 64 KiB total-process claim.
-- `spool.drain(sink)`: write the file part first, then the memory-window part, exactly once with backpressure; release consumed storage. Empty file part needs no alternate implementation. Subsequent chunks use the same append/drain operations; no complete-response buffer.
-- `spool.close()`: idempotently close/unlink any file, release quota reservation and memory. Call on success, all read/scan/send/backend errors, timeout and client cancellation; clean abandoned instance files after crash/restart before accepting new spools.
-- `scanner.feed(chunk) -> needMore | model(id) | uncertain(reason)`: incrementally validate JSON structure/tokens and match decoded top-level keys while retaining only bounded model/key/token state. EOF is explicit, detecting missing model, incomplete tokens/delimiters and trailing data. Keep `MAX_MODEL_BYTES=1024`; propose maximum nesting 128 with a fixed-capacity parser stack, so O(depth) grammar state has an O(1) bound independent of body size. Match escaped top-level `model` incrementally; nested keys are not routing fields. Invalid/empty/non-string/overlong model or exceeded scanner bounds are untrustworthy model/prefix cases, not permission to allocate more. Inspect the entire supplied chunk before committing so a duplicate already in that chunk is uncertain. Continue the same feed after dispatch; duplicate/malformed results then trigger cancellation, not another routing decision. Never decode a complete document or accumulate large non-model values; retention is not filtered.
-
-The routing sequence is linear: **read → feed → append until decided → choose → drain → pipe the rest**. Every body byte is fed to the scanner and appended to the spool; after selection, append/drain continue under upstream backpressure with the decision latched. Model at offset 1 and at offset 4 MiB run the same logic; the former simply has an empty file part when its decision is made. A model token split across the 64 KiB boundary still yields `needMore`; keep reading/scanning with automatic overflow until the token completes. Neither memory-window overflow nor field position is uncertainty.
-
-Choose from the membership snapshot when `model(id)` is available; if the snapshot is unusable, choose AISIX. Scanner uncertainty means no trustworthy top-level model at complete-body EOF, malformed/untrustworthy JSON before a usable decision, or a duplicate top-level model detected before commitment. These and no usable snapshot go to AISIX, with no second backend. A valid late CPA-only model absent from a usable snapshot goes to CPA, not AISIX. Storage/transport/size failures are explicit failures, not guessed membership absence or permission to switch backend.
-
-The scanner cannot identify an arbitrary later duplicate, malformed suffix or missing closing delimiter **before** forwarding an early model. The user accepted loss of the old whole-document local-400/no-forward guarantee, but selected continuous validation rather than relying on backend rejection. After dispatch, feed each chunk before releasing it upstream and continue through EOF. A later duplicate top-level `model` (including escaped spelling), malformed token/structure or incomplete/trailing JSON cancels the selected upstream, closes incomplete connections and cleans the spool/reservation. Return local 400 if client response headers are unsent; otherwise abort the client connection, including an already-started SSE stream. Never reroute/retry. Scanned duplicates before commitment remain uncertain-to-AISIX under the existing prefix policy; do not claim all duplicate requests get a local 400.
-
-Cancellation cannot retract already-sent bytes or guarantee execution/billing has not begun. No custom terminal SSE event or backend-guaranteed duplicate 400 is promised. Backend semantic validation still applies, but the same scanner keeps bounded structural/token validation after selection; there is no second parser or early/late path.
-
-#### Disk placement, bounds and cleanup
-
-Use a dedicated disk-backed spool directory `/var/tmp/apisix-models-spool` inside the container, backed by a reviewed named volume or host mount, not tmpfs or an unbounded container writable layer. Files must be private, unguessable, no-follow/exclusive-created and never logged with body contents; remove them as soon as drained/closed. Per-request stored bytes (file plus window) may not exceed the existing body ceiling: 64 MiB Responses, 16 MiB other classified JSON. A model at EOF can require storing nearly that whole allowed body, but only for initial selection, never for replay, full JSON decode or error-driven retry.
-
-The user approved a **1 GiB (1,073,741,824-byte) aggregate spool quota**, superseding the 256 MiB proposal. Per-request maximum remains 64 MiB (16 MiB for other classified routes). Enforce accounting/reservations across workers; when quota is exhausted, reject new requests with 503. Reserve the route's maximum possible spill lazily at first overflow and release it at drain/close; concurrent overflow admission must be atomic, so admitted long uploads cannot silently overcommit space. Prove real backing-store quota/capacity as well as logical accounting; a free-space sample alone is not a quota. Sixteen worst-case 64 MiB reservations illustrate the aggregate budget, not a measured concurrency guarantee. Cleanup on success, error, cancellation and restart must release both disk and accounting before reuse. Keep files on local disposable disk; do not silently choose tmpfs, increase the 128 MiB memory cap or claim disk page cache is free. Measure cgroup memory including page cache, file I/O scheduling/event-loop impact, disk high-water and overlapping slow readers. Mount/accounting implementation and measured capacity remain review gates, not an open quota choice.
-
-If reservation/open/write fails before dispatch, return 503 and clean up; after dispatch stop/close the selected connection and return an error only if uncommitted. Never route to AISIX solely because disk is full, discard buffered bytes, or retry CPA/AISIX. A finite disk/timeout budget cannot guarantee availability under resource exhaustion. Within accepted limits and available storage, late model adds only the time to receive/scan preceding bytes and write/read spill: it does not change the selected backend. Once model completes, begin drain without waiting for client EOF.
-
-Stream request drain/rest with a `resty.http` body iterator; responses use bounded `body_reader` chunks and timely flush, preserving SSE/event bytes. Select a content-capable APISIX hook only after the approved prototype proves it. The old `before_proxy` relay proves cosocket feasibility, not the new downstream socket or sliding-spool mechanism.
-
-Correctly handle Content-Length versus nginx-dechunked uploads and upstream re-framing. Strip hop-by-hop/Connection-nominated headers. Preserve end-to-end/session/request IDs; AISIX gets caller key, CPA only its service key. Never send the discovery key to inference. Preserve connect/send/read timeout semantics, cancel upstream I/O on abort, close incomplete connections and keepalive only fully consumed responses.
-
-Ingress ceilings stay 64 MiB Responses / 16 MiB other JSON. Known over-limit Content-Length fails 413 before dispatch where possible. A chunked upload may cross its ceiling after initial forwarding: stop upload, close selected upstream, clean spool and report 413 when response commitment permits, with no replay. If the limit is crossed while still searching for a late model, fail before dispatch rather than exceeding spool/body bounds. Do not claim zero upstream bytes in the already-dispatched case.
-
-### D3. Background exact-ID membership, bounded age
-
-Propose refresh interval **3 s**: removes inference-path I/O, modest control-plane load (one call per worker per interval), and a short normal membership lag. This is not a measured optimal interval. Propose maximum snapshot age **15 s** (five refresh intervals), bounding temporary refresh disruption without indefinite stale routing. A refresh failure does not reset the last-success timestamp. A cold snapshot, age beyond 15 s, clock anomaly or invalid snapshot is uncertain and routes to AISIX. A still-young previous snapshot remains usable after failure until the age bound. A valid empty set is different from no snapshot: it sends known parsed IDs to CPA.
-
-Each worker has one timer, no overlapping refreshes and no per-request refresh/wait. Authenticate `/v1/models` with a **dedicated full-visibility AISIX discovery key**, not the caller or CPA key. Bound refresh duration (proposed total 2 s), response bytes (proposed 1 MiB) and count (proposed 4,096 IDs of at most 1,024 bytes). These discovery bounds are distinct from the approved 64 KiB sliding request-memory window. Validate the complete small discovery envelope and all IDs before atomically replacing the worker's set; never publish a partial/truncated set. Keep only current and in-progress generations, releasing superseded tables.
-
-Log refresh/uncertain warnings at WARN with a per-worker/reason interval, proposed 30 s, without body, keys or raw URLs. No per-request INFO fallback log remains: there is no fallback. Benchmark real request-path overhead; the prior 1.122/63.357/86.513 ms list percentiles belong to refresh requests, not every inference call. Ordinary lookup adds no discovery RTT, but prefix arrival and scheduling still add latency.
-
-The set is not an authorization grant. An in-set request keeps the caller key, so AISIX ACL denial remains terminal. Sub2API entitlement stays in front of the selector, including CPA-only bare IDs. The discovery key must expose all exact definitions; restricted discovery would create false absence. No wildcard models are allowed: enforce this on local resources and the Ansible AISIX deployment validation path, including every supported definition/name field and normalized representation. Prove the concrete-name list includes direct and logical definitions; do not confuse wildcard caller ACLs with wildcard model names.
-
-Polling is not transactional with AISIX reload: additions can briefly go to CPA, deletions can briefly return AISIX 404, and different workers can see adjacent generations. These are bounded membership-staleness tradeoffs explicitly replacing resolver-driven fallback. No health, catalog or availability filtering enters this set; Axis entries remain intentional.
-
-### D4. Provisioning and documentation exception
-
-Create a dedicated full-visibility AISIX caller key with private storage and a distinct identity. Update necessary current two-key assumptions (`ops/scripts/init.sh`, runtime validation of `caller-keys.json`, applicable Ansible paths/examples), Compose secret delivery and APISIX startup/config visibility. Choose the smallest supported secret injection after review; never embed a private value in tracked YAML, logs or client errors. Never reuse this key for inference. This is a coupled AISIX-resource/key plus selector activation, requiring synchronized rollback; generic image/env deployment is not sufficient.
-
-Revise `docs/model-routing.md` explicitly: background exact membership with a bounded maximum age is now permitted. Keep `/routing-index`, catalog-driven inference, provider-registration checks and unbounded last-known-good caches prohibited. The old unconditional no-cache wording is superseded, not silently retained. README stays short; technical limits/uncertainty/refresh/migration belong in docs.
-
-### D5. B/C remain binding
-
-AISIX-defined slash direct models now go through AISIX with caller credentials, AISIX accounting and its CPA-pool credential hop. Preserve `session_id`; entering AISIX does not itself grant logical-route hashing. The point-in-time 53-ID inventory is:
-
-```text
-aihub/gpt-5.6-sol
-aihub/gpt-5.6-terra
-aihub/gpt-6-astra
-axis/gpt-5.6-luna
-axis/gpt-5.6-sol
-axis/gpt-5.6-terra
-axis/gpt-6-astra
-axis/gpt-6-luna
-axis/gpt-6-sol
-axis/gpt-6.1-sol
-cline/deepseek/deepseek-v4.1-flash
-codex/gpt-5.6-luna
-codex/gpt-5.6-sol
-codex/gpt-5.6-terra
-codex/gpt-6-astra
-codex/gpt-6-luna
-codex/gpt-6-sol
-codex/gpt-6.1-sol
-codex/gpt-image-1.5
-codex/gpt-image-2
-codex/gpt-image-2.5
-codex/gpt-image-2.5-flare
-codex/gpt-image-2.5-sunburst
-commandcode/deepseek/deepseek-v4.1-flash
-commandcode/zai-org/GLM-5.2
-commandcode/zai-org/GLM-5.3
-devin/glm-5-2
-devin/glm-5-3
-kimi-coding/kimi-k3
-kimi-coding/kimi-k3-256k
-ollama-cloud/deepseek-v4.1-flash
-ollama-cloud/glm-5.2
-ollama-cloud/glm-5.3
-ollama-cloud/glm-5.3-flash
-senseaudio/deepseek-v4.1-flash
-senseaudio/glm-5.3-flash
-sensenova/deepseek-flash
-sensenova/glm-5.2
-sensenova/kimi-k3
-supergrok/grok-4.7
-supergrok/grok-imagine-image
-supergrok/grok-imagine-image-2.0
-supergrok/grok-imagine-image-quality
-xl/claude-fable-5-1
-xl/claude-opus-5-5
-xl/gpt-6-luna
-xl/gpt-6.1-sol
-xl/gpt-image-2.5-flare
-xl/gpt-image-2.5-sunburst
-xl/grok-4.7
-zcode/glm-5.2
-zcode/glm-5.3
-zcode/glm-5.3-flash
-```
-
-Authorized CPA-only bare IDs can select CPA on a fresh/usable membership absence, while catalog membership stays unchanged. Bare CPA names can use any registering credentials, unlike prefix-qualified names. Hiding a model is not authorization. Uncertain requests intentionally go to AISIX even when CPA would know the ID.
-
-### D6. Client ordering evidence, keeper prerequisite and Sub2API passthrough
-
-The completed survey (`/var/tmp/ai-model-offset/report.md`, scratch evidence, not production percentiles) contains 25 SDK captures and 33 chain samples. Modern Codex/pi/Python/Vercel paths often put model first, but Node preserves caller order and older Python/LangChain/Chat paths can place history first. The surveyed pre-change keeper pin wrote expanded input first: model offsets were 81,978 / 278,586 / 1,065,018 / 4,210,746 for 64 KiB / 256 KiB / 1 MiB / 4 MiB input with 16 KiB instructions. A fixed cutoff can therefore break ordinary CPA-only requests; 64 KiB must bound memory, not search.
-
-Keeper model-first implementation/publication/pin are delivered: feature `5a69df7`, release revision `b49ad9ac6c1eb65b1785d66ecb7249413d4c82bf`, image `ghcr.io/xz-dev/openai-api-cache-keeper:b49ad9ac6c1eb65b1785d66ecb7249413d4c82bf@sha256:eb21638bdfc65ea09c119baf62337bb8f7f7b421890eeb1e63c1815c60030872`, gateway pin `1dfc027`. It reuses its existing scanned raw span and 32 KiB copy buffer when writing its existing spool; model first, every other field in current order, native passthrough unchanged. No new full-body decode/history copy/spool/config flag. Independent provenance/CI verification and a separate image-only component activation must precede the router window; delivery/pin is not proof of production activation. Worker evidence at `/var/tmp/keeper-model-first-evidence/summary.md` reports HTTP and WS keeper→bridge offsets 1 at 1 KiB/1 MiB/4 MiB. This optimizes buffer residency only; the router must remain correct without an ordering guarantee. At 64 simultaneous prefix readers, 64 KiB windows total 4 MiB versus 64 MiB for 1 MiB windows, excluding scanner/chunks/connections and disk cache.
-
-Passthrough investigation (`/var/tmp/ai-model-offset/passthrough.md`) at Sub2API `ab6b00e` distinguishes HTTP `extra.openai_passthrough=true` from WS `extra.openai_apikey_responses_websockets_v2_mode=passthrough`. Current relay accounts are OpenAI API-key, `force_responses`, WS off; seven of eight have nonempty account mappings. Ordinary HTTP passthrough bypasses account model replacement (`openai_gateway_forward.go:258–288`, `openai_gateway_passthrough.go:126–151`) and bypasses the mapping whitelist in account eligibility (`account.go:890–897`). Common schema/reasoning mutations still run before passthrough. Chat→Responses does not use that flag and still map-marshals GPT/Codex cache-key injection (`openai_gateway_chat_completions.go:300–312`). Thus it cannot guarantee body bytes/order and can change model/account/billing semantics. Usage accounting, error handling and retries remain active; retention stripping is not guaranteed on raw API-key Responses.
-
-Followup2 selected-core benchmark measured 4 MiB raw 6.87 ms versus normal unmodified 6.87 ms; raw allocated about 4.20 MB versus 32 B for normal/no edit. This is not a full Forward/end-to-end speedup measurement. Account 6 has real `memory-fast`, `memory-reflect`, `memory-consolidation` → `codex/gpt-6-luna` aliases; raw skips their replacement. Account eligibility whitelist and catalog projection also change. On these findings the user decided **HTTP passthrough stays OFF**; enabling it is out of scope, not pending approval in this plan.
-
-The old docs prohibition paired with `ctx_pool` originated from WS-mode routing incidents (`1dab95f`, front-bridge record `751b37d`; `docs/websocket-termination.md`), not analysis of the separate HTTP raw flag. WS stays off with no mode changes. No Sub2API patch or silent mapping change is authorized. Sliding-window routing handles Sub2API's legal reordering without depending on passthrough; it cannot repair a corrupt request or removed mapping.
-
-### D7. Backend-owned retention and parser-differential cancellation
-
-The user chose CPA config filtering, not a scanner filter. Merge v8 rules into the existing live private configuration; do not add a second legacy root `payload` spelling:
+The private `resources.yaml` gets exactly one row:
 
 ```yaml
-config-version: 8
-requests:
-  payload:
-    filter:
-      - models:
-          - name: "kimi-*"
-        params:
-          - "prompt_cache_retention"
+- display_name: "*"
+  provider: openai
+  model_name: "*"
+  provider_key: cpa-pool
+  cooldown: <the shared direct-model cooldown block, byte-equal>
 ```
 
-`models[].name` must match the effective Kimi model/base aliases seen by CPA's payload helper; verify actual prefixed/alias paths before activation and add only narrowly scoped selectors needed for rejecting upstreams. Omit `protocol` so native Responses (`openai-response`) and converted Kimi formats are both covered. Do not silently use `name: "*"`: that would remove valid retention on supporting providers. The retained 24 h AISIX/CPA/Sub2API/inner-APISIX logs contain zero retention mentions/errors, so current rejection scope is not proven by logs. Kimi is the historical rejecting upstream; require retention-present/absent streaming and nonstreaming probes, including a production Kimi request carrying retention returning 200.
+The cooldown block is required by the existing direct-model policy and is harmless here, as the tests show. `check-aisix-resource-policy.py` additionally requires:
+- exactly one `*` row with `model_name: "*"` and the CPA pool provider key;
+- that no routing target names `*`.
 
-CPA v8.0.45 `internal/runtime/executor/helps/payload_helpers.go:200–218` applies `sjson.DeleteBytes`; `kimi_executor.go:440–475,578–613` invokes payload rules for native Responses, with converted paths also covered. No source patch is needed. AISIX 1.5.0 has no equivalent generic deletion config for native Responses. By user choice the gateway passes retention unchanged, with no automatic scanner fallback; do not claim generalized stripping parity on unsupported AISIX-native paths. Supporting upstreams must still receive valid retention.
+Other single-`*` globs stay legal, because their precedence is a feature. `resources.example.yaml` documents the row. The orphan report is unaffected: the adopted list is empty, and `*` is a standalone row by design.
 
-Remove the selector's `strip_prompt_cache_retention` path and the catch-all rewrite hook's `dkjson` decode/strip/re-encode, including its whole-body read. Catch-all upstream/WS matching and other behavior stay unchanged. Request-byte identity is measured at the gateway-to-selected-backend boundary; CPA's targeted deletion occurs after that seam.
+### D2. Slim `apisix-models`
 
-`ops/ansible/playbooks/deploy-config.yml` only supports `aisix`, `egress-proxy`, `cpa-model-sync`, `model-catalog`; **not `cli-proxy-api`**. Per `docs/ansible-operations.md#worker-owned-cpa-configuration`, live `data/cpa/conf/config.yaml` belongs to CPA/cpa-model-sync and is not managed by deploy/rollback baselines. Use a reviewed manual config window to back up and merge only the targeted rule into live state, preserving concurrent model-sync changes; never overwrite from a private seed or invent an unsupported deploy-config command. Record activation/readback and rollback, coordinating writers. No plugin hot reload, plugin-version-key edits or `.so` changes; if activation requires a CPA restart, review it explicitly. Any CPA image switch would require an online SQLite backup first, but no image switch is needed for these rules.
+`apisix.yaml` has three upstreams/routes and no `global_rules`:
 
-Followup2's per-hop semantics explain why backend validation alone cannot guarantee duplicate rejection:
+| Route | Match | Target |
+| --- | --- | --- |
+| `local-health` | `GET, HEAD /healthz`, priority 1000 | `request-termination` 200 |
+| `codex-models` | `GET /v1/models`, priority 20 | model-catalog |
+| `aisix` | `/*`, priority 1, `enable_websocket: true`, `proxy-buffering.disable_proxy_buffering: true` | AISIX, caller credential unchanged |
 
-| Hop/path | Duplicate top-level model semantics |
-| --- | --- |
-| Sub2API gjson handler/raw view | First exact-case value |
-| Sub2API decoded Go map / Chat struct | Last; group allowlist separately checks all duplicate/case-variant candidates |
-| Keeper rewritten/expanded request | Last, collapses to one; native passthrough does not guarantee this |
-| Bridge WS / HTTP | WS rejects duplicate; HTTP transparent |
-| Current inner cjson selector | Last, no duplicate rejection |
-| AISIX Responses / Chat | Responses Value last; Chat struct rejects |
-| CPA HTTP Responses/Chat handler | First; later executor/translator behavior may differ |
+The user's "two constant routes" are the two non-health routes; `/healthz` stays local as instructed.
+- No `serverless-*` function, no `client-control`, and no `cpa` upstream.
+- `config.yaml` keeps `client_max_body_size: 64m` and drops `extra_lua_path`.
+- `start.sh` copies the template unchanged, with no `CPA_API_KEY` check or `sed`.
+- `routing_selector.lua` and `routing_selector_test.lua` are deleted.
+- The front door still enforces 16 MiB on client bodies. Only keeper's expanded Responses history can exceed it, up to the inner 64m backstop.
 
-A second model is another key in the same object, not a mid-response model switch. Buggy raw JSON merging or deliberate parser-differential input can cause it. Source/tests show selection/execution disagreement mechanisms, not a demonstrated production authorization bypass. Keep group authorization intact. The approved single scanner detects later duplicates/malformed JSON and cancels as D2 specifies; bytes already forwarded and execution/billing cannot be recalled.
+Direct WebSocket upgrades now reach AISIX, which has no `GET /v1/responses`. That path already failed for bare IDs, and none were seen in 37 h; the front bridge remains the supported WS path.
 
-### Rejected alternatives
+### D3. Network cut
 
-- **Error fallback/replay:** distinct AISIX miss signature but emitted only after complete JSON extraction; requires retaining the whole request and contradicts the user's pipe principle. Old prototype results do not revive it.
-- **Per-request model-list lookup:** adds list RTT and decode on every inference request, permission/wildcard pitfalls unless constrained, and lookup/dispatch reload race. Background discovery moves that network work off the request path.
-- **Unbounded last-known-good cache:** avoids a cold failure but permits arbitrarily stale absence; rejected in favor of bounded age and uncertain→AISIX.
-- **Prefix overflow→AISIX:** superseded by the user's late-model direction; can break CPA-only requests solely due to field order.
-- **Unbounded memory growth/full-body decode/error-replay spool:** still rejected. The newly selected bounded disk-backed sliding window is only a selection buffer and is drained once, not an error replay cache.
-- **Sub2API passthrough as an ordering guarantee or generic small-field sorter:** not valid/needed. Raw passthrough changes mapping/eligibility and still normalizes some paths; arbitrary scalar strings can be huge. Model-first keeper plus order-independent router is the narrow change.
+Remove from `compose.yaml`:
+- services `apisix-models-cpa-relay`, `apisix-models-host-netns` and `apisix-models-host-relay`;
+- networks `apisix-models-cpa-source`, `apisix-models-cpa-target`, `apisix-models-host-source` and `host-apisix-models-target`;
+- in `apisix-models-netns`, the `cpa` extra host and both removed network attachments;
+- in `apisix-models`, `CPA_API_KEY` and the dependencies on the CPA and host relays;
+- in `cpa-netns`, the `apisix-models-cpa-target` attachment.
+
+The `config.yaml` listeners drop `172.30.34.2`.
+
+Kept edges, all `apisix-models-netns`: `sub2api-cpa-target` (inbound from Sub2API), `front-catalog` (inbound from the front door), `apisix-models-catalog-source` and `apisix-models-aisix-source` (outbound).
+
+`validate.sh` adds a reachability check. It walks networks and socat relays from `apisix-models-netns`, does not traverse an application namespace such as `aisix-netns` or `model-catalog-netns`, and fails if `cpa-netns` is reachable. It also asserts:
+- no `cpa` extra host;
+- no `8317` and no `cpa:` node in `apisix.yaml`;
+- no `CPA_API_KEY` in the service environment.
+
+An intentional-break fixture that re-adds the relay must fail.
+
+### D4. AISIX memory and pin
+
+- `mem_limit: 512m` and `memswap_limit: 512m` (swap removed).
+- Why no swap: production already fills its 64 MiB of swap. On a 2 GiB host, swap thrash degrades every service, while a deterministic OOM makes Docker restart AISIX.
+- 512m covers idle (about 150 MB) plus one 64 MiB request (457 MB peak measured).
+- Tracked `compose.yaml` and `.env.example` pin `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690`, the digest production runs and on which `*` was validated.
+
+### D5. Retention moves to CPA
+
+Both gateway strips disappear with the selector and the catch-all. All traffic now passes AISIX to CPA with `prompt_cache_retention` intact (verified: not dropped). CPA `requests.payload.filter[].params` removes the root field for the upstreams that reject it, initially Kimi. The filter must match the names CPA receives (`kimi-coding/kimi-k3`, `sensenova/kimi-k3`, `devin/kimi-k2-7`, CPA-only bare Kimi IDs); confirm the matcher syntax before the window.
+
+`deploy-config.yml` does not manage CPA, so this is a reviewed manual live-config step:
+- no plugin hot reload and no plugin version-key change;
+- before the window, confirm whether CPA applies `requests.payload` by config reload without touching plugins; otherwise schedule a restart with an online SQLite backup.
+
+### D6. Recovery
+
+`gateway-recovery.py` keeps the `apisix-models` `/healthz` check. Its CPA `/v1/models` probe takes the key from the model-catalog container's `CPA_CLIENT_KEY` (Compose defaults it to `CPA_API_KEY`), not from `apisix-models`. The key stays in memory only.
+
+### D7. Ansible
+
+`apisix-models` stays a component (`deploy.yml`/`rollback.yml` image changes). No removed service appears in a component profile, argument spec or the model-catalog protected-identity list (`model-catalog-netns`, `catalog-cpa-relay`, `apisix-models-catalog-relay`, `apisix-models` stay). Compose structure changes are outside the component gate, hence the manual window.
+
+## Rejected alternatives
+
+- **Error fallback with replay.** AISIX's handlers use Axum `Json` extractors (`responses.rs:189`, `chat.rs:101`, `images.rs:73` at v1.5.0), so its 404 `model_not_found` only arrives after the whole body has been read. A retry needs the full request kept for replay, which is the bucket the user rejected. A replay prototype at the 128 MiB cap also reproduced the existing selector OOM: 19 MiB passed, 20/24/32/64 MiB OOM-killed before dispatch.
+- **Per-request or background list lookup.** AISIX `/v1/models` is filtered by the caller ACL and omits wildcard rows (`models.rs:55–105`). A list call per request costs p50 1.1 ms / p95 63 ms on a reused connection. A background snapshot needs a dedicated discovery key, an age policy and wildcard bans. AISIX's own resolver makes all of that unnecessary.
+- **Lua sliding-window pipe in `apisix-models`.** This was a 64 KiB window with disk overflow, an incremental scanner and a 1 GiB quota. The prototype passed 64 MiB near-EOF bodies under 128 MiB, later duplicate or malformed cancellation at 1 KiB and 4 MiB, concurrency, and 503 at the quota. But APISIX 3.19 `ngx.req.socket()` refuses chunked request bodies (`chunked request bodies not supported yet`), so it needed a 411 rule or a hand-written framing decoder, with a request-smuggling risk. It is a large custom streaming proxy for a decision AISIX already makes, and AISIX reads the full body anyway.
+- **Delete `apisix-models` entirely.** Sub2API takes the Codex manifest and the plain list from its inference base URL. AISIX would answer with its own 76-ID list, breaking the manifests and shrinking the public intersection. Pinning group manifests to one account is database state and does not cover the plain list. An AISIX Host-matched passthrough would be a side door with a loop risk.
+- **Lower the 64 MiB contract or set AISIX `request_body_limit_bytes`.** Not chosen: the user kept the contract and raised memory instead.
+- **Keep the slash rule and only drop the CPA network edge.** Not possible: slash IDs need a CPA path.
 
 ## Risks / Trade-offs
 
-- Field position and duplicate keys: valid late models get the same selection as early models; disk latency replaces incorrect overflow routing. Continue the same scanner after dispatch and cancel on duplicate/malformed input. Return 400 before response headers, otherwise abort; execution/billing may already have begun and cannot be guaranteed undone. No ordering guarantee can be inferred from passthrough.
-- Retention: targeted CPA configuration replaces both gateway removers without a scanner filter. Verify Kimi effective-model matching and production 200 before removing compatibility hooks. AISIX-native unsupported fields are not covered by this config; do not claim universal parity or silently broaden to a global filter.
-- Wildcards/full visibility: list completeness depends on enforced model invariants and dedicated-key provisioning. An out-of-band AISIX edit can break that assumption; deployment validation and live audits must make drift visible.
-- Snapshot freshness: three-second normal lag and fifteen-second failure age are proposed finite bounds, not resolver consistency. Cold/expired routes to AISIX and never tries CPA after its error.
-- Resources: the 64 KiB sliding window bounds retained Lua request bytes, not total RSS/cgroup memory. Disk page cache, fixed scanner/chunks, simultaneous spools, slow drain and filesystem I/O must be measured. Stop for review if existing 128 MiB or approved 1 GiB disk quota cannot hold tested capacity. No memory-limit increase or unbounded buffering workaround.
-- Incidental health-plugin mismatch remains uncorrelated with production; do not bundle an unreviewed health fix.
-
-## Remaining review and evidence gates
-
-User choices are resolved: HTTP passthrough OFF, WS unchanged/off; targeted CPA retention filtering with no gateway/scanner removal; continuous post-dispatch validation/cancellation; aggregate spool quota 1 GiB. These are not open alternatives.
-
-1. Supervisor must review and confirm this revised plan before any new pipe prototype. Prototype acceptance precedes mechanism lock/runtime work.
-2. Prove enforceable backing-store quota, atomic cross-worker accounting/admission, cleanup/restart and measured capacity within 1 GiB disk/128 MiB memory. Review mount/accounting implementation; no production p99 or concurrency guarantee is established.
-3. Verify Kimi effective-model/alias matching, writer-safe CPA manual config activation/readback/rollback and a production retention-carrying 200; no unsupported `deploy-config` invocation, plugin hot reload or generalized AISIX removal claim.
-4. Independently verify delivered keeper provenance/CI and perform its separate image-only activation before the router window; pin delivery is not production activation.
+- **Concurrent large bodies.** One 64 MiB Responses request peaks at about 460 MB in AISIX. Two concurrent 64 MiB requests (about 770 MB) exceed 512m, and AISIX is OOM-killed and restarted; every in-flight AISIX request fails. The host's roughly 829 MiB of available memory is also under pressure. Observed bodies are far smaller (max 3.95 MB in 16 h; slash→CPA input p99 190k tokens). The record must state this residual risk.
+- **Every CPA-bound request now crosses AISIX.** AISIX restarts or OOMs affect all IDs, not only bare ones. The added hop costs about 0 ms on loopback, plus AISIX's full-body read.
+- **Error shape for unknown-everywhere IDs** changes to 400 `upstream_error` (Responses message holds the CPA JSON as a string). The cause stays actionable ("unknown provider for model X"). Verify that Sub2API does not penalize or disable accounts on this 400.
+- **Observability.** AISIX metrics for CPA-only traffic collapse to `model="*"`; per-ID detail stays in the access log. `*` may show as cooling on the status page after any unknown-ID 400 or 429; this is cosmetic, as routing is unaffected.
+- **Body fidelity.** AISIX re-serializes JSON. Fields are preserved, but bodies are not byte-identical (Chat gains `stream:false`). This was already true for bare IDs.
+- **Untested paths through `*`.** `/v1/embeddings`, `/v1/messages` (AISIX converts Anthropic shape for an `openai` provider) and AISIX `/v1/realtime` had 0 requests on this hop in 37 h. They are not acceptance-tested here.
+- **Retention.** If the CPA filter misses a rejecting upstream, that upstream returns 400 instead of the gateway silently stripping the field. Kimi is the only known case.
+- **CPA namespace recreate** for the network detach restarts CPA. Take an online SQLite backup first and do not hot-reload plugins.
+- **Out-of-scope finding, not acted on:** during research, the production host's public SSH address closed the connection during key exchange (`kex_exchange_identification: Connection closed by remote host`). The Tailscale path presented the same host key and worked.
 
 ## Migration Plan
 
-1. Review completed survey/followup2 and the resolved user decisions in D2/D6/D7; verify delivered keeper model-first provenance/CI. Get supervisor confirmation before prototype execution. HTTP passthrough stays OFF; WS/account model mappings stay unchanged.
-2. Run task 0.1's real APISIX 3.19 single-path sliding-spool prototype: same code at model offsets 1 and 4 MiB, fixed approximately 64 KiB window plus measured fixed overhead, 1/16/64 MiB success under 128 MiB including file cache. Early model starts upstream before client EOF; late model begins drain as soon as complete, selects correct CPA/AISIX, and preserves bytes. Test 1 GiB quota/503 admission/ENOSPC, success/error/cancel/crash cleanup, framing, uncertain cases, SSE and chunked uploads. At suffix offsets 1 KiB and 4 MiB inject later duplicate model and malformed JSON; prove cancellation/cleanup with local 400 before client headers versus connection abort after response commitment, and no reroute. The 64 MiB failure is in scope to fix, not a waived baseline. Stop on failed gates; no lock from old replay evidence.
-3. Tests, minimal implementation, wildcard/key validation and docs; full local validation with any Compose override temporarily moved to `/var/tmp` and always restored. Explicit-path unsigned commits, pull/rebase before push, exact-SHA CI. No production work in sections 0–3.
-4. After the Lua window, activate the delivered keeper image in its separate image-only component step. Review targeted CPA private-config merge/rollback through a manual window (deploy-config has no CPA component), preserving worker-owned state and plugin keys; prove Kimi retention handling before removing gateway stripping. Then review the coupled key/config/source router activation before public-list sorting. Existing `deploy.yml -e component=apisix-models` handles guarded image/env transactions, not arbitrary tracked source installation. Preview applicable Ansible changes with `--check --diff`, review approval digests and the manual source/config window; provision discovery key and wildcard-safe definitions before relying on the snapshot. Preserve ownership/SELinux labels, no unrelated recreation.
-5. Back up every changed AISIX key/resource, private env/Compose identity, selector source and CPA config identity; rollback the targeted CPA rule without overwriting unrelated concurrent model-sync updates. Recreate only reviewed components when necessary; interruption and old-key retention/cleanup order must be reviewed. Verify cold/warm/expired snapshot behavior, slash/bare paths, authorization, dedicated-key isolation, full 64 MiB and SSE, catalog byte equality, resources and source checksums.
-6. Rollback restores coupled config/key/source files and recreates only reviewed components. AISIX rollback uses saved resources plus `deploy-config.yml -e component=aisix`, preview first; `rollback-config.yml` is not an AISIX rollback. Verify old slash selection, catalog and SSE. Delete temporary probe keys with DELETE-success/GET-404/file-absence proof, check drift and record sanitized evidence. Do not revoke the discovery key while a running selector still needs it.
+All repository changes, CI and local tests land first. Production then changes in ONE reviewed manual window, because Compose structure changes are outside the component gate. Steps run in order, and each step has its own check and rollback:
+
+1. **Backups and baselines.** Back up:
+   - private Compose and `.env`;
+   - `services/routing/apisix-models/`;
+   - AISIX `resources.yaml` and `config.yaml`;
+   - CPA `config.yaml`;
+   - the recovery script and unit;
+   - an online CPA SQLite backup.
+
+   Capture:
+   - container identities, images and restart counts;
+   - the five catalog bodies (internal standard and Codex, public standard and Codex, Sub2API standard) with SHA-256;
+   - read-only Sub2API account rows;
+   - AISIX metrics and the probe baseline.
+2. **CPA retention filter.** Apply the reviewed `requests.payload.filter` rule using the reload method proven before the window. Verify that a Kimi request with `prompt_cache_retention`, streaming and non-streaming, sent straight to CPA (the inner namespace can still reach it at this step) returns 200, and that plugins and version keys are unchanged. Rollback: restore `config.yaml` the same way.
+3. **AISIX.** Edit the private Compose AISIX block (512m, no swap, pin) and add the `*` row. Run `deploy-config.yml -e component=aisix --check --diff`, review it, then apply; this force-recreates AISIX. Verify: AISIX healthy; `/v1/models` has no `*`; a CPA-only bare ID through the public chain now succeeds through `*`. Rollback: restore `resources.yaml` and Compose, then run deploy-config again.
+4. **Slim `apisix-models`.** Install the new `apisix.yaml`, `config.yaml` and `start.sh`, remove `routing_selector.lua`, and apply the Compose removals. Stop and remove `apisix-models-cpa-relay`, `apisix-models-host-relay` and `apisix-models-host-netns`. Recreate `apisix-models-netns` and `apisix-models` only (no `--remove-orphans`). Verify health, inference through AISIX, the Codex manifest via Sub2API, and catalog `cmp`. Rollback: restore the files and Compose, then `up -d` the old services.
+5. **CPA namespace detach.** Recreate `cpa-netns` and the services that share it, with the step-1 SQLite backup current. Then remove the four obsolete networks. Verify CPA healthy and plugins loaded. From `apisix-models-netns`, a TCP connect to every former CPA address and to `cpa:8317` fails. Rollback: restore Compose and recreate with the old networks.
+6. **Recovery.** Deploy the updated `gateway-recovery.py` with the recovery playbook (`--check --diff`, then apply). Verify that a timer run reports every check healthy, using the model-catalog key.
+7. **Post-checks.** Run the full list in tasks section 5. Delete every temporary key with proof. Write the record.
+
+If a step's check fails, roll back that step and every earlier step in reverse order, verify the baseline again, and stop the window.
