@@ -10,7 +10,7 @@ Top-level directories and what they contain. Every directory under `services/` a
 │   │   ├── config/                 # CLIProxyAPI config.example.yaml
 │   │   └── cpa-model-sync/         # Rust channel-membership sync; docs/, docs/records/ (dated reports)
 │   ├── routing/
-│   │   ├── apisix-models/          # inner selector APISIX: apisix.yaml, config.yaml, routing_selector.lua, start.sh
+│   │   ├── apisix-models/          # inner constant-pipe APISIX: apisix.yaml, config.yaml, start.sh
 │   │   ├── aisix/                  # pinned AISIX build files, patch, public examples, private ignored runtime files
 │   │   ├── aisix-status/           # independent no-JavaScript server-rendered status page
 │   │   └── model-catalog/          # TypeScript Codex model catalog service (Node LTS)

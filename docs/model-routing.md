@@ -1,31 +1,40 @@
 # Model routing and front WebSocket bridge
 
-Read this before you change `services/routing/apisix-models/`, Sub2API account settings, or the keeper chain.
+Read this before you change `services/routing/apisix-models/`, the AISIX `*` row, Sub2API account settings, or the keeper chain.
 
 > Deployed 2026-10-23, keeper cutover 02:07:35 UTC; correlated acceptance completed afterwards. Keeper and the ws→sse bridge end WebSocket before Sub2API; Sub2API sees only HTTP/SSE. Read [websocket-termination.md](websocket-termination.md) for the decision, tradeoffs and validation limits.
 
 ## The rule
 
-The inner models gateway (`apisix-models`) picks the backend from the literal `model` string:
+`apisix-models` never reads a request body. `GET /v1/models` goes to model-catalog, `/healthz` is answered locally, and everything else goes to AISIX with the caller key unchanged. AISIX picks the backend by priority:
 
-| Model ID | Backend | Credential sent upstream |
+| Requested ID matches | Served by | Example |
 | --- | --- | --- |
-| contains `/` anywhere (`xl/claude-opus-5-5`, `/`, `provider/`) | CPA | CPA service key (`CPA_API_KEY`) |
-| no `/` (`claude-opus-5-5`, `gpt-6.1-sol`, any unknown name) | AISIX | caller key, unchanged |
+| an exact AISIX logical route or direct row | that route or row | `claude-opus-5-5` → `xl/claude-opus-5-5`; `codex/gpt-6-luna` |
+| a narrower AISIX glob row (longest literal wins) | that glob row | `devin/*` |
+| nothing else | the single `*` row → CPA, ID unchanged | a CPA-only bare or slash ID |
 
-- No catalog lookup, provider check or cache. Unknown IDs are forwarded, and the backend returns the error.
-- One function implements it: `services/routing/apisix-models/routing_selector.lua`, `document.model:find("/", 1, true)`.
-- `services/routing/apisix-models/routing_selector_test.lua` enforces it. `ops/scripts/validate.sh` runs the test in CI.
+- AISIX implements the precedence itself (`resolve_model`: exact names first, then the most specific wildcard). `ops/scripts/check-aisix-resource-policy.py` requires exactly one `*` direct row (`model_name: "*"`, `provider_key: cpa-pool`, shared cooldown) and rejects any route that targets it.
+- No catalog lookup, membership snapshot or cache sits on the request path. Unknown IDs are forwarded, and the backend returns the error.
+- `apisix-models` has no CPA upstream, credential or network path; `validate.sh` walks its networks and relays and fails if CPA is reachable.
 
-Do not reintroduce `/routing-index` lookups, last-known-good caches or a "registered provider" check.
+Do not reintroduce `/routing-index` lookups, last-known-good caches, a "registered provider" check or body classification in `apisix-models`.
 
 CPA runs with its default `force-model-prefix: false`. Each model of a prefixed credential is registered twice, as `x` and `P/x`:
 
 - `P/x` is served only by the credential whose prefix is `P`;
-- a bare `x` never reaches CPA, because the selector sends IDs without `/` to AISIX;
+- a bare `x` that AISIX does not define reaches CPA through `*` and is served by any credential registering it;
 - an unprefixed slash ID (`devin/<model>`, or an upstream original such as `deepseek/…`) reaches CPA unchanged and is served by the credential that registers it.
 
-The catalog lists only the IDs in model-catalog's [membership rule](model-catalog.md#membership), so clients see prefixed IDs and AISIX IDs, not CPA's bare copies.
+The catalog lists only the IDs in model-catalog's [membership rule](model-catalog.md#membership). AISIX's `/v1/models` never lists `*`, so the fallback row adds no catalog member. Sub2API still enforces each group's model allowlist before a request reaches this hop.
+
+### Behaviour through `*`
+
+- **Unknown everywhere.** Responses returns 400 `{"error":{"message":"<CPA error JSON as a string>","type":"upstream_error"}}`; Chat returns 400 with `type: upstream_error`, `code: model_not_found` and `unknown provider for model X`.
+- **Attribution.** The AISIX access log keeps the requested ID; Prometheus series for fallback traffic carry `model="*"`. The status page may show `*` cooling after an unknown-ID 400 or a 429. That is cosmetic: cooldown filters only routing-group targets.
+- **Body fidelity.** AISIX re-serializes JSON. Fields are preserved, but bodies are not byte-identical (Chat gains `stream:false`).
+- **Retention.** No gateway layer strips `prompt_cache_retention`. CPA's `requests.payload.filter` removes it for the upstreams that reject it (initially Kimi).
+- **Memory.** AISIX holds about 4.6–7× a request body; one 64 MiB Responses body peaks near 460 MB. AISIX runs with `mem_limit: 512m` and no swap. Two concurrent 64 MiB bodies can still OOM it, after which Docker restarts AISIX and every in-flight AISIX request fails. Observed bodies are far smaller (max about 4 MB).
 
 ## Topology
 
@@ -34,17 +43,22 @@ Pi ─WS/HTTP─► public APISIX ─► keepalive ─► openai-api-cache-keepe
    ─WS/HTTP─► responses-ws-sse-bridge ─HTTP/SSE─► Sub2API (account WS mode off)
 Sub2API account base_url http://cli-proxy-api:8317/v1
    └─► sub2api-cpa-relay ─► apisix-models :9080
-          POST /v1/responses, /v1/chat/completions ─► routing_selector ─► AISIX | CPA
-          everything else, including WebSocket GET  ─► CPA (unclassified)
+          GET /v1/models ─► model-catalog
+          everything else ─► AISIX ─► exact | glob | * ─► aisix-cpa-relay ─► CPA
 ```
 
-`cli-proxy-api:8317` on the Sub2API network is the relay to `apisix-models`, not CPA itself.
+`cli-proxy-api:8317` on the Sub2API network is the relay to `apisix-models`, not CPA itself. The front door reads the same `/v1/models` over `front-catalog`.
+
+`apisix-models` publishes no host port. To read the internal catalog on the host:
+
+```sh
+docker exec ai-gateway-apisix-models-1 bash -c \
+  'exec 3<>/dev/tcp/127.0.0.1/9080; printf "GET /v1/models HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; cat <&3'
+```
 
 ## Why WebSocket must be bridged
 
-APISIX reads the model only from an HTTP request body. A WebSocket upgrade is a body-less GET, and the model arrives later inside frames that APISIX passes through without inspection. A direct WebSocket therefore falls to `catch-all` and reaches CPA, which only knows slash IDs. Bare IDs then fail with `Connection error`.
-
-Our stateless `responses-ws-sse-bridge` turns each client WebSocket turn into `POST /v1/responses` before Sub2API, which the selector can classify. Keeper runs before that bridge with `UPSTREAM_URL=http://127.0.0.1:8086` and `IGNORE_CLIENT_STORE_FALSE=true`; known parents are expanded there. Do not restore Sub2API `http_bridge`, `ctx_pool` or `passthrough` for this chain.
+APISIX passes WebSocket frames through without inspection, and AISIX has no `GET /v1/responses` WebSocket endpoint. A direct WebSocket upgrade therefore fails at AISIX. Our stateless `responses-ws-sse-bridge` turns each client WebSocket turn into `POST /v1/responses` before Sub2API. Keeper runs before that bridge with `UPSTREAM_URL=http://127.0.0.1:8086` and `IGNORE_CLIENT_STORE_FALSE=true`; known parents are expanded there. Do not restore Sub2API `http_bridge`, `ctx_pool` or `passthrough` for this chain.
 
 ## Sub2API account contract
 
@@ -88,12 +102,12 @@ Sub2API's built-in bridge loses earlier assistant output on parent-plus-delta tu
 
 ## Checklist before pushing or deploying
 
-- [ ] Changing a keeper, selector or route? List every responsibility of the component you remove (HTTP *and* WebSocket) and show where each one lives afterwards.
+- [ ] Changing a keeper, route or AISIX resource? List every responsibility of the component you remove (HTTP *and* WebSocket) and show where each one lives afterwards.
 - [ ] Removing a path alias (`/rk`, …)? Find every Sub2API account and client still using it, and migrate them in the same rollout.
 - [ ] Sub2API account settings are database state; Git does not track them. Run the read-only check above before and after each cutover.
-- [ ] `ops/scripts/validate.sh` passes, including `routing_selector_test.lua`.
-- [ ] Production `services/routing/apisix-models/routing_selector.lua` hash equals the repository file before you deploy the repository. A deploy from a stale checkout silently reverts the live rule.
-- [ ] After deploy, test with the installed Pi over WebSocket: one bare ID (`claude-opus-5-5`), one slash ID (`xl/claude-opus-5-5`), and a two-turn recall. Confirm in AISIX logs that only the bare ID arrived there. HTTP 101 or a single `OK` alone is not proof.
+- [ ] `ops/scripts/validate.sh` passes, including the AISIX resource policy (exactly one `*` row), the apisix-models CPA-cut check and `test-catalog-routes.sh`.
+- [ ] Production `services/routing/apisix-models/apisix.yaml` and `config.yaml` hashes equal the repository files before you deploy the repository. A deploy from a stale checkout silently reverts the live routes.
+- [ ] After deploy, test with the installed Pi over WebSocket: one AISIX route (`claude-opus-5-5`), one AISIX slash row (`xl/claude-opus-5-5`), one CPA-only ID through `*`, and a two-turn recall. Confirm in the AISIX access log that each requested ID arrived with the expected upstream model. HTTP 101 or a single `OK` alone is not proof.
 
 ## Known production drift (2026-10-22)
 

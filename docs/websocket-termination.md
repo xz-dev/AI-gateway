@@ -12,7 +12,7 @@ WebSocket ends at our own layer, in front of Sub2API. Sub2API receives only HTTP
 client ─WS/HTTP─► public APISIX ─► keepalive ─► openai-api-cache-keeper
        ─WS/HTTP─► responses-ws-sse-bridge        (each WS turn → POST + SSE)
        ─HTTP/SSE─► Sub2API                       (auth/quota/accounts; account WS mode off)
-       ─► apisix-models slash selector ─► AISIX | CPA
+       ─► apisix-models pipe ─► AISIX (exact | glob | * ─► CPA)
 ```
 
 | Component | Responsibility | Must not |
@@ -46,7 +46,7 @@ Production acceptance on 2026-10-22 (`/var/tmp/keeper-prod-acceptance-20261022/R
 ## Why WebSocket must become HTTP before the inner gateway
 
 - AISIX supports WebSocket only on `/v1/realtime`, not Responses.
-- The `apisix-models` selector reads `model` from an HTTP body. APISIX 3.19 frame phases can read frames, but cannot pick an upstream per frame.
+- AISIX resolves `model` from an HTTP body. `apisix-models` passes WebSocket frames through to AISIX, which has no Responses WebSocket endpoint.
 - CPA's XL upstream and the egress proxy accept only POST.
 
 Every hop after the client is HTTP anyway. One conversion point, in our own code, is the least lossy.

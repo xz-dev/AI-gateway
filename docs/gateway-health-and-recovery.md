@@ -19,9 +19,9 @@ Health has three separate meanings:
 | model-catalog | `GET /healthz`, HTTP 200 | Catalog local liveness |
 | ai-sse-keepalive-proxy | `GET /healthz`, HTTP 200 | Keepalive proxy local liveness |
 | apisix | Local `GET /healthz`, expected HTTP 404 | APISIX's unmatched-route rejection responds; no upstream request |
-| apisix-models | Local `GET /healthz`, HTTP 200 | APISIX's explicit local health route responds; no CPA request |
+| apisix-models | Local `GET /healthz`, HTTP 200 | `fault-injection` abort answers locally; no upstream request |
 
-The CPA key comes from the existing `apisix-models` container environment; the front keeper does not hold it. It remains in process memory, not arguments or logs. A missing key or HTTP 401/403 is **unknown**, not a restart decision. An inaccessible namespace is also unknown. Deployment refuses unknown or failed probes.
+The CPA key comes from the `model-catalog` container's `CPA_CLIENT_KEY`; neither the front keeper nor `apisix-models` holds one. It remains in process memory, not arguments or logs. A missing key or HTTP 401/403 is **unknown**, not a restart decision. An inaccessible namespace is also unknown. Deployment refuses unknown or failed probes.
 
 Recovery policy:
 
@@ -63,7 +63,7 @@ cache wipe is needed for this probe fix. Keep catalog authentication intact.
 
 ## Deploy and inspect
 
-Deploy the explicit `apisix-models` local health route and strict health status check first. Its old `/healthz` catch-all reached CPA; that would turn an upstream outage into an unsafe proxy-restart signal. The old shell check also accepted HTTP 502 and 503 because it ended with `true`.
+Deploy the explicit `apisix-models` local health route and strict health status check first. Its old `/healthz` catch-all reached CPA (the pinned APISIX 3.19 lacks `request-termination`, so the first local route was silently rejected until `fault-injection` replaced it); that would turn an upstream outage into an unsafe proxy-restart signal. The old shell check also accepted HTTP 502 and 503 because it ended with `true`.
 
 From `ops/ansible/`:
 

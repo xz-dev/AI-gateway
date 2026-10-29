@@ -1,12 +1,18 @@
 ## 1. AISIX `*` fallback, memory and pin
 
-- [ ] 1.1 Add a self-test to `ops/scripts/check-aisix-resource-policy.py`, then implement it. Require exactly one direct row `display_name: "*"` with `model_name: "*"`, `provider: openai`, the CPA pool `provider_key` and the shared cooldown block, and reject any routing target naming `*`. Keep other single-`*` globs legal. **Verify:** each self-test case fails when its row is missing, duplicated, has the wrong `model_name` or provider key, or is targeted by a route. The production-shaped scratch resources with the row pass. The Ansible AISIX deploy runs the same validator.
+- [x] 1.1 Add a self-test to `ops/scripts/check-aisix-resource-policy.py`, then implement it. Require exactly one direct row `display_name: "*"` with `model_name: "*"`, `provider: openai`, the CPA pool `provider_key` and the shared cooldown block, and reject any routing target naming `*`. Keep other single-`*` globs legal. **Verify:** each self-test case fails when its row is missing, duplicated, has the wrong `model_name` or provider key, or is targeted by a route. The production-shaped scratch resources with the row pass. The Ansible AISIX deploy runs the same validator.
+
+  Done: self-test covers missing, duplicate, wrong `model_name`/`provider_key`/`provider`, missing cooldown, route targeting `*`, `*` as a routing model, and keeps `devin/*` legal; an ablation with the old `validate()` fails it. The production-shaped scratch resources with the row pass (routes=23); the Ansible AISIX role runs this same script with `--yaml`.
 - [ ] 1.2 Add the `*` row to `services/routing/aisix/resources.example.yaml` with a one-line comment. Add it to the private `resources.yaml`; do not commit it. **Verify:** the validator, normalizer (`normalized 0`) and orphan report pass on both files.
-- [ ] 1.3 Set AISIX `mem_limit: 512m` and `memswap_limit: 512m` in `compose.yaml`. Pin `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690` in `compose.yaml` and `.env.example`. **Verify:** using the PART 1 harness at 512m with no swap, one 64 MiB Responses request through `*` returns 200 with no OOM. Record the peak. `validate.sh .env.example` passes with the new pin.
+
+  Unchecked: the private half waits for window step 5.4. Done for the tracked example (validator, `normalized 0`, orphan report with no candidates) and for the production-shaped scratch copy. Not done here by instruction: the private `resources.yaml` is not edited; the row lands with window step 5.4. Until then, any `deploy-config -e component=aisix` from this revision refuses a private file without the row.
+- [x] 1.3 Set AISIX `mem_limit: 512m` and `memswap_limit: 512m` in `compose.yaml`. Pin `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690` in `compose.yaml` and `.env.example`. **Verify:** using the PART 1 harness at 512m with no swap, one 64 MiB Responses request through `*` returns 200 with no OOM. Record the peak. `validate.sh .env.example` passes with the new pin.
+
+  Done: PART 1 harness at `--memory 512m --memory-swap 512m`, AISIX 1.6.0 pinned digest, two consecutive 64 MiB Responses bodies through `*`: 200, `memory.peak=450048000` of `memory.max=536870912`, `oom_kill=0` (`/var/tmp/ai-aisix-star/impl/mem-512m.txt`). `validate.sh .env.example` passes with the new pin.
 
 ## 2. Slim apisix-models
 
-- [ ] 2.1 Update the route tests first. In `ops/scripts/tests/test-catalog-routes.sh` and `test-standard-cache-topology.py`, assert:
+- [x] 2.1 Update the route tests first. In `ops/scripts/tests/test-catalog-routes.sh` and `test-standard-cache-topology.py`, assert:
   - `/healthz` is local;
   - `GET /v1/models`, with and without `client_version`, reaches the model-catalog stub;
   - `POST` `/v1/responses`, `/v1/chat/completions`, `/v1/images/generations` and multipart `/v1/images/edits` reach the AISIX stub with the caller `Authorization` and a byte-identical body, including `prompt_cache_retention`;
@@ -15,17 +21,23 @@
   - no route reaches a CPA stub.
 
   **Verify:** the tests fail against the current selector configuration and pass after 2.2.
-- [ ] 2.2 Rewrite `services/routing/apisix-models/apisix.yaml` per design D2:
+
+  Done in `test-catalog-routes.sh` (the AISIX stub records path, method, `Authorization`, content type and body SHA-256; `test-standard-cache-topology.py` asserts the route set). Red against the old selector config: requests reached `cpa` and `/healthz` was not local (`/var/tmp/ai-aisix-star/impl/routes-red.txt`); green after 2.2 (`routes-green.txt`). Also asserts `/healthz` returns 200 with every upstream down and reaches no upstream.
+- [x] 2.2 Rewrite `services/routing/apisix-models/apisix.yaml` per design D2:
   - upstreams `model-catalog` and `aisix` only;
   - routes `local-health`, `codex-models` and `aisix` (`/*`, `enable_websocket`, unbuffered);
   - no `global_rules`, `serverless-*`, `client-control` or `__CPA_API_KEY__`.
 
   In `config.yaml`, drop `extra_lua_path` and the `172.30.34.2` listener and keep `client_max_body_size: 64m`. In `start.sh`, remove the `CPA_API_KEY` check and the `sed`, and copy the template. Delete `routing_selector.lua` and `routing_selector_test.lua`. **Verify:** `apisix test` passes, the listener render shows only the loopback, `172.30.12.2` and `172.30.45.3` listeners, tests 2.1 pass, and no file in the directory mentions CPA.
 
+  Done. `local-health` uses `fault-injection` `abort` 200 because the pinned APISIX 3.19.0 rejects `request-termination` as an unknown plugin (see design D2). `apisix test` passes; the rendered `:9080` listeners are exactly loopback, `172.30.12.2` and `172.30.45.3` (validate.sh now asserts this). The only `cpa` text left in the directory is the relay name `sub2api-cpa-relay` in the README.
+
 ## 3. Network cut, recovery and validation
 
-- [ ] 3.1 Add the negative test before removing anything. In `ops/scripts/validate.sh`, add a reachability walk from `apisix-models-netns` over networks and socat relays. The walk does not traverse application namespaces. It fails if `cpa-netns` is reachable, if `apisix-models-netns` has a `cpa` extra host, if `apisix-models` carries `CPA_API_KEY`, or if `apisix.yaml` names `cpa:` or `8317`. Add an intentional-break fixture that re-adds `apisix-models-cpa-relay`. **Verify:** the check fails on the current `compose.yaml` and on the fixture, and passes after 3.2.
-- [ ] 3.2 Apply design D3 in `compose.yaml`:
+- [x] 3.1 Add the negative test before removing anything. In `ops/scripts/validate.sh`, add a reachability walk from `apisix-models-netns` over networks and socat relays. The walk does not traverse application namespaces. It fails if `cpa-netns` is reachable, if `apisix-models-netns` has a `cpa` extra host, if `apisix-models` carries `CPA_API_KEY`, or if `apisix.yaml` names `cpa:` or `8317`. Add an intentional-break fixture that re-adds `apisix-models-cpa-relay`. **Verify:** the check fails on the current `compose.yaml` and on the fixture, and passes after 3.2.
+
+  Done as `ops/scripts/check-apisix-models-no-cpa.py`, run by validate.sh on the rendered Compose, plus the fixture `ops/scripts/tests/fixtures/apisix-models-cpa-relay.override.yaml` that validate.sh requires to fail. Red on the old `compose.yaml` (all four violations), red on the fixture, green after 3.2.
+- [x] 3.2 Apply design D3 in `compose.yaml`:
   - remove `apisix-models-cpa-relay`, `apisix-models-host-netns` and `apisix-models-host-relay`;
   - remove the four networks `apisix-models-cpa-source`, `apisix-models-cpa-target`, `apisix-models-host-source` and `host-apisix-models-target`;
   - remove the `cpa` extra host and both attachments from `apisix-models-netns`;
@@ -33,13 +45,19 @@
   - remove the `apisix-models-cpa-target` attachment from `cpa-netns`.
 
   Update the selector-specific checks in `validate.sh`: the mount, the `__CPA_API_KEY__` count, the 16 MiB global rule, catch-all→CPA, the `routing_selector_test.lua` run and the AISIX edge comments. Keep the front-catalog pair and the aisix-netns membership checks. **Verify:** with `compose.override.yaml` moved to /var/tmp and ALWAYS restored afterwards, `./ops/scripts/validate.sh .env.example` passes, and the 3.1 fixture still fails.
-- [ ] 3.3 Change the CPA probe in `ops/scripts/host/gateway-recovery.py` to read `CPA_CLIENT_KEY` from the model-catalog container environment. Keep the `apisix-models` `/healthz` check and the in-memory-only key handling. Update `ops/scripts/tests/test-gateway-recovery.py` and its Compose section split. **Verify:** the recovery tests pass, a missing `CPA_CLIENT_KEY` fails closed as before, and no code reads the `apisix-models` environment.
-- [ ] 3.4 Ansible: confirm that `ai_ops_component` profiles and argument specs, the model-catalog protected identities and the inventory examples name no removed service. Keep `apisix-models` as a component. Run the existing Ansible tests (`test-ansible-model-catalog-config.sh` and the component-profile/argument-spec equality test). **Verify:** the tests pass, and any list change is limited to removed names. None is expected; record "no change" if none is found.
+
+  Done; `./ops/scripts/validate.sh .env.example` exits 0 (this worktree has no `compose.override.yaml`; the shared one was never moved). The fixture still fails.
+- [x] 3.3 Change the CPA probe in `ops/scripts/host/gateway-recovery.py` to read `CPA_CLIENT_KEY` from the model-catalog container environment. Keep the `apisix-models` `/healthz` check and the in-memory-only key handling. Update `ops/scripts/tests/test-gateway-recovery.py` and its Compose section split. **Verify:** the recovery tests pass, a missing `CPA_CLIENT_KEY` fails closed as before, and no code reads the `apisix-models` environment.
+
+  Done: `test-gateway-recovery.py` 24 tests pass, including a stale `apisix-models` key that is never read and a missing `CPA_CLIENT_KEY` that yields an unknown (`ok: None`) probe as before.
+- [x] 3.4 Ansible: confirm that `ai_ops_component` profiles and argument specs, the model-catalog protected identities and the inventory examples name no removed service. Keep `apisix-models` as a component. Run the existing Ansible tests (`test-ansible-model-catalog-config.sh` and the component-profile/argument-spec equality test). **Verify:** the tests pass, and any list change is limited to removed names. None is expected; record "no change" if none is found.
+
+  No change needed: no removed service name appears in `ops/ansible`. `test-ansible-model-catalog-config.sh`, `test-ansible-operations.py`, `test-ansible-preflight.py`, `test-ansible-managed-file.py`, `test-ansible-aisix-mode.py`, `test-ansible-squid-source.sh` and `test-component-deploy.py` pass locally with the pinned collections.
 
 ## 4. Documentation
 
-- [ ] 4.1 Update the `apisix-models` row in `README.md` to where/what/how: constant routes, `/v1/models` → model-catalog, everything else → AISIX, no host port. Rewrite `services/routing/apisix-models/README.md` the same way. In `services/routing/aisix/README.md`, document the `*` fallback row in one line. **Verify:** the READMEs stay short and contain no `9081`, slash rule or CPA upstream.
-- [ ] 4.2 Rewrite `docs/model-routing.md`:
+- [x] 4.1 Update the `apisix-models` row in `README.md` to where/what/how: constant routes, `/v1/models` → model-catalog, everything else → AISIX, no host port. Rewrite `services/routing/apisix-models/README.md` the same way. In `services/routing/aisix/README.md`, document the `*` fallback row in one line. **Verify:** the READMEs stay short and contain no `9081`, slash rule or CPA upstream.
+- [x] 4.2 Rewrite `docs/model-routing.md`:
   - the rule: AISIX priority, then `*` → CPA;
   - the topology;
   - the Sub2API account contract (unchanged);
@@ -51,6 +69,8 @@
   - the pre-deploy checklist (replacing the selector hash check).
 
   Reconcile `docs/architecture.md`, `docs/security.md`, `docs/layout.md`, `docs/gateway-health-and-recovery.md`, `docs/websocket-termination.md`, `docs/catalog.md`, `docs/model-catalog.md` and `services/routing/README.md`. **Verify:** `rg -n 'routing_selector|slash rule|9081|apisix-models-cpa|apisix-models-host'` over docs and service READMEs finds only historical records.
+
+  Done. Remaining hits are historical only: the 2026-10-22 incident list in `docs/model-routing.md`, `docs/records/`, the unarchived historical change `openspec/changes/stabilize-responses-path`, and the keeper submodule README (separate repository, not edited here).
 
 ## 5. Production window
 
@@ -79,6 +99,7 @@
   - Public standard and Codex lists, plus the five catalog bodies, `cmp`-identical to the baseline.
   - CPA unreachable from the `apisix-models` netns.
   - The recovery timer is healthy.
+  - `apisix-models` `/healthz` returns 200 with no upstream hit (AISIX and model-catalog access logs unchanged), and the Compose health is `healthy`.
   - Restart counts are 0 and protected identities are unchanged except the services recreated on purpose.
 
   **Verify:** every item passes, or the window rolls back per design. The temporary key is deleted with proof: DELETE 200, GET 404, local file absent.

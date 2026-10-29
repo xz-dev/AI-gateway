@@ -45,6 +45,7 @@ Memory scaling, 1.6.0, fresh container, 1 GiB limit (peak `memory.peak`): idle 1
 - Sub2API reads `GET /v1/models` from the account base URL: the Codex manifest with `client_version` (46 in 37 h) and the plain list (82 in 37 h). Both must keep reaching model-catalog. AISIX's typed `/v1/models` returns its own 76-ID list, and its passthrough routes cannot shadow `/v1/*`.
 - The front-door catalog leg reads `apisix-models` over `front-catalog` (51 in 37 h). The `127.0.0.1:9081` host relay had 2 operator calls, and no runbook in docs or ops uses it.
 - AISIX reaches CPA through its own `aisix-cpa-relay` and does not depend on `apisix-models-cpa-relay`.
+- Today the `apisix-models` `/healthz` is not local. The pinned APISIX 3.19.0 image rejects the `local-health` route (`unknown plugin [request-termination]`), so `/healthz` falls through the catch-all and CPA answers it with 200. The Compose healthcheck and the recovery check pass only because CPA is up. With the catch-all now pointing at AISIX, which serves no `/healthz` on its proxy listener, the same config would turn `apisix-models` unhealthy. That is why D2 replaces the plugin. The front `apisix.yaml` uses only plugins present in 3.19.
 - AISIX request bodies in 16 h: Responses p50 0.82 MB, p99 3.38 MB, max 3.95 MB.
 - Production AISIX runs `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690` from the private `.env`; tracked Compose and `.env.example` still pin 1.5.0.
 
@@ -92,11 +93,11 @@ Other single-`*` globs stay legal, because their precedence is a feature. `resou
 
 | Route | Match | Target |
 | --- | --- | --- |
-| `local-health` | `GET, HEAD /healthz`, priority 1000 | `request-termination` 200 |
+| `local-health` | `GET, HEAD /healthz`, priority 1000 | `fault-injection` `abort` 200, body `{"status":"ok"}` |
 | `codex-models` | `GET /v1/models`, priority 20 | model-catalog |
 | `aisix` | `/*`, priority 1, `enable_websocket: true`, `proxy-buffering.disable_proxy_buffering: true` | AISIX, caller credential unchanged |
 
-The user's "two constant routes" are the two non-health routes; `/healthz` stays local as instructed.
+The user's "two constant routes" are the two non-health routes; `/healthz` stays local as instructed. The pinned APISIX 3.19.0 image has no `request-termination` plugin (the route is rejected with `unknown plugin [request-termination]`), so `fault-injection` `abort`, which is enabled by default, answers it. No Lua is involved, and it returns 200 with every upstream down.
 - No `serverless-*` function, no `client-control`, and no `cpa` upstream.
 - `config.yaml` keeps `client_max_body_size: 64m` and drops `extra_lua_path`.
 - `start.sh` copies the template unchanged, with no `CPA_API_KEY` check or `sed`.
@@ -160,6 +161,7 @@ Both gateway strips disappear with the selector and the catch-all. All traffic n
 ## Risks / Trade-offs
 
 - **Concurrent large bodies.** One 64 MiB Responses request peaks at about 460 MB in AISIX. Two concurrent 64 MiB requests (about 770 MB) exceed 512m, and AISIX is OOM-killed and restarted; every in-flight AISIX request fails. The host's roughly 829 MiB of available memory is also under pressure. Observed bodies are far smaller (max 3.95 MB in 16 h; slash→CPA input p99 190k tokens). The record must state this residual risk.
+- **Liveness semantics change.** Today the `apisix-models` health effectively probes CPA, through the catch-all. After the change it is purely local, and CPA and AISIX health come from their own checks. The window must prove `/healthz` returns 200 with no upstream hit.
 - **Every CPA-bound request now crosses AISIX.** AISIX restarts or OOMs affect all IDs, not only bare ones. The added hop costs about 0 ms on loopback, plus AISIX's full-body read.
 - **Error shape for unknown-everywhere IDs** changes to 400 `upstream_error` (Responses message holds the CPA JSON as a string). The cause stays actionable ("unknown provider for model X"). Verify that Sub2API does not penalize or disable accounts on this 400.
 - **Observability.** AISIX metrics for CPA-only traffic collapse to `model="*"`; per-ID detail stays in the access log. `*` may show as cooling on the status page after any unknown-ID 400 or 429; this is cosmetic, as routing is unaffected.

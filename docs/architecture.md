@@ -31,12 +31,9 @@ flowchart LR
   Keeper --> Bridge[stateless Responses WS to SSE bridge]
   Bridge -->|HTTP/SSE only| Sub2API
   Sub2API -->|cli-proxy-api:8317 relay| Models[apisix-models internal APISIX]
-  Models -->|Responses HTTP: slash selector| CPA[CLIProxyAPI]
-  Models -->|Responses HTTP: slash selector| AISIX
-  Models -->|chat/images: slash selector| CPA
-  Models -->|chat/images: slash selector| AISIX
+  Models -->|all inference, constant pipe| AISIX
   Sub2API -->|AISIX accounts| AISIX
-  AISIX --> CPA
+  AISIX -->|exact, glob, then * fallback| CPA[CLIProxyAPI]
   APISIX -->|versioned /v1/models: front-catalog| Models
   Operator -->|:9083 /models-table| APISIX
   APISIX -->|/models-table: front-model-table| Catalog[model-catalog]

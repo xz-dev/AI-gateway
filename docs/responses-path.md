@@ -31,7 +31,7 @@ Sub2API account WS mode is `off`: public WebSocket ends at the front keeper and 
 
 ```text
 APISIX or restricted Operator -> keepalive -> openai-api-cache-keeper
-  -> responses-ws-sse-bridge -> Sub2API (HTTP/SSE) -> inner slash selector -> AISIX/CPA
+  -> responses-ws-sse-bridge -> Sub2API (HTTP/SSE) -> apisix-models pipe -> AISIX (* -> CPA)
 ```
 
 Keeper uses standard Responses paths only; no `/rk` alias, prefix stripping or private recovery header exists. Ordinary/unverified APIs, upstream errors and non-SSE responses remain transparent. Keeper does not select accounts/models or implement billing.
