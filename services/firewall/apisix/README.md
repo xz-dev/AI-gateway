@@ -6,6 +6,7 @@
 
 - Allows only the supported public AI routes, applies rate and body limits, and answers everything else with an opaque `404`.
 - Answers versioned `GET /v1/models` itself by intersecting Sub2API's entitled list with the catalog from `apisix-models` (`lua/model_list_intersection.lua`).
+- Fetches plain `/v1/models` and `/models` from Sub2API and returns the same records in bare-ID-first, case-sensitive Unicode code-point order, with private final-entity cache validators. Unrecognized bodies and errors pass through; all model lists share one admission slot.
 - Serves `/models-table` and `/models-table/refresh` from `model-catalog` on port `9083` only.
 
 **How:**

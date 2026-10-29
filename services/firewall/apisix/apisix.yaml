@@ -161,7 +161,7 @@ routes:
         functions:
           - >-
             return function(_, ctx)
-              local status, body, headers = require("model_list_intersection").admit(_, ctx)
+              local status, body, headers = require("model_list_intersection").list(_, ctx)
               if status then
                 return status, body, headers
               end

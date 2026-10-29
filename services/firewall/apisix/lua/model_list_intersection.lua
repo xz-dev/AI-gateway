@@ -14,6 +14,7 @@ local string_lower = string.lower
 local string_match = string.match
 local table_concat = table.concat
 local table_insert = table.insert
+local table_sort = table.sort
 local tonumber = tonumber
 local tostring = tostring
 local type = type
@@ -306,7 +307,7 @@ local function object_fields(body, start)
     end
 end
 
-local function filter_original(document, allowed, raw)
+local function catalog_records(document, raw)
     local source, err = catalog(document)
     if not source then
         return nil, err
@@ -324,7 +325,7 @@ local function filter_original(document, allowed, raw)
         return nil, "model collection boundary missing"
     end
 
-    local filtered = {}
+    local records = {}
     local pos = skip_space(raw, first + 1)
     for _, item in ipairs(source.items) do
         local id, id_err = model_id(item, source.id_field)
@@ -341,15 +342,40 @@ local function filter_original(document, allowed, raw)
                 seen[key] = true
             end
         end
-        if allowed[id] then
-            table_insert(filtered, raw:sub(pos, finish - 1))
-        end
+        table_insert(records, {id = id, fragment = raw:sub(pos, finish - 1),
+            bare = not id:find("/", 1, true), index = #records + 1})
         pos = skip_space(raw, finish)
         if raw:sub(pos, pos) == "," then
             pos = skip_space(raw, pos + 1)
         end
     end
-    return raw:sub(1, first) .. table_concat(filtered, ",") .. raw:sub(last - 1)
+    return records, first, last
+end
+
+local function rewrite_catalog(document, raw, allowed)
+    local records, first, last = catalog_records(document, raw)
+    if not records then
+        return nil, first
+    end
+    if not allowed then
+        table_sort(records, function(a, b)
+            if a.bare ~= b.bare then
+                return a.bare
+            end
+            if a.id ~= b.id then
+                -- LuaJIT 按 UTF-8 字节比较；有效 UTF-8 的字节序等于 Unicode 码点序。
+                return a.id < b.id
+            end
+            return a.index < b.index
+        end)
+    end
+    local fragments = {}
+    for _, record in ipairs(records) do
+        if not allowed or allowed[record.id] then
+            table_insert(fragments, record.fragment)
+        end
+    end
+    return raw:sub(1, first) .. table_concat(fragments, ",") .. raw:sub(last - 1)
 end
 
 local function apply_upstream_headers(headers)
@@ -468,6 +494,26 @@ local function merge_vary(value)
     return table_concat(merged, ", ")
 end
 
+local function final_response(response, body)
+    local etag = '"apisix-' .. ngx.md5(body) .. '"'
+    apply_upstream_headers(response.headers)
+    ngx.header["Content-Type"] =
+        response_header(response.headers, "content-type") or "application/json"
+    ngx.header["Cache-Control"] = "private, no-cache"
+    ngx.header["ETag"] = etag
+    ngx.header["Vary"] = merge_vary(response_header(response.headers, "vary"))
+
+    if ngx.var.http_if_match and
+       not etag_matches(ngx.var.http_if_match, etag, false) then
+        return 412, ""
+    end
+    if etag_matches(ngx.var.http_if_none_match, etag, true) then
+        return 304, ""
+    end
+
+    return response.status, body
+end
+
 function _M.admit(_, ctx)
     local path = ngx.var.uri
     if ngx.req.get_method() ~= "GET" or
@@ -479,6 +525,32 @@ function _M.admit(_, ctx)
     if not acquired then
         return busy_response(acquire_err)
     end
+end
+
+function _M.list(_, ctx)
+    local status, body, headers = _M.admit(_, ctx)
+    if status then
+        return status, body, headers
+    end
+
+    local basic, basic_err = fetch(BASIC_UPSTREAM_HOST, BASIC_UPSTREAM_PORT,
+        ngx.var.uri, ngx.var.args, BASIC_MAX_BYTES, copy_request_headers(BASIC_UPSTREAM_HOST))
+    if not basic then
+        return gateway_error(basic_err)
+    end
+    if basic.status >= 200 and basic.status < 300 then
+        local document, decode_err = record_json.decode(basic.body)
+        local ordered, order_err
+        if document then
+            ordered, order_err = rewrite_catalog(document, basic.body)
+        end
+        if ordered then
+            return final_response(basic, ordered)
+        end
+        core.log.warn("model-list ordering skipped: ", tostring(decode_err or order_err))
+    end
+    apply_upstream_headers(basic.headers)
+    return basic.status, basic.body
 end
 
 function _M.run(_, ctx)
@@ -531,7 +603,7 @@ function _M.run(_, ctx)
         return gateway_error("invalid basic catalog: " .. tostring(allowed_err))
     end
 
-    local body, filter_err = filter_original(original_document, allowed, original.body)
+    local body, filter_err = rewrite_catalog(original_document, original.body, allowed)
     if not body then
         return gateway_error("invalid original catalog: " .. tostring(filter_err))
     end
@@ -539,23 +611,8 @@ function _M.run(_, ctx)
         return gateway_error("filtered catalog exceeds limit")
     end
 
-    local etag = '"apisix-' .. ngx.md5(body) .. '"'
-    apply_upstream_headers(original.headers)
-    ngx.header["Content-Type"] =
-        response_header(original.headers, "content-type") or "application/json"
-    ngx.header["Cache-Control"] = "private, no-cache"
-    ngx.header["ETag"] = etag
-    ngx.header["Vary"] = merge_vary(response_header(original.headers, "vary"))
-
-    if ngx.var.http_if_match and
-       not etag_matches(ngx.var.http_if_match, etag, false) then
-        return 412, ""
-    end
-    if etag_matches(ngx.var.http_if_none_match, etag, true) then
-        return 304, ""
-    end
-
-    return 200, body
+    original.status = 200
+    return final_response(original, body)
 end
 
 return _M

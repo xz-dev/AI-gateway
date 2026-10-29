@@ -2,7 +2,7 @@ This change is independent of union-catalog-membership (design D6). It has no sp
 
 ## 1. Front-door Lua and tests
 
-- [ ] 1.1 Add tests to `services/firewall/apisix/lua/model_list_intersection_test.lua` first, for the plain route's new handler (`_M.list`, route `ai-api-models-get`). The fake `ngx` should cover `/v1/models` with no query, with `client_version=`, and with `foo=1`, plus `/models`. Each case is listed below.
+- [x] 1.1 Add tests to `services/firewall/apisix/lua/model_list_intersection_test.lua` first, for the plain route's new handler (`_M.list`, route `ai-api-models-get`). The fake `ngx` should cover `/v1/models` with no query, with `client_version=`, and with `foo=1`, plus `/models`. Each case is listed below.
   - order: `z/a`, `b`, `A/b`, `B`, `a`, `a/b` → `B`, `a`, `b`, `A/b`, `a/b`, `z/a`;
   - code points: `é`, `z`, `😀`, `Z` → `Z`, `z`, `é`, `😀`;
   - equal IDs keep Sub2API order;
@@ -32,23 +32,23 @@ This change is independent of union-catalog-membership (design D6). It has no sp
   - one `_M.admit` test: it still only takes the slot (returns nothing when free, 503 when busy) and makes no upstream call, so the old route keeps working with the new module.
 
   Verify: the new tests fail against the current file under `resty` in the pinned APISIX image (the command in `ops/scripts/validate.sh`).
-- [ ] 1.2 Implement design D1–D4:
+- [x] 1.2 Implement design D1–D4:
   - in `model_list_intersection.lua`, add `_M.list` (admission through the unchanged `_M.admit`, then D1); `_M.admit`, `_M.release` and `_M.run` keep their behavior;
   - recognition, the `bare`/`id`/`index` sort and the raw splice reuse the existing helpers;
   - response policy as in D4;
   - in `services/firewall/apisix/apisix.yaml`, route `ai-api-models-get`'s pre-function calls `.list(_, ctx)` instead of `.admit(_, ctx)` (design D2); everything else in the route stays.
 
   Verify: all old and new harness tests pass under `resty`, and `git diff --stat` touches only the two Lua files and `apisix.yaml`.
-- [ ] 1.3 Run the gateway validation:
+- [x] 1.3 Run the gateway validation:
   - move `compose.override.yaml` to `/var/tmp`;
   - run `./ops/scripts/validate.sh .env.example`; this includes `apisix test` on the front config, the Lua harness and `ops/scripts/tests/test-catalog-routes.sh`;
   - always move the override back.
 
-  Verify: exit 0, with the override restored (check it with `test -f`).
+  Verify: exit 0, with any existing override restored (`test -f`). In an isolated worktree with no override, confirm it remains absent (`test ! -e`).
 
 ## 2. Docs and commit
 
-- [ ] 2.1 Update `docs/catalog.md`. The "Unparameterized `/v1/models`" note becomes: the front door fetches Sub2API's list and returns it in the catalog output order, with members and records unchanged; it covers pass-through, cache headers, and the admission slot. Also update the front APISIX README if it describes the plain route. Verify: the local link check reports 0 broken links, and `git grep -n "keeps going straight to Sub2API"` returns nothing.
+- [x] 2.1 Update `docs/catalog.md`. The "Unparameterized `/v1/models`" note becomes: the front door fetches Sub2API's list and returns it in the catalog output order, with members and records unchanged; it covers pass-through, cache headers, and the admission slot. Also update the front APISIX README if it describes the plain route. Verify: the local link check reports 0 broken links, and `git grep -n 'keeps going straight' -- docs services/firewall/apisix/README.md` returns nothing.
 - [ ] 2.2 Commit unsigned with explicit pathspecs (`git -c commit.gpgsign=false commit -- <paths>`) and push. Verify: the Validate CI run for the commit is green.
 
 ## 3. Production (reviewed manual window, `openai/*` model)

@@ -14,6 +14,7 @@ local total = 0
 local function run(original, options)
     options = options or {}
     local calls = {}
+    local warnings = {}
     local active = options.active or 0
     local clock = {t = 0}
     local dict = {
@@ -21,22 +22,28 @@ local function run(original, options)
         expire = function() return true end,
         set = function(_, _, value) active = value end,
     }
+    local query = options.query
+    if query == nil and not options.entry then
+        query = "client_version=fixture"
+    end
     local fake = {
-        var = {uri = "/v1/models", args = options.query or "client_version=fixture",
-            remote_addr = "127.0.0.1", http_if_none_match = options.etag},
+        var = {uri = options.path or "/v1/models", args = query,
+            remote_addr = "127.0.0.1", http_if_none_match = options.etag,
+            http_if_match = options.if_match},
         req = {get_method = function() return "GET" end,
             get_headers = function() return {Authorization = "Bearer fixture-only"} end},
         header = {}, shared = {["model-list-intersection"] = dict}, md5 = real_ngx.md5,
         now = function() return clock.t end,
         sleep = function(s) clock.t = clock.t + (s or 0) end,
     }
-    package.loaded["apisix.core"] = {json = json, log = {error = function() end, warn = function() end}}
+    package.loaded["apisix.core"] = {json = json, log = {error = function() end,
+        warn = function(...) warnings[#warnings + 1] = table.concat({...}) end}}
     package.loaded["resty.http"] = {new = function()
         return {
             set_timeouts = function() end,
             connect = function(self, host, port) self.host = host; self.port = port; return true end,
             request = function(self, request)
-                calls[#calls + 1] = {host = self.host, port = self.port, request = request}
+                calls[#calls + 1] = {host = self.host, port = self.port, request = request, active = active}
                 local basic = self.host == "ai-sse-keepalive-ingress-relay"
                 local body = basic and (options.basic or '{"models":[{"slug":"c/allowed"}]}') or original
                 local headers = basic and (options.basic_headers or {}) or (options.headers or {})
@@ -54,12 +61,13 @@ local function run(original, options)
     _G.ngx = fake
     local module = dofile(source)
     local ctx = {}
-    local ok, status, body = pcall(module.run, nil, ctx)
+    local ok, status, body = pcall(module[options.entry or "run"], nil, ctx)
+    local held = ctx.model_list_intersection_acquired
     module.release(nil, ctx)
     _G.ngx = real_ngx
     assert(ok, status)
     assert(active == (options.active or 0), "admission lease leaked")
-    return status, body, fake.header, calls
+    return status, body, fake.header, calls, warnings, held
 end
 
 local function test(name, f)
@@ -137,6 +145,137 @@ test("admission queue and byte limits remain enforced", function()
     assert(status == 502, "original response size limit widened")
     status, _, _, calls = run(original, {basic_headers = {["Content-Length"] = tostring(64 * 1024 * 1024 + 1)}})
     assert(status == 502 and #calls == 1, "basic response limit changed or original requested")
+end)
+
+local function list(body, options)
+    options = options or {}
+    options.entry = "list"
+    options.basic = body
+    return run(nil, options)
+end
+
+test("plain list sorts bare IDs first on every plain route", function()
+    local body = '{"data":[{"id":"z/a"},{"id":"b"},{"id":"A/b"},{"id":"B"},{"id":"a"},{"id":"a/b"}]}'
+    local ordered = '{"data":[{"id":"B"},{"id":"a"},{"id":"b"},{"id":"A/b"},{"id":"a/b"},{"id":"z/a"}]}'
+    for _, request in ipairs({
+        {path = "/v1/models"},
+        {path = "/v1/models", query = "client_version="},
+        {path = "/v1/models", query = "foo=1"},
+        {path = "/models", query = "foo=1"},
+    }) do
+        local status, result, _, calls, _, held = list(body, request)
+        assert(status == 200 and result == ordered, "plain ordering failed: " .. tostring(result))
+        assert(#calls == 1 and calls[1].host == "ai-sse-keepalive-ingress-relay" and calls[1].port == 8080)
+        assert(calls[1].request.path == request.path and calls[1].request.query == request.query)
+        assert(calls[1].request.headers.Authorization == "Bearer fixture-only")
+        assert(calls[1].active == 1 and held, "plain list bypassed admission")
+    end
+end)
+
+test("plain list uses decoded Unicode code-point order and stable equal IDs", function()
+    local status, body = list([[{"data":[{"id":"\ud83d\ude00"},{"id":"\ue000"},{"id":"é"},{"id":"z"},{"id":"Z"}]}]])
+    assert(status == 200 and body == [[{"data":[{"id":"Z"},{"id":"z"},{"id":"é"},{"id":"\ue000"},{"id":"\ud83d\ude00"}]}]])
+    status, body = list('{"data":[{"id":"z"},{"id":"a","n":1},{"id":"a","n":2}]}')
+    assert(status == 200 and body == '{"data":[{"id":"a","n":1},{"id":"a","n":2},{"id":"z"}]}')
+end)
+
+test("plain list preserves record fragments and envelope bytes", function()
+    local prefix, suffix = ' {"revision":9007199254740993,"mo\\u0064els":[', '],"extra":{"n":9007199254740993}}\n'
+    local bare = [[{"sl\u0075g":"A","id":"A","unknown":123456789012345678901234567890}]]
+    local status, body = list(prefix .. record .. ', \n' .. bare .. suffix)
+    assert(status == 200 and body == prefix .. bare .. ',' .. record .. suffix)
+    local data_record = [[{"i\u0064":"z","vendor":{"n":9007199254740993,"text":"\\\" } ["}}]]
+    prefix, suffix = '{"object":"list","da\\u0074a":[', '],"tail":null}'
+    local first = '{"id":"A"}'
+    status, body = list(prefix .. data_record .. ',' .. first .. suffix)
+    assert(status == 200 and body == prefix .. first .. ',' .. data_record .. suffix)
+    for _, empty in ipairs({'{"data":[],"object":"list"}', '{"models":[],"extra":false}'}) do
+        status, body = list(empty)
+        assert(status == 200 and body == empty)
+    end
+end)
+
+test("plain list passes upstream errors through without reordering", function()
+    for _, code in ipairs({401, 404, 429, 500}) do
+        local raw = '{"data":[{"id":"z"},{"id":"a"}],"error":"unchanged"}'
+        local status, body, headers, calls, warnings = list(raw, {
+            basic_status = code,
+            basic_headers = {ETag = '"upstream"', ["Cache-Control"] = "public", ["Retry-After"] = "5"},
+        })
+        assert(status == code and body == raw and #calls == 1 and #warnings == 0)
+        assert(headers.ETag == nil and headers["Cache-Control"] == nil and headers["Retry-After"] == "5")
+    end
+end)
+
+test("plain list passes unrecognized bodies through with WARN", function()
+    for _, raw in ipairs({
+        'not JSON', 'null', '[]', '{}', '{"data":{}}',
+        '{"data":[],"models":[]}',
+        '{"data":[],"da\\u0074a":[]}',
+        '{"data":[null]}', '{"data":[[]]}', '{"data":["model"]}',
+        '{"data":[{"id":""}]}', '{"data":[{"id":123}]}',
+        '{"data":[{"id":"a","slug":"b"}]}',
+        '{"data":[{"id":"a","i\\u0064":"a"}]}',
+        '{"models":[{"slug":"a","sl\\u0075g":"a"}]}',
+        '{"models":[{"slug":"a","id":"a","i\\u0064":"a"}]}',
+        '{"models":[{"slug":"a","value":NaN}]}',
+    }) do
+        local status, body, headers, calls, warnings = list(raw, {
+            basic_headers = {ETag = '"upstream"', ["Cache-Control"] = "public", ["X-Test"] = "retained"},
+        })
+        assert(status == 200 and body == raw and #calls == 1, "unrecognized body changed: " .. raw)
+        assert(#warnings == 1, "missing WARN: " .. raw)
+        assert(headers["X-Test"] == "retained" and headers.ETag == nil and headers["Cache-Control"] == nil)
+    end
+end)
+
+test("plain list applies final-entity headers and conditionals", function()
+    local raw = '{"data":[{"id":"z"},{"id":"a"}]}'
+    local ordered = '{"data":[{"id":"a"},{"id":"z"}]}'
+    local options = {basic_headers = {
+        ETag = '"upstream"', ["Cache-Control"] = "public", ["Content-Length"] = tostring(#raw),
+        ["Content-Type"] = "application/json; charset=utf-8", Vary = "Accept, authorization",
+    }}
+    local status, body, headers = list(raw, options)
+    assert(status == 200 and body == ordered)
+    assert(headers.ETag == '"apisix-' .. real_ngx.md5(ordered) .. '"')
+    assert(headers["Cache-Control"] == "private, no-cache" and headers.Vary == "Accept, authorization")
+    assert(headers["Content-Length"] == nil and headers["Content-Type"] == "application/json; charset=utf-8")
+    status, body, headers = list(raw, {etag = headers.ETag})
+    assert(status == 304 and body == "" and headers.Vary == "Authorization")
+    assert(headers["Content-Type"] == "application/json" and headers["Cache-Control"] == "private, no-cache")
+    status, body = list(raw, {etag = "W/" .. headers.ETag})
+    assert(status == 304 and body == "")
+    status, body = list(raw, {if_match = '"different"', etag = headers.ETag})
+    assert(status == 412 and body == "", "If-Match must take precedence")
+    status, body = list(raw, {if_match = "W/" .. headers.ETag})
+    assert(status == 412 and body == "", "If-Match must use strong comparison")
+    status, body = list(raw, {if_match = headers.ETag})
+    assert(status == 200 and body == ordered)
+    status, body = list(raw, {basic_status = 201})
+    assert(status == 201 and body == ordered, "recognized success status changed")
+end)
+
+test("plain admission and response byte limits remain enforced", function()
+    local status, _, headers, calls = list('{"data":[]}', {active = 1})
+    assert(status == 503 and headers["Retry-After"] == "1" and #calls == 0)
+    status, _, _, calls = list('{"data":[]}', {
+        basic_headers = {["Content-Length"] = tostring(64 * 1024 * 1024 + 1)},
+    })
+    assert(status == 502 and #calls == 1)
+end)
+
+test("intersection keeps model-catalog order rather than sorting again", function()
+    local raw = '{"models":[{"slug":"z/a"},{"slug":"c/allowed"},{"slug":"A"}]}'
+    local status, body = run(raw, {basic = '{"data":[{"id":"A"},{"id":"c/allowed"},{"id":"z/a"}]}'})
+    assert(status == 200 and body == raw)
+end)
+
+test("admit remains a slot-only entry point for the old route", function()
+    local status, _, _, calls, _, held = run(nil, {entry = "admit"})
+    assert(status == nil and #calls == 0 and held)
+    status, _, _, calls, _, held = run(nil, {entry = "admit", active = 1})
+    assert(status == 503 and #calls == 0 and not held)
 end)
 
 print("PASS all " .. total .. " front JSON contract checks")
