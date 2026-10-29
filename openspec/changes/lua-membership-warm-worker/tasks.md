@@ -90,9 +90,9 @@ All tests live under `services/routing/model-catalog/tests/`. Each one is writte
   - Done 2026-10-29: pin commit 2d71c74; `ops/scripts/validate.sh .env.example` exit 0 (`runtime=docker compose=valid firewall=valid one_way_edges=valid private_paths=untracked`; the isolated worktree has no `compose.override.yaml`, so none had to be moved); Validate run 40822651091 success; no private-config, `.env` or `compose.override.yaml` path staged.
 ## 5. Production deploy (image only)
 
-Run every step on an `openai/*` model.
+Run every step on an `openai/*` model. (Lifted by the user on 2026-10-29 after the `openai` provider OAuth failed; the 2026-10-29 deploy ran on `openai-api-extension/claude-opus-5-5`.)
 
-- [ ] 5.1 Pre-capture, read-only, to `/var/tmp`:
+- [x] 5.1 Pre-capture, read-only, to `/var/tmp`:
   - the internal standard list bytes and the Codex manifest bytes for the pinned client versions;
   - public `/v1/models` bytes for a test key;
   - the `:9083/models-table` summary;
@@ -100,15 +100,18 @@ Run every step on an `openai/*` model.
   - the count of `wall_time` WARNs since the last start.
 
   Verify: every capture is non-empty.
-- [ ] 5.2 Update the private `.env` image pin only. Run `ops/ansible` `deploy.yml -e component=model-catalog --check --diff`, then apply it the documented way. Verify:
+  - Done 2026-10-29 05:54 UTC: all captures non-empty. Native 555, AISIX 76, members 344, Codex 344, public 344 / Codex 335, passthrough 47, table generation 121. Config `84e91593…`, script `fa9a93cb…`, pin v1.3.0-4b2ff32. 23 `wall_time` WARNs since the 2026-10-28 13:09 start.
+- [x] 5.2 Update the private `.env` image pin only. Run `ops/ansible` `deploy.yml -e component=model-catalog --check --diff`, then apply it the documented way. Verify:
   - the check diff shows only the model-catalog image line;
   - only `model-catalog` is recreated, and no other container ID changes;
   - it is healthy with restarts=0;
   - the logs show the script loaded with the same digest and no WARN.
-- [ ] 5.3 Config unchanged. Run `deploy-config.yml -e component=model-catalog --check --diff`. Verify:
+  - Done 2026-10-29: the first preview failed the image gate (`docker manifest inspect` rejects the `tag@platform-digest` reference because the tag resolves to the index). After a pre-pull of the exact reference, the preview showed only `.env` changed and the rendered Compose diff was exactly `services.model-catalog.image`. Apply with digest `e24d8046…` gave `ok=147 changed=9 failed=0`, 51 protected containers unchanged, and model-catalog only. Healthy, restarts 0, `membership script loaded` with `fa9a93cb…`, no WARN until the unrelated 07:02 routing window.
+- [x] 5.3 Config unchanged. Run `deploy-config.yml -e component=model-catalog --check --diff`. Verify:
   - it reports `changed=0 failed=0`;
   - the private `config.yaml` and `catalog.lua` digests on the host equal the 5.1 capture;
   - the in-container `validate-config /app/config.yaml --script /app/catalog.lua` exits 0.
+  - Done 2026-10-29: `changed=0 failed=0`, digests equal, validate-config exit 0; final `deploy.yml` preview `changed=0`, `activation_required: false`.
 
 ## 6. Verify in production
 
@@ -116,10 +119,12 @@ Run every step on an `openai/*` model.
   - zero `wall_time` WARNs and zero `init_timeout` WARNs;
   - every collection published or reused the previous inputs without a script error;
   - the cgroup memory peak is below 384 MiB, with `oom` and `oom_kill` at 0.
-- [ ] 6.2 Post-capture and diff. Repeat the 5.1 captures. Verify:
+  - Open 2026-10-29: only 64 min observed (06:08–07:12 UTC): about 12 authority collections, 3 forced refreshes and about 2 of the required 6 scheduled refreshes. 0 script failures, 0 `wall_time`, 0 `init_timeout`, peak 269.3 MiB, OOM 0. Samples taken during the 07:02 AISIX routing window are excluded from the judgment. Before the deploy: 23 failures in about 15 h. Still needs several more hours.
+- [x] 6.2 Post-capture and diff. Repeat the 5.1 captures. Verify:
   - the internal standard list bytes, the Codex manifest bytes and the public `/v1/models` bytes are `cmp`-identical to the pre-capture;
   - the member count is unchanged (344, unless native or AISIX inputs changed, in which case explain the diff from those captures first);
   - if the catalog differs for any other reason, roll back (design Migration Plan step 4) and stop for a user decision.
+  - Done 2026-10-29 06:11 UTC: all five bodies `cmp`-identical (internal standard, internal Codex, public standard, public Codex, Sub2API), with members 344. A 07:14 recheck after the CPA restart differed by one Codex row, `aihub/gpt-6-astra`; that is native recovery 555→556, not the image.
 - [ ] 6.3 Write `docs/records/lua-membership-warm-worker-deployment-<date>.md`, without private values or the public hostname. Include:
   - the digests and timings;
   - the 1.7 and section 3 numbers;
