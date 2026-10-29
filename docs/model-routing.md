@@ -20,6 +20,8 @@ Read this before you change `services/routing/apisix-models/`, the AISIX `*` row
 
 Do not reintroduce `/routing-index` lookups, last-known-good caches, a "registered provider" check or body classification in `apisix-models`.
 
+The `aisix-first-routing-fallback` change retired `routing_selector.lua`; see its [deployment record](records/aisix-first-routing-fallback-2026-10-29.md). Keeper remains a single-upstream cache: its [model-first encoding](records/keeper-model-first-2026-10-28.md) preserves the model's raw value while putting it first in rebuilt bodies, not selecting a backend. The pinned keeper's README and parser comment still mention the retired selector; those describe its optional routed-mode fixture, not this deployment.
+
 CPA runs with its default `force-model-prefix: false`. Each model of a prefixed credential is registered twice, as `x` and `P/x`:
 
 - `P/x` is served only by the credential whose prefix is `P`;

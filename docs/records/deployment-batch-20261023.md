@@ -1,5 +1,7 @@
 # Controlled gateway rollout — 2026-10-23
 
+> Historical record: `aisix-first-routing-fallback` later retired `routing_selector.lua`; see the [2026-10-29 deployment record](aisix-first-routing-fallback-2026-10-29.md). The file hashes below describe this earlier rollout.
+
 One production writer, no VM reboot. Order: bridge → models-enricher → recovery guard → keeper experiment. Each step requires fresh configuration/container identity reads, protected backup, narrow activation, readback, bounded real continuation checks, and exact-tip CI before the next step. Local ignored `ansible/private-config` is the push-model source; the host Git checkout is not pulled or reset.
 
 ## Bridge — deployed
