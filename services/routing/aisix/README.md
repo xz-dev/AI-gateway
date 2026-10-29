@@ -8,4 +8,5 @@
 
 - `./ops/scripts/init.sh` creates the private `config.yaml`, `resources.yaml` and `caller-keys.json` here (gitignored).
 - Edit the private `resources.yaml` with concrete targets and logical routes, then deploy it with `ansible-playbook playbooks/deploy-config.yml -e component=aisix` from `ops/ansible/`.
+- `config.yaml` sets `upstream.stream_timeout_ms: 120000`, the longest silence allowed between upstream stream chunks (60 s cut long Claude/Codex generations with 504). No playbook manages `config.yaml`. Change it in a manual window: back it up, edit it, then `docker compose up -d --no-deps --force-recreate aisix`.
 - Guides: [upstream configuration](../../../docs/upstream-configuration.md), [add an OpenAI-compatible provider](../../../docs/add-openai-compatible-provider.md).

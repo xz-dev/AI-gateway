@@ -17,3 +17,6 @@ observability:
     prometheus:
       # Read only by aisix-status on the unpublished admin network.
       addr: 172.30.68.2:9090
+upstream:
+  # Max silence between upstream stream chunks; long reasoning/tool-call gaps exceed 60 s.
+  stream_timeout_ms: 120000
