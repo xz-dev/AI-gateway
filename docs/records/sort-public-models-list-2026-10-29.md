@@ -95,13 +95,13 @@ A later sample contained **185** such lines between **14:24:24 and 15:10:41 UTC*
 
 The supervisor accepted this error-level log-noise regression as a follow-up, **not a rollback condition**, because the client-visible response remains the correct opaque 404 and authenticated requests succeed. No unrelated error category was observed.
 
-### Follow-up fix — committed, not deployed
+### Follow-up fix — deployed
 
-The Lua follow-up is committed with this note but is **not deployed**. Both `list()` and `run()` now share `basic_passthrough()`: a basic-leg 401 becomes an empty 404 before any upstream headers are copied. All other basic-leg statuses retain their previous status, body and header behavior; the catalog leg and global response-shaping configuration are unchanged.
+The Lua follow-up `7264e56` is **deployed**; see the auth-shaping fix window below. Both `list()` and `run()` now share `basic_passthrough()`: a basic-leg 401 becomes an empty 404 before any upstream headers are copied. All other basic-leg statuses retain their previous status, body and header behavior; the catalog leg and global response-shaping configuration are unchanged.
 
 The added regression failed against the old handler (`list did not return an opaque 404`). All **17** contract checks now pass in the pinned APISIX image, covering both handlers and both model-list paths, absent upstream headers and no enriched-inventory request after auth rejection. Foreground `./ops/scripts/validate.sh .env.example` returned 0 in an isolated worktree with no Compose override before or after; the existing Lua codec/global-variable warnings remain.
 
-Deployment is deferred to the next reviewed APISIX window. Back up and upload only `services/firewall/apisix/lua/model_list_intersection.lua`, verify its SHA-256, and recreate only `apisix` with the existing Compose arguments below. No YAML, image, relay or other service change is needed. Then verify both unauthenticated plain and parameterized model-list requests still return an empty opaque 404 with no new 401-after-404 errors; authenticated list ordering and conditionals must remain unchanged. Retain the pre-fix Lua file for rollback.
+A separate reviewed APISIX-only window deployed the fix after its Validate run **40905854228** completed successfully. It changed only `services/firewall/apisix/lua/model_list_intersection.lua`; no YAML, image, relay or other service changed. The pre-fix Lua file remains available for rollback.
 
 ## Close-out
 
@@ -133,3 +133,36 @@ timeout 90 env -i PATH="$REMOTE_PATH" docker compose -p ai-gateway \
 ```
 
 Verify healthy/restarts, unchanged relay identity, restored pre-capture behavior, public plain lists, Codex manifest and opaque unauthenticated 404. No other component needs restarting. A rollback would cut in-flight public streams again; it was not needed in this window.
+
+## Auth-shaping fix deployment
+
+Fix `7264e5613a0c4a6b8c1fc0bdbcc07acd8b3ab3b1` was deployed without rollback during **16:23:15–16:35:23 UTC**, after Validate **40905854228** succeeded. The only reviewed file delta was the Lua module: its live pre-window SHA-256 matched the fix's parent; YAML and APISIX configuration hashes were unchanged. Both component previews returned `ok=63 changed=0 unreachable=0 failed=0`. These previews cover Compose/environment only; the separate SHA-256 checks cover the manually deployed Lua file.
+
+The Lua backup and its hash manifest are 0600 inside the 0700 directory `.ai-ops-state/sort-public-models-list-20261029T162441Z/`. The uploaded Lua SHA-256 is `65aa2feb01ed1fe643e5bb238e22a533ac98b667551a897118071f5cbdb57a0c`. Connection samples at 16:24:44, 16:24:54 and 16:25:04 UTC were **4 / 3 / 3**. Only `apisix` was recreated using the same bounded, secret-free Compose invocation above.
+
+| Lifecycle evidence | Value |
+|---|---|
+| Recreate invocation | 16:25:13.241 UTC |
+| New StartedAt | 16:25:25.773 UTC |
+| Healthy confirmed | 16:25:33.274 UTC |
+| Recreate-to-healthy | Approximately **20.0 seconds**; actual listener outage unmeasured |
+| Old APISIX ID | `7615bb16901d92d2ce03aa665c5b042ad1d2b5b625bc268306e5b19ba4be3d8e` |
+| New APISIX ID | `05c819b496ccd7eb5918761f4f32bd6953e3b7b8bc88587199d3d9f339094d01` |
+| Final health/restarts | Healthy / **0** |
+| Other containers | All **49** unchanged, including the relay |
+
+| Public post-check | Result |
+|---|---|
+| `/v1/models` and `/models` | **343 → 343** each; bodies and ID order byte-identical to pre-capture |
+| Codex manifest | **334 → 334**; body and order byte-identical |
+| Cache policy and identity-encoding ETag | `private, no-cache`, `Vary: Authorization`, strong final-body ETag preserved |
+| Conditional requests, both plain routes | **304** / **412**, empty bodies |
+| Unauthenticated plain routes and parameterized manifest | **404**, empty body; upstream/authentication headers absent |
+| Status-conflict errors | **119** in the prior **30 minutes** → **0** over **610.3 seconds** after recreate |
+| Other Lua/route-load/error-level log lines | **0** during the same observation |
+
+The successful healthcheck continued every approximately 15 seconds throughout the observation, exercising the unauthenticated model-list path. This distinguishes the zero-error result from an idle service. There were no membership or content deviations.
+
+Temporary key **46** was deleted at **16:26:05 UTC**: DELETE **200**, GET **404**, host-local key file absent. No key material left the host. Final container comparison again showed only APISIX changed; file hashes matched the reviewed target. Private captures and summaries remain under `/var/tmp/ai-authfix-window/` on the host and controller.
+
+Rollback, not exercised: restore **only** `model_list_intersection.lua` from this fix window's backup, verify the original SHA-256 `ac7ac7e787addd01680c8529cc063d508ca7caaa52f333908421a4c5489ea2b0`, then use the APISIX-only recreate command above. Do not restore the earlier window's YAML for this fix. Repeat the health, public-list/manifest and opaque-404 checks; a rollback would reintroduce the known log noise.
