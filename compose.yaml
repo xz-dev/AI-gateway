@@ -951,7 +951,7 @@ services:
       cli-proxy-api: {condition: service_healthy}
       aisix-cpa-relay: {condition: service_started, restart: true}
     pids_limit: 128
-    # The schema fix lowers idle memory; large histories still cost ~7.5-7.9x their body size.
+    # The schema fix lowers idle memory; measured real Codex histories peak near 3.6x body size.
     # No swap: thrash on this host hurts every service, an OOM only restarts AISIX.
     mem_limit: 512m
     memswap_limit: 512m

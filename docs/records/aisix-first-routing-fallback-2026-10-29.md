@@ -1,14 +1,114 @@
-# AISIX-first routing window — rolled back, 2026-10-29
+# AISIX-first priority routing — deployed, 2026-10-29
 
 ## Outcome
 
-**Not deployed: attempt 3 hit a real AISIX OOM at 512 MiB.** Attempts 1–2 stopped under the earlier strict gates. The user then replaced those gates with operational validation and authorized attempt 3. That attempt continued through benign upstream inventory churn and completed the functional probes, but a large-body probe OOM-killed AISIX. All window changes were reversed again; no fourth attempt was made.
+**Deployed in attempt 4 with the official AISIX 1.8.0-rc.1 schema-memory fix.** Attempts 1–3 remain below as history, including the real attempt-3 OOM. The user authorized realistic approximately 8 MiB history validation instead of another destructive synthetic maximum-size probe, while retaining the 64 MiB admission contract.
 
-Production again uses the original selector, CPA relay and host relay, AISIX's original resources without `*`, AISIX at 192 MiB plus 64 MiB swap, the original recovery script and the original Responses-only CPA retention filter. The earlier 120-second AISIX stream timeout and model-catalog v1.4.0 remain unchanged.
+Production now uses the constant apisix-models pipe, AISIX's single `*` fallback to CPA, 512 MiB without swap, no direct router-to-CPA network path, the updated recovery script and the all-protocol CPA retention filter. The obsolete host/CPA relays and four networks are removed. The earlier 120-second AISIX stream timeout and model-catalog v1.4.0 remain unchanged.
 
 The user approved immediate execution, the all-protocol retention filter and a CPA namespace recreation rather than a live network disconnect. One operator owned CPA throughout. The last-30-minute access-log sample contained 700 requests including 166 healthchecks (23.3/minute), below the approved 30/minute postponement threshold.
 
-## Timeline (UTC)
+## Attempt 4 activation
+
+Repository pin/planning/docs commit `6caf82b` passed foreground `validate.sh`, OpenSpec strict validation and CI Validate 40854049870 before service writes. The isolated worktree had no override; the shared worktree's override was untouched. Its submodules were initialized before validation. The exact official tag/index digest was pre-pulled on the host:
+
+`ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a`
+
+The amd64 manifest is `sha256:080a77bbd74cf89671cf0da72cc8485ef726d44f64dd5637a7d0626d93dcf531`. The private environment retains the former 1.6.0 pin as a `# rollback:` comment. No body cap changed.
+
+| UTC | Action / result |
+|---|---|
+| 10:02:48–10:32:48 | Preserve the actual pre-window router and AISIX access logs: 442 router requests, 14.7/minute, below the approved postponement threshold. |
+| 10:33:30 | Window starts. Recovery timer stopped, model sync paused, fresh file/online SQLite backups and baseline captured; temporary key 44 created. |
+| 10:36–10:37 | CPA filter rewritten in place; Responses and Chat stream/non-stream checks plus non-Kimi check succeed. The Kimi Chat probe needs `reasoning_effort: low`: upstream rejects its default `medium`. This is a probe parameter finding, not a rollback trigger. Plugin subtree unchanged; no hot reload. |
+| 10:38–10:43 | C1, new private image pin and `*` resources activated after check/diff. Correct image at 512 MiB/no swap, restart count 0, 76 listed IDs and no `*`; direct CPA-only bare request 200. |
+| 10:45:04 | C2 active: slim router healthy, CPA addresses blocked, known and CPA-only bare/slash inference 200. |
+| 10:47:14 | C3 active: CPA namespace recreated and healthy; both existing plugins load normally. |
+| 10:52:13 | Updated recovery script active; manual service run succeeds, timer enabled, sync unpaused. |
+| 10:52:16–10:52:46 | One realistic public history request: 8,389,995 bytes, 376 source-reading tool-call pairs, 754 input items built from real public Rust source. Transport completes with a structured provider `400 context_too_large`, not a 413. AISIX peak 131,010,560 bytes (~125 MiB), baseline 69,689,344 bytes; zero OOM/restarts. No successful large-context generation is claimed. |
+| 10:53–10:56:52 | All 53 slash IDs exercised; all 53 exact-row counters increase. Account-specific failures are recorded below. |
+| 10:57–11:01:16 | Public known/bare/slash requests, image generation/edit, SSE and keeper continuation pass. Catalog/manifest captures and network/health checks pass. Key 44 DELETE 200 / GET 404 / file absent. Active changes finish. |
+
+### Attempt 4 functional results
+
+| Check | Result |
+|---|---|
+| Known public Responses / Chat | 200. |
+| CPA-only bare / slash | Public `claude-sonnet-5` and `xl/gemini-3.5-flash-lite`: 200. |
+| All 53 slash IDs | 23×200, 18×502, nine×400, two×429, one client timeout. All exact-row counters increase; the background `*` counter also increases, not attributable to those exact-row probes. Unavailable accounts, image IDs tested on the Responses endpoint and intentionally excluded axis IDs were not repaired. |
+| Public Responses SSE | 200, 47 events; first event 1.554 s, completion 2.278 s. |
+| Public Chat SSE | 200, 42 events; first event 1.814 s, completion 2.426 s. |
+| Keeper continuation after target-affinity upgrade | Both turns 200; keeper-owned parent and correct marker recall. No forced failover was injected. |
+| Unknown everywhere | Both public protocols: 400 `upstream_error`, code `model_not_found`. |
+| Public images | `gpt-image-2` generation 200 (12.65 s), Grok generation 200 (6.97 s), multipart `gpt-image-2` edit 200 (13.99 s). |
+| Realistic 8 MiB history | Accepted through the public chain; provider context-limit error returned normally; no 413/OOM/restart. Peak ~125 MiB. No synthetic 64 MiB production probe. |
+| Standard/Codex catalogs | Ordered canonical IDs unchanged: internal 344, public standard 344, public Codex 335. Standard/public/Sub2API bodies are byte-identical; seven Codex metadata rows change with source/availability churn. Native inventory 555→545 and passthrough 47→45 are recorded deviations, not migration failures. |
+| Codex through Sub2API | 200, 335 models; account-base manifest through the retained router: 200, 344 models. |
+| Health and isolation | Local router `/healthz` 200, no upstream health requests; CPA endpoints blocked, AISIX/catalog reachable; four obsolete networks absent. |
+| Recovery / protected containers | Timer active and service succeeds. Five intended containers recreated, three obsolete ones removed; all 45 protected identities unchanged; restart counts 0. |
+| Final component previews | AISIX and CPA both `config_diff: false`, changed=0. |
+
+The seven varying metadata rows are the AIHub 5.6 Sol/Terra rows, CommandCode GLM-5.2/5.3 and DeepSeek-v4.1-flash, Cline DeepSeek-v4.1-flash and Kimi-coding K3. A fresh CPA rich-manifest read was retained. Passthrough drops the Codex Astra and Kimi-coding K3 eligibility entries during account probing; a later auth-status read reports active Codex/Kimi credentials. No credentials or model registrations were changed. This variability does not reduce the catalog's canonical membership/order.
+
+Attempt-4 body hashes (canonical membership/order is unchanged despite Codex metadata differences):
+
+| Body | Before SHA-256 | After SHA-256 |
+|---|---|---|
+| Internal standard | `8409f5b2302f9f86c7a3117aeb9414d7811a9192c032a34340a2dd63213e60c6` | same |
+| Internal Codex | `96bfa49429e7834398cbd6926432305728c85c3a19b31dac4ec9dc279527b462` | `25b8332044cb4795c2ca2c8abd5c625105c948c79f7c71d5e3f3445c8ea9e0dd` |
+| Public standard / Sub2API standard | `3de725e1edb72834fdf53564dfbbc68d70b866165157d16b5f6a734fbbbaddb1` | same |
+| Public Codex | `b62027741f1800728c20d16de59ce1f774ed2cefb5e83039b4cc69ef6690a82e` | `f025a2ba36842954f0d68a62de0dc05c8bb11efdae29b926eb6cae0f4fb37493` |
+
+AISIX 1.8 access-log parsing uses `status_code`, `downstream_latency_ms` and `requested_model`; pre-period 1.6 parsing uses the former names. The normal read-only deployment warning that automatic heap dumps cannot write their directory is recorded; no permissions or extra mounts were added.
+
+### Attempt 4 closing live-traffic comparison
+
+Both periods are approximately 30 minutes; the pre-period logs were saved before container recreation. Parsing handles the old and new access-log field names. The observation contains ordinary traffic, not the deliberately failing model sweep.
+
+| Measure | Before: 10:02:48–10:32:48 UTC | After: 11:01:53–11:31:54 UTC |
+|---|---|---|
+| Router HTTP 2xx / 4xx / 5xx | 438 / 1 / 3 | 505 / 0 / 0 |
+| Router excluding local healthchecks | 283 / 1 / 3 | 347 / 0 / 0 |
+| Router 413 | 0 | 0 |
+| AISIX 2xx / 4xx / 5xx | 74 / 1 / 3 | 351 / 0 / 0 |
+| AISIX 5xx per requested model | `gpt-6-astra`: 3 | None |
+| AISIX timeouts | 0 | 0 |
+| AISIX memory.current | Pre-snapshot 138,289,152 bytes | 60,092,416–117,387,264 bytes, 31 samples |
+| AISIX memory.peak / limit | 192,155,648 / 201,326,592 bytes | 131,010,560 / 536,870,912 bytes |
+| AISIX swap | Pre-snapshot 67,039,232 bytes | 0 |
+| OOM / OOM-kill / AISIX restarts | No baseline OOM | 0 / 0 / 0 |
+| CPA | Healthy baseline | Healthy in every sample, restarts 0 |
+| Recovery | Active before the window | Active throughout, 41 successful runs |
+
+The higher AISIX request count is expected: CPA-only traffic now traverses it instead of bypassing it. A later warm heap sample was 37,641,800 bytes allocated and 48,541,696 bytes resident. No real operational regression or rollback occurred in attempt 4.
+
+**Window:** 10:33:30–11:32:34 UTC, with active changes finished at 11:01:16 and observation finished at 11:31:54. Final backup/environment/plugin audit finished at 11:34:28. All fresh backups hash-verify; only `AISIX_IMAGE` changed among parsed environment values; plugin subtree unchanged. The eight scoped Sub2API account rows equal the earlier captured baseline exactly. No credentials were lost or rewritten.
+
+### Root filesystem preflight and retained backups
+
+Before attempt 4, the root filesystem had only 587 MiB available (98% used). The supervisor authorized compression of **only our four earlier-window SQLite backup files**, one at a time. Each gzip's decompressed SHA-256 matched its original before that uncompressed copy was deleted; gzip files and a hash manifest remain. No live database or unrelated files were removed. Availability rose to 2,751,152,128 bytes (~2.6 GiB), above the 1.5 GiB pre-backup requirement. Two fresh online SQLite backups pass integrity/hash checks. Availability afterwards is about 1.5 GiB (95% used), a separate capacity risk.
+
+Read-only `du -x -B1 -d2 /` top 15 before compression (nested rows overlap; do not sum them):
+
+| Path | Bytes |
+|---|---:|
+| `/` | 29,539,991,552 |
+| `/var` | 11,711,578,112 |
+| `/root` | 10,339,889,152 |
+| `/root/AI-gateway` | 10,203,025,408 |
+| `/var/lib` | 6,502,694,912 |
+| `/usr` | 3,562,823,680 |
+| `/var/tmp` | 2,927,177,728 |
+| `/usr/lib` | 2,157,551,616 |
+| `/var/log` | 2,112,356,352 |
+| `/usr/bin` | 455,647,232 |
+| `/usr/src` | 342,061,056 |
+| `/usr/share` | 334,516,224 |
+| `/boot` | 248,684,544 |
+| `/var/cache` | 166,924,288 |
+| `/usr/libexec` | 159,391,744 |
+
+## Attempts 1–2 timeline (UTC)
 
 | Time | Action / result |
 |---|---|
@@ -77,7 +177,7 @@ After the OOM, `docker inspect` showed `OOMKilled=false` because AISIX had alrea
 
 Of 53 baseline containers, the same eight intended identities changed during attempt 3 and rollback; all 45 protected identities remain unchanged. No image or credential files were changed. Public rollback probes: `glm-5.3-flash` 200, `claude-opus-5-5` 200, `xl/gemini-3.5-flash-lite` 200. A transient rollback catalog snapshot showed 343 rows without `shuaiapi/claude-sonnet-5`; a later read returned 344 with the original standard-body hash and the table marked that row kept. No catalog edit was made.
 
-## Closing live-traffic observation after rollback
+## Attempt 3 closing live-traffic observation after rollback
 
 The candidate OOM required rollback before a successful deployed-state observation could finish. A separate **30-minute observation of the restored path**, 08:33:51–09:03:52 UTC, confirms recovery; it is not claimed as proof of a successful migration. There were 31 cgroup/health samples.
 
@@ -140,11 +240,11 @@ The 64 MiB acceptance correction was approved but not exercised: no hop may retu
 
 The direct-probe harness required `--user 0:0` in its short-lived curl container to read its root-only 0600 curl config. Only scratch tooling changed. An initial post-cut command also needed its Go template quoting corrected; these were harness errors, not service failures.
 
-## Memory and image identities
+## Attempts 1–3 memory and image identities
 
 AISIX after the C1 activation and small probes: current 151,887,872 bytes, peak 191,639,552 bytes, max 536,870,912 bytes; swap 0 and OOM counters 0. No large-body peak was measured in production. After rollback its limits are again 201,326,592 bytes memory and 268,435,456 bytes memory-plus-swap.
 
-Image digests did not change in either forward activation or rollback:
+In attempts 1–3, image digests did not change during activation or rollback. Attempt 4 changes only AISIX to the official index digest above; the other digests remain:
 
 | Service | Digest |
 |---|---|
@@ -168,12 +268,41 @@ Attempt 3 captured a separate fresh baseline: internal standard and public/Sub2A
 
 Counts: internal standard/Codex 344, public standard 344, public Codex 335; fresh passthrough 46. Final rollback captures keep the same list IDs, with upstream metadata changes and passthrough 47. They are not represented as byte-identical.
 
-## Rollback and residual risk
+## Rollback history and current residual risk
 
 Rollback restored the backed-up Compose, resources, router files and recovery script, rewrote the original CPA config in place, recreated the old CPA namespace, restored the removed relays/networks, and recreated the router and AISIX. Its active-service phase took 64 seconds. CPA health, known inference and the old network reachability were verified. The controller's private Compose/resources copies match their original hashes again.
 
-The next window needs a new large-body/resource decision: a single near-64 MiB envelope has now OOM-killed the 512 MiB candidate. The functional checks completed in attempt 3 do not erase that failure. Main intentionally remains ahead of production: its AISIX policy requires the `*` row, while production has no such row. Do not use current-main AISIX resource deployment blindly.
+Attempt 4 supersedes the restored-state outcome above: production now has the `*` row and new topology, and final component previews match the live configuration. The former image pin and fresh backups remain available for rollback; the change is not archived in this window.
 
-The explicit architectural trade-off remains: apisix-models is a pipe, but AISIX buffers whole bodies with a measured peak near **7.6× body size**. Concurrent 64 MiB requests at 512 MiB are near the limit and may OOM; no concurrency guarantee is made. Attempt 3 additionally disproved safety for every single-request JSON shape at that limit. The pending upstream jsonschema fix removes only the roughly 106 MiB idle baseline, not this body multiplier. At the restored 192 MiB limit, large-body burst risk remains.
+The explicit trade-off remains: apisix-models is a pipe, while AISIX parses whole bodies. Corrected session-derived Codex-history measurements are about **3.6× peak**, not 7.6×: the old 7.6× figure used synthetic 400–600-byte random items. With rc.1's roughly 31 MiB idle heap, the planning estimate for one real 64 MiB body is about **260 MiB**, and two concurrent real 64 MiB bodies are borderline near **490 MiB** before other live/cgroup overhead. These estimates are not a production maximum-size test or a concurrency guarantee. Attempt 3's OOM was real but used a different synthetic oversized-metadata envelope on 1.6.0 with its roughly 150 MB baseline, not representative traffic.
 
-Private evidence and the reviewed rollback commands remain under the window scratch directory. No credentials, private addresses or request/response content are included here.
+The schema-memory fix is included in the deployed image. A separate upstream proposal—avoid the deep clone when only `model` changes and reuse wire bytes for streaming estimation—measures about **2.3× real-body peak and 1.0× held while streaming**. It is **not yet submitted**, is not in this image and is not claimed as a delivered optimization.
+
+### Attempt 4 rollback commands
+
+Use the fresh `bk/attempt4-files.tar`, restore the controller's matching private Compose/environment/resources copies, and retain the old image pin. On the host, from the deployed checkout (`W` is the window scratch directory):
+
+```bash
+systemctl stop ai-gateway-recovery.timer
+docker pause ai-gateway-cpa-model-sync-1
+for f in compose.yaml .env data/cpa/conf/config.yaml \
+  services/routing/aisix/resources.yaml ops/scripts/host/gateway-recovery.py; do
+  tar -xOf "$W/bk/attempt4-files.tar" "$f" > "$f"
+done
+tar -xf "$W/bk/attempt4-files.tar" services/routing/apisix-models
+DC=(docker compose -p ai-gateway -f compose.yaml -f compose.override.yaml --env-file .env)
+"${DC[@]}" up -d --no-deps --no-build --pull never --force-recreate cpa-netns cli-proxy-api
+# Wait for CPA healthy before the next two groups.
+"${DC[@]}" up -d --no-deps --no-build --pull never --force-recreate \
+  apisix-models-host-netns apisix-models-host-relay apisix-models-cpa-relay \
+  apisix-models-netns apisix-models
+"${DC[@]}" up -d --no-deps --no-build --pull never --force-recreate aisix
+cat services/routing/aisix/resources.yaml > .ai-ops-state/aisix__resources.yaml.baseline
+# Verify old health/inference/CPA reachability before resuming the guards.
+docker unpause ai-gateway-cpa-model-sync-1
+systemctl start ai-gateway-recovery.timer
+```
+
+Wrap each remote/runtime operation in a timeout as in the runbook. Restore the CPA config in place, not by rename; do not change plugins or restore the quota database for an ordinary topology rollback. The database backups are disaster-recovery artifacts, not permission to discard new accounting data.
+
+Private evidence and the reviewed runbook remain under the window scratch directory. No credentials, private addresses or request/response content are included here.

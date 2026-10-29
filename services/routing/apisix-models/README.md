@@ -1,6 +1,6 @@
 # apisix-models
 
-**Where:** Compose service `apisix-models` (Apache APISIX, standalone YAML) in the `apisix-models-netns` namespace, with no host port. Sub2API reaches it through `sub2api-cpa-relay`; the front door reaches it over `front-catalog` for the catalog leg.
+**Where:** Compose service `apisix-models` (Apache APISIX, standalone YAML) in the `apisix-models-netns` namespace, with no host port. Sub2API reaches it through its incoming inference relay; the front door reaches it over `front-catalog` for the catalog leg.
 
 **What:** a constant pipe that never reads request bodies.
 
