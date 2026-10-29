@@ -8,6 +8,8 @@
   Unchecked: the private half waits for window step 5.4. Done for the tracked example (validator, `normalized 0`, orphan report with no candidates) and for the production-shaped scratch copy. Not done here by instruction: the private `resources.yaml` is not edited; the row lands with window step 5.4. Until then, any `deploy-config -e component=aisix` from this revision refuses a private file without the row.
 - [x] 1.3 Set AISIX `mem_limit: 512m` and `memswap_limit: 512m` in `compose.yaml`. Pin `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690` in `compose.yaml` and `.env.example`. **Verify:** using the PART 1 harness at 512m with no swap, one 64 MiB Responses request through `*` returns 200 with no OOM. Record the peak. `validate.sh .env.example` passes with the new pin.
 
+  Production caveat (2026-10-29): this local harness result does not establish safety for every body shape. Attempt 3 later OOM-killed AISIX at 512m on a 67,108,692-byte Responses envelope; production activation remains incomplete.
+
   Done: PART 1 harness at `--memory 512m --memory-swap 512m`, AISIX 1.6.0 pinned digest, two consecutive 64 MiB Responses bodies through `*`: 200, `memory.peak=450048000` of `memory.max=536870912`, `oom_kill=0` (`/var/tmp/ai-aisix-star/impl/mem-512m.txt`). `validate.sh .env.example` passes with the new pin.
 
 ## 2. Slim apisix-models
@@ -112,13 +114,9 @@
 
   **Verify:** every item passes, or the window rolls back per design. The temporary key is deleted with proof: DELETE 200, GET 404, local file absent.
 
-  Final catalog gate approved during the window (replaces the earlier full-body-only wording):
-  1. Catalog-visible output must stay byte-identical to the fresh baseline in membership, IDs and order. This covers the standard, Codex and public lists and the passthrough membership.
-  2. Metadata-field differences are allowed only when every changed field matches a fresh read of its source.
-  3. CPA native inventory differences are allowed only when they change none of the outputs in (1) and a CPA credential/auth status read explains them.
-  4. Anything else means: roll back per the runbook and STOP.
+  Operational gate approved by the user for attempt 3 (supersedes the strict byte/passthrough gate used in attempts 1–2): fresh baselines are evidence, not a byte-identity requirement. Investigate briefly, record and continue through source-explained metadata/native/passthrough churn and isolated upstream 429/502 responses. Roll back only for real change-caused breakage: unhealthy/crash-looping services, known-good public inference regression, CPA reachable from the inner namespace, nonlocal `/healthz`, AISIX OOM, data/credential loss, or catalog membership loss unexplained by native inventory. Observe 30–60 minutes of closing live traffic; compare status mix, per-model 5xx/timeouts, 413s, memory/OOM, CPA state and recovery runs with a same-length pre-period where retained evidence permits.
 
-  Failed and fully rolled back on 2026-10-29: `kimi-coding/kimi-k3` recovered into passthrough membership (46 → 47), violating item 1 despite unchanged catalog IDs/order. Steps 5.5–5.7 had locally passed health, isolation, inference and recovery checks but are not complete because they were reverted. Images, the full 53-ID sweep, continuation and the 64 MiB production probe were not run. No further attempt was made; see `docs/records/aisix-first-routing-fallback-2026-10-29.md`.
+  Attempts 1–2 rolled back under the earlier strict gates (including passthrough 46 → 47 as Kimi recovered). The user explicitly replaced that philosophy and authorized attempt 3; benign inventory churn did not trigger that rollback. Attempt 3 exercised all 53 slash IDs (all 53 own-row counters increased), public images, SSE and keeper continuation successfully, with upstream-account failures recorded. It then hit a **real AISIX OOM at 512m** on a 67,108,692-byte Responses envelope at 08:26:45 UTC. Docker events prove OOM/die/start despite the subsequently reset `OOMKilled` flag. Full rollback completed 08:29:08; key 43 DELETE 200 / GET 404 / file absent. Steps 5.3–5.8 remain unchecked because activation was reversed. See `docs/records/aisix-first-routing-fallback-2026-10-29.md`.
 
 ## 6. Record and closeout
 
@@ -135,4 +133,6 @@
   - the rollback commands.
 
   **Verify:** the record is committed with an explicit pathspec and CI is green.
+
+  Failure history is recorded for attempts 1–3, including the user-approved operational gates and the real attempt-3 OOM. This remains unchecked as successful-deployment closeout: production is back on the original topology. The restored-path 30-minute observation (31 samples, healthy CPA, no further OOM, 48 successful recovery runs) is recovery evidence, not a successful candidate observation.
 - [ ] 6.2 Sync the delta specs and archive the change. **Verify:** `openspec validate --strict` passes after the archive, and the main specs no longer contain the slash rule or the classification seam.
