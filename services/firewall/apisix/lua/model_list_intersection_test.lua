@@ -102,10 +102,26 @@ test("conditional response uses final exact entity", function()
     assert(status == 304 and body == "", "conditional response changed")
 end)
 
-test("basic auth error does not request enriched inventory", function()
-    for _, rejection in ipairs({{401, '{"error":"denied"}'}, {404, ''}}) do
+test("basic errors do not request enriched inventory", function()
+    for _, rejection in ipairs({{404, ''}, {429, '{"error":"busy"}'}, {500, '{"error":"failed"}'}}) do
         local status, body, _, calls = run(original, {basic_status = rejection[1], basic = rejection[2]})
         assert(status == rejection[1] and body == rejection[2] and #calls == 1)
+    end
+end)
+
+test("basic 401 is an opaque 404 in both handlers", function()
+    for _, entry in ipairs({"list", "run"}) do
+        for _, path in ipairs({"/v1/models", "/models"}) do
+            local status, body, headers, calls, warnings = run(original, {
+                entry = entry, path = path, query = "client_version=fixture",
+                basic_status = 401, basic = '{"error":"denied"}',
+                basic_headers = { ["WWW-Authenticate"] = "Bearer", ["Retry-After"] = "5",
+                    ["X-Upstream"] = "private" },
+            })
+            assert(status == 404 and body == "", entry .. " did not return an opaque 404")
+            assert(next(headers) == nil, entry .. " leaked upstream headers")
+            assert(#calls == 1 and #warnings == 0, entry .. " fetched inventory after auth rejection")
+        end
     end
 end)
 
@@ -196,7 +212,7 @@ test("plain list preserves record fragments and envelope bytes", function()
 end)
 
 test("plain list passes upstream errors through without reordering", function()
-    for _, code in ipairs({401, 404, 429, 500}) do
+    for _, code in ipairs({404, 429, 500}) do
         local raw = '{"data":[{"id":"z"},{"id":"a"}],"error":"unchanged"}'
         local status, body, headers, calls, warnings = list(raw, {
             basic_status = code,

@@ -95,7 +95,13 @@ A later sample contained **185** such lines between **14:24:24 and 15:10:41 UTC*
 
 The supervisor accepted this error-level log-noise regression as a follow-up, **not a rollback condition**, because the client-visible response remains the correct opaque 404 and authenticated requests succeed. No unrelated error category was observed.
 
-Follow-up: map a basic-leg 401 to the same opaque 404 inside the Lua passthrough in both `list()` and `run()`, add a regression test, and deploy it in the next APISIX window. This window makes no further code or production change.
+### Follow-up fix — committed, not deployed
+
+The Lua follow-up is committed with this note but is **not deployed**. Both `list()` and `run()` now share `basic_passthrough()`: a basic-leg 401 becomes an empty 404 before any upstream headers are copied. All other basic-leg statuses retain their previous status, body and header behavior; the catalog leg and global response-shaping configuration are unchanged.
+
+The added regression failed against the old handler (`list did not return an opaque 404`). All **17** contract checks now pass in the pinned APISIX image, covering both handlers and both model-list paths, absent upstream headers and no enriched-inventory request after auth rejection. Foreground `./ops/scripts/validate.sh .env.example` returned 0 in an isolated worktree with no Compose override before or after; the existing Lua codec/global-variable warnings remain.
+
+Deployment is deferred to the next reviewed APISIX window. Back up and upload only `services/firewall/apisix/lua/model_list_intersection.lua`, verify its SHA-256, and recreate only `apisix` with the existing Compose arguments below. No YAML, image, relay or other service change is needed. Then verify both unauthenticated plain and parameterized model-list requests still return an empty opaque 404 with no new 401-after-404 errors; authenticated list ordering and conditionals must remain unchanged. Retain the pre-fix Lua file for rollback.
 
 ## Close-out
 

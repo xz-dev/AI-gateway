@@ -386,6 +386,15 @@ local function apply_upstream_headers(headers)
     end
 end
 
+local function basic_passthrough(response)
+    -- 提前固定 opaque 404，避免 header_filter 改写后 ngx.exit(401) 再次设置状态。
+    if response.status == 401 then
+        return 404, ""
+    end
+    apply_upstream_headers(response.headers)
+    return response.status, response.body
+end
+
 local function gateway_error(reason)
     core.log.error("model-list intersection failed: ", tostring(reason or "unknown error"))
     ngx.header["Content-Type"] = "application/json"
@@ -549,8 +558,7 @@ function _M.list(_, ctx)
         end
         core.log.warn("model-list ordering skipped: ", tostring(decode_err or order_err))
     end
-    apply_upstream_headers(basic.headers)
-    return basic.status, basic.body
+    return basic_passthrough(basic)
 end
 
 function _M.run(_, ctx)
@@ -565,7 +573,7 @@ function _M.run(_, ctx)
         return
     end
 
-    -- 串行双腿：basic 先行（隐式鉴权 + entitlement）；非 2xx 原样透传且不发 original 腿
+    -- 串行双腿：basic 先行（隐式鉴权 + entitlement）；非 2xx 不发 original 腿，401 预先塑形为 opaque 404
     -- basic 腿携带与 original 相同的 query：Sub2API 带 client_version 走本地生成（mapping 并集 ∩ 组清单），
     -- slug 集合即组 entitlement；其元数据不可信（硬编码兑底），交集时仅取 slug、内容取自 model-catalog
     local basic, basic_err = fetch(BASIC_UPSTREAM_HOST, BASIC_UPSTREAM_PORT,
@@ -574,8 +582,7 @@ function _M.run(_, ctx)
         return gateway_error(basic_err)
     end
     if basic.status < 200 or basic.status >= 300 then
-        apply_upstream_headers(basic.headers)
-        return basic.status, basic.body
+        return basic_passthrough(basic)
     end
 
     local original, original_err = fetch(ORIGINAL_UPSTREAM_HOST, ORIGINAL_UPSTREAM_PORT,
