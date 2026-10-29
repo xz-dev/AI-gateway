@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Deployed implementation `e9ec1f7` through one front-door APISIX recreate, with no rollback. Its Validate run **40886153407** completed successfully before activation. The change is not archived; supervisor review follows close-out.
+Deployed implementation `e9ec1f7` through one front-door APISIX recreate, with no rollback. Its Validate run **40886153407** completed successfully before activation. After supervisor review, the completed change was synced to the main specification and archived under `openspec/changes/archive/2026-10-29-sort-public-models-list/`. Documentation close-out `c7bf1cc` passed Validate run **40899470701** before archival.
 
 Window: **14:22:35–14:31:03 UTC**. Only `apisix` changed container identity. All 49 other container snapshots, including `cloudflared-apisix-relay`, remained identical in ID, StartedAt, status, health and restart count. The new APISIX is healthy with zero restarts.
 
