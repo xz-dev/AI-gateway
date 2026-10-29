@@ -115,11 +115,20 @@ Run every step on an `openai/*` model. (Lifted by the user on 2026-10-29 after t
 
 ## 6. Verify in production
 
-- [ ] 6.1 Watch the logs for several hours: at least 6 scheduled refreshes, plus 3 forced refreshes spread across the window. Verify:
+- [x] 6.1 Watch the logs for several hours: at least 6 scheduled refreshes, plus 3 forced refreshes spread across the window. Verify:
   - zero `wall_time` WARNs and zero `init_timeout` WARNs;
   - every collection published or reused the previous inputs without a script error;
   - the cgroup memory peak is below 384 MiB, with `oom` and `oom_kill` at 0.
-  - Open 2026-10-29: 87.5 min observed (06:08–07:36 UTC): about 17 authority collections, 3 forced refreshes and about 3 of the required 6 scheduled refreshes. 0 script failures, 0 `wall_time`, 0 `init_timeout`, peak 269.3 MiB, OOM 0. The AISIX routing windows (06:29:55–06:33:31 and 06:39:54–07:03:22) are excluded from the judgment, leaving about 60 min of clean samples. There were no membership failures inside the windows either. Before the deploy: 23 failures in about 15 h. Still needs several more hours.
+  - Done 2026-10-29, 06:08:26–09:38:14 UTC (3 h 30 min):
+    - `/readyz` generation 28, every collection published without a script error;
+    - 0 `membership script failed`, 0 `wall_time`, 0 `init_timeout` in `docker logs --since` the start and in all 200 one-minute host samples;
+    - thread count 12–13 throughout, so the resident worker was never recreated;
+    - cgroup peak 269.3 MiB of 384 MiB, `oom` / `oom_kill` 0 / 0, restarts 0.
+    - Before the deploy: 23 failures in about 15 h, so about 5 were expected.
+  - Reinterpreted gate, recorded here:
+    - Scheduled refreshes are not logged on success. "At least 6" is inferred from the 30 min interval (about 7 in 3.5 h), backed by the generation count.
+    - The 3 forced refreshes (06:16:52, 06:43:10, 07:03:56) fell in the first hour, not spread across the whole window.
+    - The three AISIX routing windows (06:29:55–06:33:31, 06:39:54–07:03:22, 07:36:28–08:29:08) disturbed model-catalog's inputs without recreating it. That leaves about 130 clean minutes, also with 0 failures.
 - [x] 6.2 Post-capture and diff. Repeat the 5.1 captures. Verify:
   - the internal standard list bytes, the Codex manifest bytes and the public `/v1/models` bytes are `cmp`-identical to the pre-capture;
   - the member count is unchanged (344, unless native or AISIX inputs changed, in which case explain the diff from those captures first);

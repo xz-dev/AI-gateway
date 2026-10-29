@@ -49,26 +49,28 @@ At 07:14 UTC, after the separate AISIX-first routing window had restarted CPA, t
 
 ## Observation
 
-A host-side sampler read the model-catalog cgroup, thread count, RSS, restart count and log counters once a minute, without exec into the container. In the 87.5 minutes from 06:08:26 to 07:35:55 UTC:
+A host-side sampler read the model-catalog cgroup, thread count, RSS, restart count and log counters once a minute, without exec into the container. It took 200 samples, 06:16:21–09:36:47 UTC, and then exited. The final read-only check ran at 09:38:14 UTC, 3 h 30 min after the start at 06:08:26:
 
 | Measure | Value |
 | --- | --- |
-| Authority collections, every 5 min | about 17 |
+| `/readyz` generation | 28, every one published without a script error |
 | Forced refreshes | 3 (06:16:52, 06:43:10, 07:03:56) |
-| Scheduled table refreshes, every 30 min | about 3 |
-| `membership script failed` / `wall_time` / `init_timeout` | 0 / 0 / 0 |
-| Thread count | 12 steady (13 briefly during a forced refresh) |
+| Scheduled table refreshes, every 30 min | about 7, from the interval; successful refreshes are not logged |
+| `membership script failed` / `wall_time` / `init_timeout` since start | 0 / 0 / 0 (`docker logs --since` the start, and all 200 samples) |
+| Thread count | 12–13 in all 200 samples, so the resident worker was never recreated |
 | cgroup `memory.peak` | 282,390,528 bytes (269.3 MiB) of 384 MiB |
-| cgroup current, settled | 58–115 MB |
+| cgroup current, settled | 20–115 MB; 51 MB at the final check |
 | `oom` / `oom_kill` | 0 / 0 |
 | Restarts | 0 |
 
+The only WARNs since the start are upstream metadata ones: 34 `read cache stale fallback`, 16 `ollama /api/show miss` and 4 `channel fetch failed`.
+
 The peak includes the in-container Node processes the capture and refresh probes spawn, so it is an upper bound for the service itself. The earlier rollout's peak was 229.9 MiB under the same probe method.
 
-- **Before the deployment:** the v1.3.0 container logged 23 `membership script failed … class=wall_time` WARNs between 13:59 UTC on 2026-10-28 and 04:59 UTC on 2026-10-29, about one every 41 minutes, or roughly 12% of the 5-minute collections. Two of them fell in the two hours before the deployment. At that rate, about 1.5 were expected in the 60 clean minutes; 0 were seen. That is consistent with the fix but not yet the several-hour proof that task 6.1 requires.
-- **During the routing windows:** the AISIX-first routing windows ran from 06:29:55 to 06:33:31 and from 06:39:54 to 07:03:22 UTC. They recreated CPA, AISIX and apisix-models, and were rolled back (`4ca68c9`). Samples inside them are excluded from the WARN accounting. That leaves about 60 minutes of clean samples (06:08:26–06:29:55, 06:33:31–06:39:54 and 07:03:22–07:35:55). Across all 87.5 minutes, windows included, model-catalog logged only upstream metadata WARNs, all at 07:08 UTC: 10 `read cache stale fallback`, 8 `ollama /api/show miss` and 2 `channel fetch failed`. None was a membership failure.
+- **Before the deployment:** the v1.3.0 container logged 23 `membership script failed … class=wall_time` WARNs between 13:59 UTC on 2026-10-28 and 04:59 UTC on 2026-10-29, about one every 41 minutes, or roughly 12% of the 5-minute collections. Two of them fell in the two hours before the deployment. At that rate, about 5 were expected in the 3.5 hours after the deployment, or about 3 in the 130 minutes outside the routing windows. 0 were seen. Under a Poisson model, 0 has about a 0.6% chance over the whole 3.5 h at the old rate, or about 4% over the clean minutes alone.
+- **During the routing windows:** the AISIX-first routing windows ran from 06:29:55 to 06:33:31, from 06:39:54 to 07:03:22 and from 07:36:28 to 08:29:08 UTC. They recreated CPA, AISIX and apisix-models, and were rolled back (`4ca68c9`, `ea402a5`). model-catalog was not recreated; its inputs were disturbed. About 130 clean minutes remain outside the windows. There was no membership failure inside or outside them.
 
-Temporary key 40 was deleted after validation: DELETE 200, then GET 404, and the key file is absent. The sampler keeps running read-only until about 09:36 UTC and writes `samples.txt` in host scratch.
+Temporary key 40 was deleted after validation: DELETE 200, then GET 404, and the key file is absent. The sampler exited at 09:36:47 UTC. Its scratch (sampler script, output and `samples.txt`) was removed from the host after the final numbers were taken.
 
 ## Local evidence (tasks 1.7 and 3)
 
