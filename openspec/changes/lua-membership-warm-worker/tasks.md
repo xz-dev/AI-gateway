@@ -85,8 +85,9 @@ All tests live under `services/routing/model-catalog/tests/`. Each one is writte
 
 - [x] 4.1 Commit unsigned (`git -c commit.gpgsign=false`) with explicit pathspecs, and push. Publish `ai-gateway-model-catalog` with the existing publish workflow. Verify: the Validate CI is green for the commit, the publish run succeeds, and `podman pull` of the digest works.
   - Done 2026-10-29: 6f595ab pushed; Validate run 40819682711 success; publish run 40819697450 success, `ghcr.io/xz-dev/ai-gateway-model-catalog:v1.4.0-6f595ab@sha256:f98cb5013c337420dd6f98112c053a6ad686185c723cf092062a5b0f541620ad` (revision label 6f595ab5a266953bdb652f9676e10f28e7d21bef); `podman pull` of the tag resolves to that digest.
-- [ ] 4.2 Pin the new digest in `compose.yaml` and `.env.example`. Verify: `ops/scripts/validate.sh .env.example` passes, with `compose.override.yaml` moved to `/var/tmp` and restored; CI is green after the pin commit; nothing under the private config is staged.
+- [x] 4.2 Pin the new digest in `compose.yaml` and `.env.example`. Verify: `ops/scripts/validate.sh .env.example` passes, with `compose.override.yaml` moved to `/var/tmp` and restored; CI is green after the pin commit; nothing under the private config is staged.
 
+  - Done 2026-10-29: pin commit 2d71c74; `ops/scripts/validate.sh .env.example` exit 0 (`runtime=docker compose=valid firewall=valid one_way_edges=valid private_paths=untracked`; the isolated worktree has no `compose.override.yaml`, so none had to be moved); Validate run 40822651091 success; no private-config, `.env` or `compose.override.yaml` path staged.
 ## 5. Production deploy (image only)
 
 Run every step on an `openai/*` model.
