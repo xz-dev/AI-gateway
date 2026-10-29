@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Select the inference backend for each model ID before inference by the literal slash rule: an ID containing `/` goes to CPA, every other ID goes to AISIX. No catalog lookup, one backend per request, no cross-backend retry. The capability name predates the 2026-10-22 rule change and is kept for history; see `docs/model-routing.md`.
+Resolve model IDs inside AISIX by exact match, most-specific glob and one `*` fallback to CPA, with no catalog lookup or entrance retry. Preserve client authorization, protocol behavior and the front WebSocket bridge. The capability name is retained for history; see `docs/model-routing.md`.
 
 ## Requirements
 
@@ -21,41 +21,49 @@ The entrance SHALL select exactly one backend per request. A selected backend's 
 
 ### Requirement: Preserved behavior outside the routing seam
 
-Existing streaming delivery, request and response body fidelity including model IDs, provider error behavior, Sub2API account and group authorization, and non-chat model filtering SHALL be preserved. Catalog listing visibility SHALL remain constrained by existing admission and authorization rules; identical counts across listing surfaces are not promised, and catalog listing is not proof of invocation eligibility.
+Existing streaming delivery, request and response field fidelity including model IDs, provider error behavior, Sub2API account and group authorization, and non-chat model filtering SHALL be preserved. AISIX re-serializes JSON, so fields SHALL be preserved but bodies are not promised to be byte-identical. Catalog listing visibility SHALL remain constrained by existing admission and authorization rules; identical counts across listing surfaces are not promised, and catalog listing is not proof of invocation eligibility.
 
 #### Scenario: Streaming and body fidelity retained
-- **WHEN** a request is classified and forwarded to the chosen backend
-- **THEN** the request body, model ID, and streaming semantics are delivered as before the change, apart from upstream selection
+- **WHEN** a request is forwarded through AISIX, including through `*`
+- **THEN** every request field, the model ID and streaming semantics are delivered as before, apart from upstream selection
 
 #### Scenario: Unauthorized model stays invisible
 - **WHEN** a client lacks Sub2API entitlement for a model ID that exists in a raw membership
 - **THEN** existing authorization behavior applies and the catalog-visible listing remains admission-constrained
 
-### Requirement: Backend selection follows the model ID slash rule
+### Requirement: AISIX resolves backend priority with one `*` fallback to CPA
 
-The entrance SHALL select the backend from the literal top-level `model` string only: a model ID that contains the character `/` anywhere SHALL route to CPA; every other model ID SHALL route to AISIX. The entrance SHALL NOT consult a catalog, routing index, provider registry or cache, and SHALL NOT validate the text on either side of the slash. The model ID SHALL be forwarded unchanged. Whether the model exists is decided by the selected backend.
+Every model ID SHALL first resolve in AISIX by its native order: an exact logical route or direct model, then the most specific single-`*` glob row, then one direct model named `*` that targets the CPA pool with `model_name: "*"`. A `*` match SHALL forward the requested ID to CPA unchanged. The gateway SHALL NOT consult a catalog, routing index, membership snapshot or naming rule. AISIX resources SHALL contain exactly one `*` row with that shape and the shared direct-model cooldown block, no routing target SHALL name `*`, and `*` SHALL NOT appear in AISIX `/v1/models` or catalog membership. Adding a backend SHALL mean adding AISIX rows, with no entrance change.
 
-#### Scenario: Bare aggregate ID routes to AISIX
-- **WHEN** a classified request names `claude-opus-5-5` or `gpt-6.1-sol`
-- **THEN** it is forwarded to AISIX with the caller credential unchanged
+#### Scenario: AISIX-defined ID wins
+- **WHEN** a request names `claude-opus-5-5` (logical route) or `codex/gpt-6-luna` (direct row)
+- **THEN** AISIX serves it through that exact row, not `*`
 
-#### Scenario: Unknown bare ID still routes to AISIX
-- **WHEN** a classified request names a bare ID that no catalog lists
-- **THEN** it is forwarded to AISIX, and any error comes from AISIX
+#### Scenario: More specific glob wins
+- **WHEN** AISIX defines `devin/*` and a request names `devin/swe-2`
+- **THEN** the `devin/*` row serves it, not `*`
 
-#### Scenario: Any slash routes to CPA
-- **WHEN** a classified request names `xl/claude-opus-5-5`, `unknown-provider/unknown-model`, `/model`, `provider/` or `/`
-- **THEN** it is forwarded to CPA with the CPA service credential
+#### Scenario: CPA-only ID reaches CPA unchanged
+- **WHEN** a request names an ID AISIX does not define, bare or containing `/`
+- **THEN** AISIX forwards it through `*` to CPA with the same ID and its configured CPA credential
 
-#### Scenario: Missing CPA credential fails closed
-- **WHEN** a slash ID is classified and no CPA service credential is configured
-- **THEN** the entrance returns a 503-class error without forwarding
+#### Scenario: Unknown everywhere
+- **WHEN** neither AISIX nor CPA knows the ID
+- **THEN** the client receives CPA's model-not-found cause wrapped by AISIX as a 400 `upstream_error`, with no retry against another backend
+
+#### Scenario: Fallback row cannot silently disappear
+- **WHEN** resources lack the `*` row, contain two, give it another `model_name` or provider key, or route a target to `*`
+- **THEN** local validation and the Ansible AISIX deploy fail before activation
+
+#### Scenario: Wildcard stays out of the catalog
+- **WHEN** model-catalog reads AISIX `/v1/models`
+- **THEN** the list contains no `*` row and catalog bodies are unchanged by the fallback
 
 ### Requirement: Client WebSocket terminates before Sub2API
 
-The public chain SHALL be public APISIX → keepalive → keeper → responses-ws-sse-bridge → Sub2API (HTTP/SSE only) → inner `apisix-models` slash selector → AISIX/CPA. Keeper SHALL remain a pure single-upstream cache with `IGNORE_CLIENT_STORE_FALSE=true`: forward and record a turn without a parent; expand a cached parent and remove `previous_response_id` before forwarding and recording; forward an unknown-parent request unchanged without recording that chain. The bridge SHALL be stateless and convert WS turns to POST/SSE without history storage or retries. Sub2API SHALL NOT be placed in front of keeper or the bridge. Reasons and native-WS tradeoffs are recorded in `docs/websocket-termination.md`.
+The public chain SHALL be public APISIX → keepalive → keeper → responses-ws-sse-bridge → Sub2API (HTTP/SSE only) → inner `apisix-models` → AISIX (→ CPA through `*`). Keeper SHALL remain a pure single-upstream cache with `IGNORE_CLIENT_STORE_FALSE=true`: forward and record a turn without a parent; expand a cached parent and remove `previous_response_id` before forwarding and recording; forward an unknown-parent request unchanged without recording that chain. The bridge SHALL be stateless and convert WS turns to POST/SSE without history storage or retries. Sub2API SHALL NOT be placed in front of keeper or the bridge. Reasons and native-WS tradeoffs are recorded in `docs/websocket-termination.md`.
 
-After the front bridge is live, every Sub2API OpenAI API-key account SHALL set `extra.openai_apikey_responses_websockets_v2_mode` to `off`, not `http_bridge`, `ctx_pool` or `passthrough`. Accounts using the unified CPA/AISIX entrance SHALL keep `credentials.base_url=http://cli-proxy-api:8317/v1`; third-party upstream accounts SHALL retain their own URLs. The retired `/rk/v1` base URL SHALL NOT be used. This requirement SHALL be met without modifying Sub2API code for gateway requirements.
+After the front bridge is live, every Sub2API OpenAI API-key account SHALL set `extra.openai_apikey_responses_websockets_v2_mode` to `off`, not `http_bridge`, `ctx_pool` or `passthrough`. Accounts using the unified entrance SHALL keep `credentials.base_url=http://cli-proxy-api:8317/v1`; third-party upstream accounts SHALL retain their own URLs. The retired `/rk/v1` base URL SHALL NOT be used. This requirement SHALL be met without modifying Sub2API code for gateway requirements.
 
 #### Scenario: Bare ID over client WebSocket
 - **WHEN** a client sends a Responses WS turn naming a bare ID through the public chain
@@ -71,45 +79,28 @@ After the front bridge is live, every Sub2API OpenAI API-key account SHALL set `
 - **THEN** this violates the HTTP-only account contract, and `/rk` requests receive 404
 - **AND** the front bridge SHALL NOT be bypassed to accommodate that configuration
 
-### Requirement: Classification scope is the model-bearing HTTP seam
-
-Classification SHALL apply only to the enumerated model-bearing JSON HTTP inference paths of the unified entrance: at minimum `POST /v1/responses` and `POST /v1/chat/completions`, including client WS turns converted by the front stateless bridge and forwarded as HTTP inference through Sub2API. The selector routes SHALL take precedence over the CPA-direct routes for those paths, so the original requested model ID reaches the selected backend untouched. A direct WebSocket upgrade to the entrance SHALL NOT be classified; it keeps forwarding to CPA and is therefore correct only for model IDs containing `/`. A request on a classified path whose JSON body is malformed or whose model field cannot be extracted SHALL fail explicitly with a protocol-shaped error, never silently fall through to a backend.
-
-#### Scenario: Direct WebSocket stays outside the selector
-- **WHEN** a client opens a direct WebSocket upgrade to the entrance
-- **THEN** it is forwarded to CPA without model classification or frame inspection
-
-#### Scenario: Malformed body on a classified path
-- **WHEN** a classified path receives a body that is not valid JSON or lacks an extractable model ID
-- **THEN** the entrance returns an explicit protocol-shaped error
-- **AND** no backend receives the request
-
-#### Scenario: Non-classified endpoint unchanged
-- **WHEN** a request arrives on an endpoint outside the enumerated classification scope
-- **THEN** it keeps its current matching and forwarding behavior, distinct from a failed classification
-
 ### Requirement: CPA runs an official image with default model-prefix behavior
 
 CPA SHALL run an official upstream release image, pinned by digest, without gateway-specific source patches. Its `routing.force-model-prefix` setting SHALL be `false`, the upstream default.
 
 Gateway routing and catalog membership SHALL NOT depend on that setting:
-- the inner selector keeps sending IDs without `/` to AISIX and IDs with `/` to CPA unchanged;
+- AISIX exact rows and routes take priority, and every other ID reaches CPA unchanged through `*`;
 - AISIX targets that use the CPA pool SHALL name CPA IDs that carry a CPA prefix or a CPA-registered ID containing `/`.
 
 #### Scenario: Prefixed ID reaches only its prefix's credentials
 
 - **WHEN** a client requests `xl/gpt-6.1-sol`
-- **THEN** the selector forwards it to CPA unchanged, and CPA serves it only with the credential whose prefix is `xl`
+- **THEN** AISIX forwards it to CPA unchanged, and CPA serves it only with the credential whose prefix is `xl`
 
 #### Scenario: Bare ID still routes to AISIX
 
 - **WHEN** a client requests `gpt-6.1-sol` and CPA also registers a bare `gpt-6.1-sol`
-- **THEN** the selector forwards it to AISIX, not CPA
+- **THEN** the AISIX logical route serves it, not the CPA bare copy
 
 #### Scenario: Unprefixed slash ID served by its registering credential
 
-- **WHEN** a client requests `devin/claude-opus-5-5`, which only the Devin account registers
-- **THEN** CPA serves it with that account, as before the setting change
+- **WHEN** a client requests `devin/claude-opus-5-5`, which only the Devin account registers and AISIX does not define
+- **THEN** AISIX forwards it through `*` and CPA serves it with that account
 
 #### Scenario: AISIX target no longer registered by CPA
 

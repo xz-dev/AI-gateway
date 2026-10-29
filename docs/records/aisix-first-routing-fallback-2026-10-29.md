@@ -2,7 +2,7 @@
 
 ## Outcome
 
-**Deployed in attempt 4 with the official AISIX 1.8.0-rc.1 schema-memory fix.** The outcome record and task evidence were published in `7c16201`; Validate run 40867850213 succeeded. Archival remains a separate supervisor action. Attempts 1–3 remain below as history, including the real attempt-3 OOM. The user authorized realistic approximately 8 MiB history validation instead of another destructive synthetic maximum-size probe, while retaining the 64 MiB admission contract.
+**Deployed in attempt 4 with the official AISIX 1.8.0-rc.1 schema-memory fix.** The outcome record and task evidence were published in `7c16201`; Validate run 40867850213 succeeded. After supervisor review, the delta specs were synced and the change was [archived](../../openspec/changes/archive/2026-10-29-aisix-first-routing-fallback/tasks.md); post-archive strict validation passed. Attempts 1–3 remain below as history, including the real attempt-3 OOM. The user authorized realistic approximately 8 MiB history validation instead of another destructive synthetic maximum-size probe, while retaining the 64 MiB admission contract.
 
 Production now uses the constant apisix-models pipe, AISIX's single `*` fallback to CPA, 512 MiB without swap, no direct router-to-CPA network path, the updated recovery script and the all-protocol CPA retention filter. The obsolete host/CPA relays and four networks are removed. The earlier 120-second AISIX stream timeout and model-catalog v1.4.0 remain unchanged.
 
@@ -274,9 +274,23 @@ Rollback restored the backed-up Compose, resources, router files and recovery sc
 
 Attempt 4 supersedes the restored-state outcome above: production now has the `*` row and new topology, and final component previews match the live configuration. The former image pin and fresh backups remain available for rollback; the change is not archived in this window.
 
-The explicit trade-off remains: apisix-models is a pipe, while AISIX parses whole bodies. Corrected session-derived Codex-history measurements are about **3.6× peak**, not 7.6×: the old 7.6× figure used synthetic 400–600-byte random items. With rc.1's roughly 31 MiB idle heap, the planning estimate for one real 64 MiB body is about **260 MiB**, and two concurrent real 64 MiB bodies are borderline near **490 MiB** before other live/cgroup overhead. These estimates are not a production maximum-size test or a concurrency guarantee. Attempt 3's OOM was real but used a different synthetic oversized-metadata envelope on 1.6.0 with its roughly 150 MB baseline, not representative traffic.
+The explicit trade-off remains: apisix-models is a pipe, while AISIX parses whole bodies. Corrected session-derived Codex-history allocation measurements are about **3.6× peak**, not 7.6×: the old 7.6× figure used synthetic 400–600-byte random items. Adding rc.1's roughly 31 MiB idle heap to that multiplier gives only a **lower bound**, not a sizing figure; allocator, cgroup and runtime overhead also count. Attempt 3's OOM was real but used a different synthetic oversized-metadata envelope on 1.6.0 with its roughly 150 MB baseline, not representative traffic.
 
-The schema-memory fix is included in the deployed image. A separate upstream proposal—avoid the deep clone when only `model` changes and reuse wire bytes for streaming estimation—measures about **2.3× real-body peak and 1.0× held while streaming**. It is **not yet submitted**, is not in this image and is not claimed as a delivered optimization.
+Local containers with a 512 MiB limit and no swap measured the following cgroup `memory.peak` values using real session-derived Codex-history bodies. The baseline is unpatched upstream main, with the same request-body path as rc.1. Values are rounded to MiB; these are local tests, not production maximum-size tests. The 96/128 MiB cases exceed the unchanged 64 MiB gateway contract.
+
+| Body / concurrency | Unpatched baseline | Pending A+B proposal |
+| --- | --- | --- |
+| One 64 MiB | 333 MiB | 241 MiB |
+| Two concurrent 64 MiB | 496 MiB | 401 MiB |
+| Three concurrent 32 MiB | 363 MiB | 321 MiB |
+| Three concurrent 48 MiB | OOM | 455 MiB |
+| One 96 MiB | 505 MiB | 347 MiB |
+| One 128 MiB | OOM | 405 MiB |
+| Three concurrent 64 MiB | OOM | OOM |
+
+One real 64 MiB history fits. Two concurrent ones measured at the edge, with only **16 MiB headroom**; three concurrent large histories can OOM. No concurrency guarantee is made. Evidence: `/var/tmp/ai-aisix-bodymem/mem-base.jsonl`, `mem2-base.jsonl`, `mem-patched.jsonl` and `mem2-patched.jsonl`. No private session contents are included here.
+
+The schema-memory fix is included in the deployed image. The separate A+B proposal avoids the deep clone when only `model` changes and reuses wire bytes for streaming estimation, measuring about **2.3× real-body allocation peak and 1.0× held while streaming**. It is **not yet submitted**, is not in this image and is not claimed as a delivered optimization.
 
 ### Attempt 4 rollback commands
 
