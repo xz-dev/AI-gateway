@@ -89,7 +89,13 @@ At final verification there were no ordering-skipped WARNs, Lua stack traces or 
 attempt to set status 401 via ngx.exit after sending out the response status 404
 ```
 
-These are associated with auth/status shaping, whose configuration was not changed here. **Pre-window occurrence could not be proved**: the removed container's logs were unavailable, and a search of 299 retained host scratch/state log files found no earlier sample; a controller-side search also found none. They are not claimed as proven pre-existing. The supervisor accepted recording them as an auth-shaping follow-up rather than rolling back, because client-visible opaque 404 and authenticated success are both verified. No unrelated error category was observed.
+The supervisor's subsequent read-only analysis established that this change **introduced the error on the plain route**. The old plain route proxied Sub2API's 401, which the global `response-rewrite` changed to 404 in `header_filter` without a Lua exit. The new `list()` fetches Sub2API itself and returns that non-2xx 401 through `core.response.exit`. Sending the body runs the header filter, which rewrites the status to 404 and sends headers; the final `ngx.exit(401)` then logs the status conflict. The parameterized `run()` path has the same latent pattern for unauthenticated `client_version` requests.
+
+A later sample contained **185** such lines between **14:24:24 and 15:10:41 UTC**, all unauthenticated `GET /v1/models HTTP/1.0`, approximately four per minute from a periodic client (about 5,800 lines/day if sustained). The earlier search of 299 retained host scratch/state logs and controller logs found no pre-window sample; that absence is not used to classify this as pre-existing.
+
+The supervisor accepted this error-level log-noise regression as a follow-up, **not a rollback condition**, because the client-visible response remains the correct opaque 404 and authenticated requests succeed. No unrelated error category was observed.
+
+Follow-up: map a basic-leg 401 to the same opaque 404 inside the Lua passthrough in both `list()` and `run()`, add a regression test, and deploy it in the next APISIX window. This window makes no further code or production change.
 
 ## Close-out
 
@@ -97,7 +103,7 @@ These are associated with auth/status shaping, whose configuration was not chang
 - Final component preview: `changed=0`, no failures; it guards Compose/environment drift, while the separate file hash checks guard the manual front-door upload.
 - Final snapshot: 50 containers, only APISIX changed identity; new health healthy and restarts=0.
 - Implementation CI: `e9ec1f7`, Validate **40886153407**, completed/success.
-- Window-record CI: pending publication; task 3.4 remains unchecked until this record is committed/pushed and its Validate run succeeds.
+- Window-record CI: `3ba32d8`, Validate **40892719024**, completed/success. Task 3.4 is checked against that published evidence. The subsequent documentation-only close-out records the auth-shaping cause and this CI result; it makes no production change.
 - Raw private captures and summaries remain under `/var/tmp/ai-sort-models-window/` on the host and controller. No credentials, public hostname, addresses or private configuration contents are included here.
 
 ## Rollback (not exercised)

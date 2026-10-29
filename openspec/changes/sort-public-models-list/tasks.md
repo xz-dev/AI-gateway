@@ -72,7 +72,7 @@ This change is independent of union-catalog-membership (design D6). It has no sp
   Verify:
   - the connection samples are recorded;
   - health is `healthy` with restarts=0 on the new container, and `cloudflared-apisix-relay` was not restarted;
-  - the error log since the recreate has no Lua stack traces, module/route-load errors or ordering WARN. A separate auth-status-shaping error is recorded explicitly; its pre-window occurrence could not be proved. The supervisor accepted it as a follow-up because the client-visible opaque 404 remains correct.
+  - the error log since the recreate has no Lua stack traces, module/route-load errors or ordering WARN. The new plain handler does introduce a separately recorded auth-status-shaping error: its basic-leg 401 reaches `core.response.exit`, while the global header filter sends an opaque 404 before the final `ngx.exit(401)`. The parameterized `run()` path has the same latent pattern. The supervisor accepted this log-noise regression as a follow-up, not a rollback condition, because the client-visible opaque 404 remains correct. Follow-up: map a basic-leg 401 to the same opaque 404 inside the Lua passthrough in both `list()` and `run()`, add a test, and deploy in the next APISIX window.
 
   Evidence (2026-10-29): connection samples `4 / 4 / 4`; only APISIX changed identity and became healthy with restarts=0. Actual listener outage is **unmeasured**: host-to-container probes failed both before and after and were discarded. The supervisor approved recording lifecycle timing instead (recreate-to-healthy about 23.1 seconds), without another disruptive recreate.
 - [x] 3.3 Post-capture and compare against 3.1. Verify:
@@ -88,8 +88,8 @@ This change is independent of union-catalog-membership (design D6). It has no sp
   Behavior-based acceptance (supervisor reconciliation of the user's migration policy, 2026-10-29): investigate and record deviations rather than requiring unconditional before/after identity. Small membership/count deltas are benign only when fresh upstream inventory or catalog captures explain them; re-capture the parameterized Codex manifest or compare with the live inventory, record the cause, then continue. No unexplained membership loss is accepted.
 
   Roll back (design Migration Plan step 5: restore both files, check their SHA-256, recreate `apisix`) for real breakage: APISIX unhealthy or restarting; a plain list not returning 200; unexplained missing entries; altered record content; incorrect order or cache/ETag policy; a changed Codex manifest order; loss of the opaque unauthenticated 404; or Lua/route-load errors. Repeat the comparison against the pre-capture order after rollback, then stop and report.
-- [ ] 3.4 Close-out. Verify all of these:
+- [x] 3.4 Close-out. Verify all of these:
   - the temporary key is deleted, with proof: DELETE 200, then GET 404, then the local key file is gone;
   - `deploy.yml -e component=apisix --check --diff` still reports `changed=0`;
   - `docs/records/sort-public-models-list-<date>.md` is written in English, with no public hostname, IP, keys or private values (it says "the public hostname"). It records the captures' counts and hashes, the connection samples, the recreate evidence (old and new container IDs, health) and the rollback commands, and it is committed with pathspecs and pushed;
-  - CI is green.
+  - CI is green. Evidence: window record `3ba32d8`, Validate run `40892719024`, completed/success; key 45 deletion, final `changed=0`, captures and rollout evidence are recorded in `docs/records/sort-public-models-list-2026-10-29.md`.
