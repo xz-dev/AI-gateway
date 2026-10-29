@@ -83,7 +83,8 @@ All tests live under `services/routing/model-catalog/tests/`. Each one is writte
   - Done 2026-10-29: `INJECT=1`, 60 rounds: 6 injected `wall_time` failures (`wallMs: 1`), 7 thread IDs (1 + 6), peak 247.2 MiB, 25-round settled means 235.6 / 240.6 / 218.9 MiB, no growth (`7-memory-a-inject1-r60.log`).
 ## 4. Publish and pin
 
-- [ ] 4.1 Commit unsigned (`git -c commit.gpgsign=false`) with explicit pathspecs, and push. Publish `ai-gateway-model-catalog` with the existing publish workflow. Verify: the Validate CI is green for the commit, the publish run succeeds, and `podman pull` of the digest works.
+- [x] 4.1 Commit unsigned (`git -c commit.gpgsign=false`) with explicit pathspecs, and push. Publish `ai-gateway-model-catalog` with the existing publish workflow. Verify: the Validate CI is green for the commit, the publish run succeeds, and `podman pull` of the digest works.
+  - Done 2026-10-29: 6f595ab pushed; Validate run 40819682711 success; publish run 40819697450 success, `ghcr.io/xz-dev/ai-gateway-model-catalog:v1.4.0-6f595ab@sha256:f98cb5013c337420dd6f98112c053a6ad686185c723cf092062a5b0f541620ad` (revision label 6f595ab5a266953bdb652f9676e10f28e7d21bef); `podman pull` of the tag resolves to that digest.
 - [ ] 4.2 Pin the new digest in `compose.yaml` and `.env.example`. Verify: `ops/scripts/validate.sh .env.example` passes, with `compose.override.yaml` moved to `/var/tmp` and restored; CI is green after the pin commit; nothing under the private config is staged.
 
 ## 5. Production deploy (image only)
