@@ -96,6 +96,8 @@ The same `component` value means different things in two playbooks: `deploy.yml 
 component=aisix` deploys the AISIX container (image, Compose, `.env`), while
 `deploy-config.yml -e component=aisix` deploys `resources.yaml`.
 
+That AISIX operation also reports `config_diff` for the **unmanaged** `services/routing/aisix/config.yaml`, in preview and apply. It compares the live file's SHA-256 with the controller's private file at the same path under `ai_ops_config_dir`; it never uploads this file, advances a baseline or restarts AISIX for it. Missing or unreadable checksums are not a match (`source_exists` / `remote_exists` distinguish missing files). No config contents or credentials are printed, and a difference is reported, not reconciled. `ops/scripts/init.sh` originally creates the private file from the tracked `services/routing/aisix/config.example.yaml` by replacing the admin-key placeholder; Ansible does not render it. Review differences privately and use a separate manual window for any config change.
+
 Tags only filter tasks inside one operation: `validate`, `upload`, `activate`, `verify`.
 Gates (argument validation, preflight, drift, approval) are tagged `always`, so
 `--tags`/`--skip-tags` cannot skip them; `--skip-tags activate` uploads without

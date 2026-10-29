@@ -1,5 +1,9 @@
 ---
-# deploy-config.yml -e component=aisix: services/routing/aisix/resources.yaml.
+# deploy-config.yml -e component=aisix: resources.yaml deploy, config.yaml observation only.
+
+- name: Check unmanaged AISIX config.yaml
+  ansible.builtin.include_tasks: check-config.yml
+  tags: [always]
 
 - name: Normalize max_fallbacks from targets count
   ansible.builtin.command:

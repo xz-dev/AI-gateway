@@ -1,0 +1,30 @@
+---
+# Observe the unmanaged private config without uploading, adopting or activating it.
+- name: Read desired AISIX config.yaml checksum
+  ansible.builtin.stat:
+    path: "{{ ai_ops_config_dir }}/services/routing/aisix/config.yaml"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  register: __ai_ops_aisix_config_local
+
+- name: Read live AISIX config.yaml checksum
+  ansible.builtin.stat:
+    path: "{{ ai_ops_deploy_root }}/services/routing/aisix/config.yaml"
+    checksum_algorithm: sha256
+  register: __ai_ops_aisix_config_remote
+
+- name: Compare unmanaged AISIX config.yaml
+  ansible.builtin.set_fact:
+    ai_ops_aisix_config_diff: >-
+      {{ not (__ai_ops_aisix_config_local.stat.checksum is defined
+              and __ai_ops_aisix_config_remote.stat.checksum is defined
+              and __ai_ops_aisix_config_local.stat.checksum == __ai_ops_aisix_config_remote.stat.checksum) }}
+
+- name: Report AISIX config.yaml drift without exposing credentials
+  ansible.builtin.debug:
+    msg:
+      file: aisix/config.yaml
+      config_diff: "{{ ai_ops_aisix_config_diff | bool }}"
+      source_exists: "{{ __ai_ops_aisix_config_local.stat.exists }}"
+      remote_exists: "{{ __ai_ops_aisix_config_remote.stat.exists }}"
+      read_only: true
