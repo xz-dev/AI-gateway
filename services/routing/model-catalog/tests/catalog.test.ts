@@ -299,7 +299,7 @@ test("worker crash keeps serving the previous generation; a later good build rec
   assert.deepEqual([...bySlug(await codex(h)).keys()], ["codex/a", "codex/b"]);
 });
 
-test("the membership and compile workers have exited after a generation build", async (t) => {
+test("the compile worker has exited after a generation build; the membership worker stays resident", async (t) => {
   const h = await harness(t, {
     channels: channels([{ prefix: "codex", models: ["a"] }]),
     native: [native("codex/a")],
@@ -308,17 +308,24 @@ test("the membership and compile workers have exited after a generation build", 
   });
   let created = 0;
   let exited = 0;
+  const workers = new Set<import("node:worker_threads").Worker>();
   const onWorker = (worker: import("node:worker_threads").Worker) => {
     created++;
+    workers.add(worker);
     worker.once("exit", () => exited++);
   };
   process.on("worker", onWorker);
   t.after(() => process.off("worker", onWorker));
   assert.equal(bySlug(await codex(h)).get("codex/a")!.context_window, 1);
-  for (let i = 0; i < 50 && exited < created; i++) await new Promise((r) => setTimeout(r, 20));
-  // One membership worker for the collection, one compile worker for the build.
-  assert.equal(created, 2);
-  assert.equal(exited, 2);
+  // One membership worker for the collection (resident, warm-worker D3; spawned here unless an earlier
+  // test left one with the same script), one compile worker for the build.
+  const { membershipWorkers } = await import("../src/membership.ts");
+  const resident = membershipWorkers().resident;
+  assert.ok(resident && resident.threadId > 0, "the membership worker is resident");
+  const transient = created - (workers.has(resident) ? 1 : 0);
+  for (let i = 0; i < 50 && exited < transient; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(transient, 1, "one compile worker");
+  assert.equal(exited, 1, "the compile worker has exited");
 });
 
 test("generation pinning: a new generation never serves a previous projection", async (t) => {

@@ -30,7 +30,7 @@ The script SHALL run in one resident worker thread per server process. That work
 - `select` is called for every candidate;
 - it is closed before the result is returned.
 
-No Lua state, global variable, upvalue, instruction counter or glob cache SHALL survive from one run to the next. The worker SHALL receive only the script text and the candidate tables, and SHALL return only the decisions. Its V8 heap SHALL be limited to 32 MiB. The main thread SHALL NOT hold a Lua state.
+No Lua state, global variable, upvalue, instruction counter or glob cache SHALL survive from one run to the next. The worker SHALL receive only the script text and the candidate tables, and SHALL return only the decisions. Its V8 heap SHALL be limited to 32 MiB of old generation and 8 MiB of young generation, and it SHALL collect garbage after each reply, outside the execution bound. The main thread SHALL NOT hold a Lua state.
 
 After any failed run, the host SHALL terminate the worker and wait for it to exit. Failures include `init_timeout`, `wall_time`, an instruction or memory bound, a runtime or load error, an invalid return and a worker exit. The host SHALL do the same when the script digest differs from the one the resident worker was started with. The next run then starts a new worker under the initialization bound. A `validate-config` run SHALL use the same two phases and bounds in a worker that exits when the run finishes.
 

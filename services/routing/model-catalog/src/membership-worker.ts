@@ -1,10 +1,12 @@
-// Membership script worker (design D5–D7): one Lua 5.4 state (wasmoon) per authority collection
-// or validate-config run. It loads the script once, calls `select` for every candidate under the
-// sandbox bounds, posts the decisions and exits; its WebAssembly memory leaves with the thread.
+// Membership script worker (design D5–D7; warm-worker D1, D3): one resident thread keeps the wasmoon
+// runtime (compiled WebAssembly module) warm. Every run gets a new Lua 5.4 state: `init` creates it
+// with the trusted prelude and replies `ready` without seeing the script; `run` loads the script,
+// calls `select` for every candidate under the sandbox bounds, closes the state and posts the
+// decisions. The host terminates the thread after any failure.
 import { parentPort, workerData } from "node:worker_threads";
-import { LuaFactory } from "wasmoon";
+import { LuaFactory, type LuaEngine } from "wasmoon";
 import { compileModelPattern } from "./core.ts";
-import type { Candidate, Decision, MemberSource, WorkerReply, WorkerRequest } from "./membership.ts";
+import type { Candidate, Decision, Limits, MemberSource, WorkerInit, WorkerMessage, WorkerReply, WorkerRun } from "./membership.ts";
 
 const GLOB_CACHE = 256;
 
@@ -129,7 +131,7 @@ function luaCandidate(candidate: Candidate): Record<string, unknown> {
 /** Trims a 200-byte cut that split a UTF-8 sequence (decoded as U+FFFD). */
 const trimCut = (reason: string, cut: boolean) => (cut ? reason.replace(/\uFFFD+$/, "") : reason);
 
-function boundText(label: string, limits: WorkerRequest["limits"]): string {
+function boundText(label: string, limits: Limits): string {
   if (label === "load") return `load instruction bound (${limits.loadInstructions}) exceeded`;
   if (label === "call") return `per-call instruction bound (${limits.callInstructions}) exceeded`;
   return `per-collection instruction bound (${limits.totalInstructions}) exceeded`;
@@ -139,13 +141,38 @@ function errorClassOf(message: string): string {
   return /not enough memory/.test(message) ? "memory_limit" : "runtime";
 }
 
-async function run(request: WorkerRequest): Promise<WorkerReply> {
-  const lua = await new LuaFactory(request.wasmPath).createEngine({ injectObjects: false, enableProxy: false, traceAllocations: true });
+interface State {
+  readonly lua: LuaEngine;
+  readonly host: (op: string, value: unknown) => Record<string, unknown>;
+  readonly limits: Limits;
+}
+
+// The factory compiles and instantiates glue.wasm once per thread; engines (Lua states) are per run.
+const factory = new LuaFactory((workerData as { wasmPath: string }).wasmPath);
+let state: State | undefined;
+
+async function init(request: WorkerInit): Promise<WorkerReply> {
+  state?.lua.global.close();
+  state = undefined;
+  const lua = await factory.createEngine({ injectObjects: false, enableProxy: false, traceAllocations: true });
   try {
     lua.global.setMemoryMax(request.limits.memoryBytes);
     lua.global.set("__host_glob", rawGlob(new Map()));
     lua.global.set("__host_limits", [request.limits.loadInstructions, request.limits.callInstructions, request.limits.totalInstructions, request.hookStep]);
-    const host = lua.doStringSync(PRELUDE) as (op: string, value: unknown) => Record<string, unknown>;
+    state = { lua, host: lua.doStringSync(PRELUDE) as State["host"], limits: request.limits };
+    return { ok: true, ready: true };
+  } catch (error) {
+    lua.global.close();
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(errorClassOf(message), message.slice(0, 300));
+  }
+}
+
+function run(request: WorkerRun): WorkerReply {
+  if (state === undefined) return fail("worker_exit", "run before init");
+  const { lua, host, limits } = state;
+  state = undefined;
+  try {
     let loaded: Record<string, unknown>;
     try {
       loaded = host("load", request.script);
@@ -155,7 +182,7 @@ async function run(request: WorkerRequest): Promise<WorkerReply> {
     }
     if (typeof loaded.error === "string") {
       const message = String(loaded.message);
-      if (loaded.error === "instruction_limit") return fail("instruction_limit", boundText(message, request.limits));
+      if (loaded.error === "instruction_limit") return fail("instruction_limit", boundText(message, limits));
       if (loaded.error !== "load") return fail(loaded.error, message);
       // Syntax errors quote the offending token (`near 'x'`); the log never carries script text.
       return errorClassOf(message) === "memory_limit" ? fail("memory_limit", message) : fail("load", message.replace(/ near .*$/s, ""));
@@ -173,7 +200,7 @@ async function run(request: WorkerRequest): Promise<WorkerReply> {
       }
       if (typeof decision.error === "string") {
         const message = String(decision.message);
-        if (decision.error === "instruction_limit") return fail("instruction_limit", boundText(message, request.limits), candidate.id);
+        if (decision.error === "instruction_limit") return fail("instruction_limit", boundText(message, limits), candidate.id);
         return fail(decision.error === "runtime" ? errorClassOf(message) : decision.error, message, candidate.id);
       }
       maxCall = Math.max(maxCall, Number(decision.count));
@@ -194,4 +221,9 @@ async function run(request: WorkerRequest): Promise<WorkerReply> {
   }
 }
 
-if (parentPort) parentPort.postMessage(await run(workerData as WorkerRequest));
+parentPort?.on("message", async (message: WorkerMessage) => {
+  parentPort!.postMessage(message.op === "init" ? await init(message) : run(message));
+  // A resident worker would otherwise keep every run's garbage until V8 needs room (design D6);
+  // the image runs node with --expose-gc, which workers inherit. This is after the reply, off the clock.
+  if (message.op === "run") (globalThis as { gc?: () => void }).gc?.();
+});

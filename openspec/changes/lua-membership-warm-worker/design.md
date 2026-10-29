@@ -107,6 +107,26 @@ Acceptance:
 
 The archived baseline (lua-catalog-membership D7) had a peak of 216.5 MiB and settled RSS of 159.1–176.9 MiB over the last 10 rounds, with a cold worker per run. That design budgeted about 25 MiB of worker RSS for the time a collection runs. The expected change is that roughly this amount becomes resident between collections instead of transient, so settled RSS rises by about one isolate plus one runtime while the peak stays about the same. The measurement decides; the estimate does not. The record goes into this design's measurement note before the image is published.
 
+**Measurement note (task 3.1/3.2, 2026-10-29, local).** A resident worker keeps V8 young-generation pages committed between runs; a per-run worker died before this could show. Membership worker alone, the real 564-candidate production-shaped script, 150+ runs:
+
+| Variant | Steady RSS added by the membership worker | Exec time |
+|---|---|---|
+| no fix | about +100 MiB, plateau after ~200 runs (heap total ~89 MiB, used up to 48 MiB) | p50 47 ms |
+| `gc()` in the worker after each reply only | +57 MiB, flat after ~75 runs; used heap stays 7 MiB, so not a leak | p50 47 ms |
+| `gc()` plus `resourceLimits.maxYoungGenerationSizeMb: 8` (chosen) | about +9 MiB, flat from run 1; heap total 16 MiB; 600 runs 81.1→82.4 MiB process RSS | p50 47 ms, p90 53 ms (unchanged) |
+
+The 8 MiB value is a new cap that **tightens** the young generation of the membership worker only. It raises none of the 96/160/32 MiB caps and the 384 MiB container limit is unchanged. `gc()` runs after the reply is posted, so it is outside the execution bound; the image runs node with `--expose-gc`, which workers inherit.
+
+`tests/measure-memory.ts`, bundled workers, real tables, tracked `config.yaml`, each round overlapping a Codex build, `MALLOC_ARENA_MAX=2 node --max-old-space-size=96 --expose-gc`, same machine:
+
+| Run | Peak RSS | Settled RSS | Last-10 slope | Threads |
+|---|---|---|---|---|
+| old code (per-run worker), 150 rounds | 246.8 MiB | 210–232 MiB (25-round means 210.6–231.6) | −0.1 MiB/round | per run |
+| chosen variant, 150 rounds | 248.9 MiB | 235.3→246.1 MiB (25-round means), last 10 245.8–246.7 | 0.1 MiB/round | 1 |
+| chosen variant, 60 rounds, `wall_time` injected every 10th round | 247.2 MiB | 218.9–240.6 MiB (25-round means), returns to range after each recreate | — | 7 (1 + 6 injected) |
+
+The archived 216.5 MiB peak / 159.1–176.9 MiB settled figures came from a different machine state; on today's machine the old code measures 246.8 MiB peak, so the like-for-like delta is about +2 MiB peak and +15 MiB settled. The slow creep in the 150-round run (about 1 MiB per 25 rounds) is outside the membership worker, which stays flat over 600 runs alone. Every membership worker reports `resourceLimits` 32 MiB old / 8 MiB young.
+
 ## Risks / Trade-offs
 
 - **Retained memory.** A resident isolate and runtime add a constant amount of RSS. → Enforced by the 50-round gate (D6) under the unchanged caps. If the gate fails, stop and report instead of raising a cap.

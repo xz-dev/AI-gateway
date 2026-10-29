@@ -4,10 +4,13 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import type { Row } from "../src/json.ts";
+import { validateConfig } from "../src/main.ts";
+import { dryRun, LIMITS, membershipWorkers } from "../src/membership.ts";
 import { bySlug, channels, codex, harness, replyText, type Harness } from "./catalog-harness.ts";
 import { json, serve, tempDir } from "./helpers.ts";
-import { script } from "./scripts.ts";
+import { defaultScript, script } from "./scripts.ts";
 
 const native = (slug: string, extra: Row = {}): Row => ({ slug, display_name: `CPA ${slug}`, context_window: 1000, ...extra });
 
@@ -145,4 +148,58 @@ test("models table: script-rejected rows show the reason, no metadata, a separat
   assert.match(barePage, /rejected by catalog\.lua 4 ·/);
   // The markings never change JSON contents: the standard list holds kept members only.
   assert.deepEqual(await standardIDs(h), ["gpt-6.1-sol", "alias/a", "codex/gpt-5.3-codex-spark", "codex/gpt-6.1-sol", "devin/claude-opus-5-5", "router/only"]);
+});
+
+test("an init_timeout keeps the previous generation, logs one WARN and the next collection retries", async (t) => {
+  const dir = await tempDir();
+  const never = join(dir, "never-ready.mjs");
+  await writeFile(never, "setInterval(() => {}, 1000);\n");
+  const h = await stage(t);
+  await h.service.refreshPage();
+  const standard = await replyText(await h.service.catalog(""));
+  const generation = h.owner.current().generation;
+  h.owner.options.membership = { workerFile: never, limits: { ...LIMITS, initMs: 200 } };
+  h.fake.native = JSON.stringify({ models: [native("codex/gpt-6.1-sol"), native("codex/new")] });
+  h.advance(10 * 60_000);
+  const page = await replyText(await h.service.refreshPage());
+  assert.equal(h.owner.current().generation, generation);
+  assert.equal(await replyText(await h.service.catalog("")), standard, "standard list unchanged");
+  assert.match(page, /刷新失败[\s\S]*membership script init_timeout/);
+  assert.match(await replyText(h.service.tablePage()), /上次刷新失败[^<]*membership script init_timeout/);
+  const warns = h.log.lines.filter((line) => line.includes("membership script failed"));
+  assert.equal(warns.length, 1);
+  assert.match(warns[0]!, /"class":"init_timeout"/);
+  h.owner.options.membership = undefined;
+  h.advance(10 * 60_000);
+  assert.equal((await h.owner.refresh()).published, true, "the next collection retries and publishes");
+  assert.equal(h.owner.scriptFailure(), undefined);
+});
+
+test("a forced refresh after a success reuses the resident worker", async (t) => {
+  const h = await stage(t);
+  assert.equal((await h.owner.refresh()).published, true);
+  const worker = membershipWorkers().resident;
+  assert.ok(worker && worker.threadId > 0);
+  h.fake.native = JSON.stringify({ models: [native("codex/gpt-6.1-sol"), native("codex/forced")] });
+  await h.owner.refresh({ bypass: true });
+  assert.equal(membershipWorkers().resident, worker, "the same worker ran the forced collection");
+  assert.ok(worker.threadId > 0, "and it is still alive");
+});
+
+test("the dry-run and validate-config leave no worker thread behind", async () => {
+  const before = membershipWorkers();
+  const result = await dryRun(defaultScript(), ["alias/a"]);
+  assert.ok(result.candidates > 0);
+  const write = process.stdout.write;
+  process.stdout.write = (() => true) as typeof process.stdout.write;
+  let code: number;
+  try {
+    code = await validateConfig([fileURLToPath(new URL("../config.yaml", import.meta.url)), "--script", fileURLToPath(new URL("../catalog.lua", import.meta.url))]);
+  } finally {
+    process.stdout.write = write;
+  }
+  assert.equal(code, 0);
+  const after = membershipWorkers();
+  assert.equal(after.live, before.live, "no extra worker thread is alive");
+  assert.equal(after.resident, before.resident, "the resident record is untouched");
 });

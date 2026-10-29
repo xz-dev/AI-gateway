@@ -13,7 +13,7 @@ import { parseMetadataConfigValue, runCompileWorker } from "./core.ts";
 import { CpaClient } from "./cpa.ts";
 import { DiskCache } from "./disk-cache.ts";
 import { HttpPool } from "./http.ts";
-import { dryRun, LIMITS, membershipScript, MembershipScriptError, readMembershipScript, type MembershipScript } from "./membership.ts";
+import { closeMembershipWorker, dryRun, LIMITS, membershipScript, MembershipScriptError, readMembershipScript, type MembershipScript } from "./membership.ts";
 import { OutputStore } from "./outputs.ts";
 import { errorMessage, jsonLogger } from "./log.ts";
 import { ReadCache } from "./read-cache.ts";
@@ -193,6 +193,7 @@ async function serve(): Promise<number> {
   server.closeIdleConnections();
   setTimeout(() => server.closeAllConnections(), 5_000).unref();
   await service.stop();
+  await closeMembershipWorker();
   return 0;
 }
 
