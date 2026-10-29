@@ -2,7 +2,7 @@
 
 ## Result
 
-Production model-catalog now runs the resident membership worker. Initialization has its own 10 s bound, and the 2 s execution bound starts only after the ready handshake. Only the model-catalog container was recreated, through the image-only component path, at 06:08:26 UTC. All five catalog bodies were byte-identical before and after. In the first 64 minutes the service logged no `wall_time` and no `init_timeout` WARN. The several-hour observation in task 6.1 is still open. This record does not archive the change.
+Production model-catalog now runs the resident membership worker. Initialization has its own 10 s bound, and the 2 s execution bound starts only after the ready handshake. Only the model-catalog container was recreated, through the image-only component path, at 06:08:26 UTC. All five catalog bodies were byte-identical before and after. In 87 minutes of observation, about 60 of them outside the routing windows, the service logged no `wall_time` and no `init_timeout` WARN. The several-hour observation in task 6.1 is still open. This record does not archive the change.
 
 ## Identities
 
@@ -49,13 +49,13 @@ At 07:14 UTC, after the separate AISIX-first routing window had restarted CPA, t
 
 ## Observation
 
-A host-side sampler read the model-catalog cgroup, thread count, RSS, restart count and log counters once a minute, without exec into the container. In the 64 minutes from 06:08:26 to 07:12:48 UTC:
+A host-side sampler read the model-catalog cgroup, thread count, RSS, restart count and log counters once a minute, without exec into the container. In the 87.5 minutes from 06:08:26 to 07:35:55 UTC:
 
 | Measure | Value |
 | --- | --- |
-| Authority collections, every 5 min | about 12 |
+| Authority collections, every 5 min | about 17 |
 | Forced refreshes | 3 (06:16:52, 06:43:10, 07:03:56) |
-| Scheduled table refreshes, every 30 min | about 2 |
+| Scheduled table refreshes, every 30 min | about 3 |
 | `membership script failed` / `wall_time` / `init_timeout` | 0 / 0 / 0 |
 | Thread count | 12 steady (13 briefly during a forced refresh) |
 | cgroup `memory.peak` | 282,390,528 bytes (269.3 MiB) of 384 MiB |
@@ -65,8 +65,8 @@ A host-side sampler read the model-catalog cgroup, thread count, RSS, restart co
 
 The peak includes the in-container Node processes the capture and refresh probes spawn, so it is an upper bound for the service itself. The earlier rollout's peak was 229.9 MiB under the same probe method.
 
-- **Before the deployment:** the v1.3.0 container logged 23 `membership script failed … class=wall_time` WARNs between 13:59 UTC on 2026-10-28 and 04:59 UTC on 2026-10-29, about one every 41 minutes, or roughly 12% of the 5-minute collections. Two of them fell in the two hours before the deployment. At that rate, about 1.5 were expected in the 64-minute observation; 0 were seen. That is consistent with the fix but not yet the several-hour proof that task 6.1 requires.
-- **During the routing window:** the AISIX-first routing window restarted CPA, AISIX and apisix-models around 07:02 UTC, and was later rolled back (`4ca68c9`). In those samples model-catalog logged only upstream metadata WARNs: 10 `read cache stale fallback`, 8 `ollama /api/show miss`, 2 `channel fetch failed`. There was no membership failure, and those samples are not counted against the fix.
+- **Before the deployment:** the v1.3.0 container logged 23 `membership script failed … class=wall_time` WARNs between 13:59 UTC on 2026-10-28 and 04:59 UTC on 2026-10-29, about one every 41 minutes, or roughly 12% of the 5-minute collections. Two of them fell in the two hours before the deployment. At that rate, about 1.5 were expected in the 60 clean minutes; 0 were seen. That is consistent with the fix but not yet the several-hour proof that task 6.1 requires.
+- **During the routing windows:** the AISIX-first routing windows ran from 06:29:55 to 06:33:31 and from 06:39:54 to 07:03:22 UTC. They recreated CPA, AISIX and apisix-models, and were rolled back (`4ca68c9`). Samples inside them are excluded from the WARN accounting. That leaves about 60 minutes of clean samples (06:08:26–06:29:55, 06:33:31–06:39:54 and 07:03:22–07:35:55). Across all 87.5 minutes, windows included, model-catalog logged only upstream metadata WARNs, all at 07:08 UTC: 10 `read cache stale fallback`, 8 `ollama /api/show miss` and 2 `channel fetch failed`. None was a membership failure.
 
 Temporary key 40 was deleted after validation: DELETE 200, then GET 404, and the key file is absent. The sampler keeps running read-only until about 09:36 UTC and writes `samples.txt` in host scratch.
 

@@ -119,13 +119,13 @@ Run every step on an `openai/*` model. (Lifted by the user on 2026-10-29 after t
   - zero `wall_time` WARNs and zero `init_timeout` WARNs;
   - every collection published or reused the previous inputs without a script error;
   - the cgroup memory peak is below 384 MiB, with `oom` and `oom_kill` at 0.
-  - Open 2026-10-29: only 64 min observed (06:08–07:12 UTC): about 12 authority collections, 3 forced refreshes and about 2 of the required 6 scheduled refreshes. 0 script failures, 0 `wall_time`, 0 `init_timeout`, peak 269.3 MiB, OOM 0. Samples taken during the 07:02 AISIX routing window are excluded from the judgment. Before the deploy: 23 failures in about 15 h. Still needs several more hours.
+  - Open 2026-10-29: 87.5 min observed (06:08–07:36 UTC): about 17 authority collections, 3 forced refreshes and about 3 of the required 6 scheduled refreshes. 0 script failures, 0 `wall_time`, 0 `init_timeout`, peak 269.3 MiB, OOM 0. The AISIX routing windows (06:29:55–06:33:31 and 06:39:54–07:03:22) are excluded from the judgment, leaving about 60 min of clean samples. There were no membership failures inside the windows either. Before the deploy: 23 failures in about 15 h. Still needs several more hours.
 - [x] 6.2 Post-capture and diff. Repeat the 5.1 captures. Verify:
   - the internal standard list bytes, the Codex manifest bytes and the public `/v1/models` bytes are `cmp`-identical to the pre-capture;
   - the member count is unchanged (344, unless native or AISIX inputs changed, in which case explain the diff from those captures first);
   - if the catalog differs for any other reason, roll back (design Migration Plan step 4) and stop for a user decision.
   - Done 2026-10-29 06:11 UTC: all five bodies `cmp`-identical (internal standard, internal Codex, public standard, public Codex, Sub2API), with members 344. A 07:14 recheck after the CPA restart differed by one Codex row, `aihub/gpt-6-astra`; that is native recovery 555→556, not the image.
-- [ ] 6.3 Write `docs/records/lua-membership-warm-worker-deployment-<date>.md`, without private values or the public hostname. Include:
+- [x] 6.3 Write `docs/records/lua-membership-warm-worker-deployment-<date>.md`, without private values or the public hostname. Include:
   - the digests and timings;
   - the 1.7 and section 3 numbers;
   - the WARN counts before and after;
@@ -133,3 +133,4 @@ Run every step on an `openai/*` model. (Lifted by the user on 2026-10-29 after t
   - the rollback commands.
 
   Commit unsigned and push. Verify: CI is green, and `git grep` of the record finds no private hostnames, IPs or keys.
+  - Done 2026-10-29: record committed in a3dd092, Validate run 40834315863 succeeded; the observation update is in the following commit. `rg` for IPs, the public hostname and key prefixes finds nothing in the record.
