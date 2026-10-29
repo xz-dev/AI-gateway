@@ -6,11 +6,11 @@
 - [ ] 1.2 Add the `*` row to `services/routing/aisix/resources.example.yaml` with a one-line comment. Add it to the private `resources.yaml`; do not commit it. **Verify:** the validator, normalizer (`normalized 0`) and orphan report pass on both files.
 
   Unchecked: the private half waits for window step 5.4. Done for the tracked example (validator, `normalized 0`, orphan report with no candidates) and for the production-shaped scratch copy. Not done here by instruction: the private `resources.yaml` is not edited; the row lands with window step 5.4. Until then, any `deploy-config -e component=aisix` from this revision refuses a private file without the row.
-- [x] 1.3 Set AISIX `mem_limit: 512m` and `memswap_limit: 512m` in `compose.yaml`. Pin `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690` in `compose.yaml` and `.env.example`. **Verify:** using the PART 1 harness at 512m with no swap, one 64 MiB Responses request through `*` returns 200 with no OOM. Record the peak. `validate.sh .env.example` passes with the new pin.
+- [x] 1.3 Set AISIX `mem_limit: 512m` and `memswap_limit: 512m` in `compose.yaml`. Pin `ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a` in `compose.yaml` and `.env.example`. **Verify:** using the PART 1 harness at 512m with no swap, one 64 MiB Responses request through `*` returns 200 with no OOM. Record the peak. `validate.sh .env.example` passes with the new pin.
 
-  Production caveat (2026-10-29): this local harness result does not establish safety for every body shape. Attempt 3 later OOM-killed AISIX at 512m on a 67,108,692-byte Responses envelope; production activation remains incomplete.
+  Production caveat (2026-10-29): this local harness result does not establish safety for every body shape. Attempt 3 OOM-killed AISIX 1.6.0 at 512m. Attempt 4 uses the validated official 1.8.0-rc.1 image with upstream #1370; its local 64 MiB blob test passes, but agent-shaped 56/64 MiB tests still OOM. The user retains the 64 MiB contract and explicitly replaces production maximum-size stress with a realistic approximately 8 MiB history probe; no cap change is authorized.
 
-  Done: PART 1 harness at `--memory 512m --memory-swap 512m`, AISIX 1.6.0 pinned digest, two consecutive 64 MiB Responses bodies through `*`: 200, `memory.peak=450048000` of `memory.max=536870912`, `oom_kill=0` (`/var/tmp/ai-aisix-star/impl/mem-512m.txt`). `validate.sh .env.example` passes with the new pin.
+  Evidence: the original 1.6.0 harness passed two consecutive blob-shaped 64 MiB bodies at peak 450,048,000 bytes (`/var/tmp/ai-aisix-star/impl/mem-512m.txt`). For the attempt-4 pin, `/var/tmp/ai-aisix-live/report.md` confirms functional parity and a local 64 MiB blob-shaped request at 342.3 MiB with no OOM; the distinct agent-shaped maximum remains unsafe as recorded above. `validate.sh .env.example` passes with the 1.8.0-rc.1 pin (foreground, isolated worktree with no override).
 
 ## 2. Slim apisix-models
 
@@ -104,7 +104,7 @@
   - Unknown everywhere: Responses and Chat return the documented 400 `upstream_error` shape. The Sub2API account status is unchanged afterwards.
   - Images: generations for one gpt-image and one grok-imagine model, plus one multipart edit.
   - SSE incremental for Responses and Chat, plus a two-turn keeper continuation.
-  - One 64 MiB Responses body: no hop returns 413, no AISIX OOM, and peak recorded. An upstream context-limit 400 is acceptable (supervisor-approved reinterpretation, 2026-10-29).
+  - One realistic Codex-history-shaped Responses request of approximately 8 MiB through the public chain: record status, completed behavior and AISIX peak. No synthetic 64 MiB production test (user-approved attempt-4 replacement); the 64 MiB admission contract and caps remain unchanged.
   - Codex manifest and plain list via Sub2API.
   - Public standard and Codex lists, plus the five catalog bodies, `cmp`-identical to the baseline.
   - CPA unreachable from the `apisix-models` netns.
@@ -126,7 +126,7 @@
   - the post-check results table;
   - the catalog SHA-256 values;
   - the CPA filter method;
-  - AISIX peak memory for the 64 MiB probe;
+  - AISIX peak memory for the realistic approximately 8 MiB history probe (attempt 4 replaces synthetic 64 MiB production stress);
   - the residual risk that two concurrent 64 MiB requests can OOM AISIX at 512m;
   - the error-shape change;
   - the `model="*"` attribution;

@@ -31,7 +31,7 @@ With AISIX deciding, all three go away. `apisix-models` stays, but only as a con
   `validate.sh` gains a negative test that no relay chain leads from `apisix-models-netns` to `cpa-netns`.
 - Remove the unused `127.0.0.1:9081` host relay (`apisix-models-host-netns`, `apisix-models-host-relay`, two networks). No runbook uses it.
 - Raise AISIX `mem_limit` from 192m to 512m and remove its swap (`memswap_limit: 512m`). The 64 MiB Responses contract stays.
-- Align the tracked AISIX image pin with production: `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690`.
+- Upgrade and align the tracked/private AISIX pin to the validated official `ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a`, including upstream #1370's schema-memory fix. Idle heap falls from about 140 to 31 MiB; large-body amplification remains.
 - Remove gateway `prompt_cache_retention` stripping: both the selector strip and the catch-all `dkjson` strip. CPA strips the field instead, through targeted `requests.payload.filter[].params` rules, initially for Kimi. This needs a reviewed live-config step, because `deploy-config.yml` does not manage CPA.
 - Gateway recovery stops reading `CPA_API_KEY` from the `apisix-models` environment. Its CPA probe uses model-catalog's `CPA_CLIENT_KEY`.
 - Unchanged:

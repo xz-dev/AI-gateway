@@ -130,8 +130,9 @@ An intentional-break fixture that re-adds the relay must fail.
 
 - `mem_limit: 512m` and `memswap_limit: 512m` (swap removed).
 - Why no swap: production already fills its 64 MiB of swap. On a 2 GiB host, swap thrash degrades every service, while a deterministic OOM makes Docker restart AISIX.
-- 512m covers idle (about 150 MB) plus one 64 MiB request (457 MB peak measured).
-- Tracked `compose.yaml` and `.env.example` pin `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690`, the digest production runs and on which `*` was validated.
+- Attempt 4 upgrades to upstream #1370's schema-memory fix: idle heap falls from about 140 to 31 MiB. Keep 512m/no swap and the 64 MiB admission contract by explicit user decision. This is not a guarantee that every maximum-size history fits: local 1.8.0-rc.1 agent-shaped 56/64 MiB requests still OOM, while the 64 MiB blob shape passes.
+- Tracked `compose.yaml`, `.env.example` and the private pin move together to the validated official `ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a` (OCI index). Functional validation versus 1.6.0 covers `*`, errors, images, SSE, the model list and allowlists (`/var/tmp/ai-aisix-live/report.md`). Pre-pull the exact tag/digest before activation.
+- Production acceptance uses a realistic approximately 8 MiB Codex-history-shaped request, not another synthetic maximum-size stress test. Record the peak and response; do not lower a body cap. The keeper two-turn continuation must pass because upstream now pins a continuation to its producing target.
 
 ### D5. Retention moves to CPA
 

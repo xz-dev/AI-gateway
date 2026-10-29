@@ -31,10 +31,10 @@ The catalog lists only the IDs in model-catalog's [membership rule](model-catalo
 ### Behaviour through `*`
 
 - **Unknown everywhere.** Responses returns 400 `{"error":{"message":"<CPA error JSON as a string>","type":"upstream_error"}}`; Chat returns 400 with `type: upstream_error`, `code: model_not_found` and `unknown provider for model X`.
-- **Attribution.** The AISIX access log keeps the requested ID; Prometheus series for fallback traffic carry `model="*"`. The status page may show `*` cooling after an unknown-ID 400 or a 429. That is cosmetic: cooldown filters only routing-group targets.
+- **Attribution.** The AISIX access log keeps the requested ID; Prometheus series for fallback traffic carry `model="*"`. The status page may show `*` cooling after an unknown-ID 400 or a 429. That is cosmetic: cooldown filters only routing-group targets. AISIX 1.8 access logs rename `status` / `latency_ms` / `model` to `status_code` / `downstream_latency_ms` / `requested_model`; update operator greps (metric labels are unchanged).
 - **Body fidelity.** AISIX re-serializes JSON. Fields are preserved, but bodies are not byte-identical (Chat gains `stream:false`).
-- **Retention.** No gateway layer strips `prompt_cache_retention`. CPA's `requests.payload.filter` removes it for the upstreams that reject it (initially Kimi).
-- **Memory.** AISIX holds about 4.6–7× a request body; one 64 MiB Responses body peaks near 460 MB. AISIX runs with `mem_limit: 512m` and no swap. Two concurrent 64 MiB bodies can still OOM it, after which Docker restarts AISIX and every in-flight AISIX request fails. Observed bodies are far smaller (max about 4 MB).
+- **Retention.** No gateway layer strips `prompt_cache_retention`. CPA's existing `requests.payload.filter` removes it for all models and protocols after the reviewed in-place config reload.
+- **Memory.** AISIX 1.8.0-rc.1 lowers idle heap to about 31 MiB through the schema-memory fix. It keeps `mem_limit: 512m`, no swap and the 64 MiB admission contract. Large agent-shaped bodies still cost about 7.5–7.9× their size; local 56/64 MiB histories can OOM, and concurrent large bodies remain risky. Production validation uses approximately 8 MiB of realistic history; observed bodies were at most about 4 MB. This is not a guarantee for every maximum-size body.
 
 ## Topology
 

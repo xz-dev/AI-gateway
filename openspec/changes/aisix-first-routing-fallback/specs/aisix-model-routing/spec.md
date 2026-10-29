@@ -10,4 +10,4 @@ The AISIX container SHALL have a 512 MiB memory limit with no swap (`memswap_lim
 
 #### Scenario: Pin drift is visible
 - **WHEN** an operator compares tracked `compose.yaml`, `.env.example` and the running AISIX image
-- **THEN** all three name `ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690` until a reviewed upgrade changes them together
+- **THEN** all three name `ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a` until a reviewed upgrade changes them together

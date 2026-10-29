@@ -942,7 +942,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/api7/aisix:1.6.0@sha256:26eae08b5c94291050f179d3c0a56ca154f40751f5c755b5922b044efc523690}
+    image: ${AISIX_IMAGE:-ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped
@@ -951,7 +951,7 @@ services:
       cli-proxy-api: {condition: service_healthy}
       aisix-cpa-relay: {condition: service_started, restart: true}
     pids_limit: 128
-    # AISIX holds ~4.6-7x a request body; one 64 MiB Responses body peaks ~460 MB.
+    # The schema fix lowers idle memory; large histories still cost ~7.5-7.9x their body size.
     # No swap: thrash on this host hurts every service, an OOM only restarts AISIX.
     mem_limit: 512m
     memswap_limit: 512m
