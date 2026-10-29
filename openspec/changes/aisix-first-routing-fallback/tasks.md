@@ -122,7 +122,7 @@
 
 ## 6. Record and closeout
 
-- [ ] 6.1 Write `docs/records/aisix-first-routing-fallback-<date>.md` in English, with no IPs, no public hostname and no secrets. Include:
+- [x] 6.1 Write `docs/records/aisix-first-routing-fallback-<date>.md` in English, with no IPs, no public hostname and no secrets. Include:
   - the step timestamps;
   - image digests before and after;
   - the post-check results table;
@@ -136,5 +136,5 @@
 
   **Verify:** the record is committed with an explicit pathspec and CI is green.
 
-  Attempt-4 deployed outcome and live-traffic comparison are recorded, with attempts 1–3 retained as history and corrected real-history memory estimates. This checkbox waits only for CI on the final record commit; archival remains separately owned by the supervisor.
+  Done: attempt-4 deployed outcome, actual pre/post live comparison, image/body hashes, backups, rollback commands and corrected real-history estimates are committed in `7c16201`; Validate 40867850213 succeeded. Attempts 1–3 remain as history. Archival is separately owned by the supervisor and remains unchecked.
 - [ ] 6.2 Sync the delta specs and archive the change. **Verify:** `openspec validate --strict` passes after the archive, and the main specs no longer contain the slash rule or the classification seam.

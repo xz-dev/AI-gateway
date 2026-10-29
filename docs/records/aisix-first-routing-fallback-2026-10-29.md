@@ -2,7 +2,7 @@
 
 ## Outcome
 
-**Deployed in attempt 4 with the official AISIX 1.8.0-rc.1 schema-memory fix.** Attempts 1–3 remain below as history, including the real attempt-3 OOM. The user authorized realistic approximately 8 MiB history validation instead of another destructive synthetic maximum-size probe, while retaining the 64 MiB admission contract.
+**Deployed in attempt 4 with the official AISIX 1.8.0-rc.1 schema-memory fix.** The outcome record and task evidence were published in `7c16201`; Validate run 40867850213 succeeded. Archival remains a separate supervisor action. Attempts 1–3 remain below as history, including the real attempt-3 OOM. The user authorized realistic approximately 8 MiB history validation instead of another destructive synthetic maximum-size probe, while retaining the 64 MiB admission contract.
 
 Production now uses the constant apisix-models pipe, AISIX's single `*` fallback to CPA, 512 MiB without swap, no direct router-to-CPA network path, the updated recovery script and the all-protocol CPA retention filter. The obsolete host/CPA relays and four networks are removed. The earlier 120-second AISIX stream timeout and model-catalog v1.4.0 remain unchanged.
 
