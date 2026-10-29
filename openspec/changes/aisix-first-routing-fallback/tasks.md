@@ -74,16 +74,24 @@
 
 ## 5. Production window
 
-- [ ] 5.1 Pre-window gates, all read-only or local:
+- [x] 5.1 Pre-window gates, all read-only or local:
   - CI is green on the repository changes;
   - prove how CPA v8.0.45 applies `requests.payload.filter`: a config reload that leaves plugins untouched, or a restart;
   - confirm that the filter matcher covers every CPA-received Kimi name (`kimi-coding/kimi-k3`, `sensenova/kimi-k3`, `devin/kimi-k2-7`, CPA-only bare Kimi IDs);
   - prepare the private diffs (Compose, `.env`, AISIX `resources.yaml`, CPA `config.yaml`) and the exact command list from design Migration Plan, and have them reviewed.
 
   **Verify:** the review is approved before any production write, and the method choice is recorded.
-- [ ] 5.2 Window step 1, backups and baselines, exactly as listed in design Migration Plan step 1, including an online CPA SQLite backup and one temporary normal-client key. **Verify:** every backup is readable and hashed; the five catalog bodies, AISIX metrics and Sub2API account rows are captured.
-- [ ] 5.3 Window step 2, the CPA retention filter. **Verify:** Kimi requests with `prompt_cache_retention` return 200, streaming and non-streaming, sent directly to CPA. A supporting upstream keeps the field. Plugins and version keys are unchanged, and there is no plugin reload.
-- [ ] 5.4 Window step 3, AISIX: Compose limits and pin plus the `*` row, through `deploy-config.yml -e component=aisix` (`--check --diff`, then apply). **Verify:** AISIX is healthy at 512m with no swap, on the pinned digest; `/v1/models` has 76 IDs and no `*`; a CPA-only bare ID through the public chain succeeds.
+
+  Done: the reviewed runbook was approved on 2026-10-29 with immediate execution, in-place CPA hot reload, namespace recreation (not live disconnect), and one CPA operator. The first attempt stopped on an upstream Kimi entitlement failure; a supervisor-authorized second attempt subsequently rolled back on the final passthrough-membership gate. See the window record.
+- [x] 5.2 Window step 1, backups and baselines, exactly as listed in design Migration Plan step 1, including an online CPA SQLite backup and one temporary normal-client key. **Verify:** every backup is readable and hashed; the five catalog bodies, AISIX metrics and Sub2API account rows are captured.
+
+  Done: readable, hashed file/unit backups and two integrity-checked online SQLite backups; fresh five-body baseline, AISIX metrics, account rows and identities captured. Temporary keys 41 and 42 were deleted (DELETE 200, GET 404, file absent).
+- [ ] 5.3 Window step 2, the CPA retention filter. **Verify (approved correction, 2026-10-29):** remove the existing `from-protocol: responses` restriction by an in-place rewrite, so every protocol strips the field. Responses and Chat requests carrying `prompt_cache_retention`, streaming and non-streaming, return 200 on a working Kimi route; a non-Kimi check also returns 200. Plugins and version keys remain unchanged with no plugin reload. The independently failing `kimi-coding/kimi-k3` credential is not repaired by this change.
+
+  Rolled back: `kimi-k3` passed all four direct checks and `claude-sonnet-5` passed; CPA logged one filter reload with unchanged inode/plugin hash. Initial `kimi-coding/kimi-k3` returned 403, then 503 on the original config as well: its upstream subscription lacks k3 entitlement. Final rollback restored the original Responses-only filter.
+- [ ] 5.4 Window step 3, AISIX: Compose limits and pin plus the `*` row, through `deploy-config.yml -e component=aisix` (`--check --diff`, then apply). **Verify:** AISIX is healthy at 512m with no swap, on the pinned digest; `/v1/models` has 76 IDs and no `*`; a CPA-only bare ID directly at AISIX succeeds; repeat through the public chain after 5.5 (before then the old selector still bypasses AISIX).
+
+  Rolled back: AISIX briefly ran at 512m/no swap on the pinned digest, with 76 listed IDs and no `*`; direct `claude-sonnet-5` returned 200. The final gate failed later, so original resources and 192m/64m-swap limits are restored.
 - [ ] 5.5 Window step 4, slim `apisix-models` and remove its CPA and host relays. **Verify:** `apisix-models` is healthy, the Codex manifest via Sub2API is byte-identical to the baseline, and inference reaches AISIX.
 - [ ] 5.6 Window step 5: recreate `cpa-netns` without `apisix-models-cpa-target`, then remove the four networks. **Verify:** CPA is healthy with its plugins loaded. From `apisix-models-netns`, TCP connects to `cpa:8317` and to every former CPA address on the removed networks fail.
 - [ ] 5.7 Window step 6: deploy the recovery script through the recovery playbook (`--check --diff`, then apply). **Verify:** a manual timer run reports every check healthy, and the CPA probe uses the model-catalog key.
@@ -94,7 +102,7 @@
   - Unknown everywhere: Responses and Chat return the documented 400 `upstream_error` shape. The Sub2API account status is unchanged afterwards.
   - Images: generations for one gpt-image and one grok-imagine model, plus one multipart edit.
   - SSE incremental for Responses and Chat, plus a two-turn keeper continuation.
-  - One 64 MiB Responses body: 200 with no AISIX OOM, peak recorded.
+  - One 64 MiB Responses body: no hop returns 413, no AISIX OOM, and peak recorded. An upstream context-limit 400 is acceptable (supervisor-approved reinterpretation, 2026-10-29).
   - Codex manifest and plain list via Sub2API.
   - Public standard and Codex lists, plus the five catalog bodies, `cmp`-identical to the baseline.
   - CPA unreachable from the `apisix-models` netns.
@@ -103,6 +111,14 @@
   - Restart counts are 0 and protected identities are unchanged except the services recreated on purpose.
 
   **Verify:** every item passes, or the window rolls back per design. The temporary key is deleted with proof: DELETE 200, GET 404, local file absent.
+
+  Final catalog gate approved during the window (replaces the earlier full-body-only wording):
+  1. Catalog-visible output must stay byte-identical to the fresh baseline in membership, IDs and order. This covers the standard, Codex and public lists and the passthrough membership.
+  2. Metadata-field differences are allowed only when every changed field matches a fresh read of its source.
+  3. CPA native inventory differences are allowed only when they change none of the outputs in (1) and a CPA credential/auth status read explains them.
+  4. Anything else means: roll back per the runbook and STOP.
+
+  Failed and fully rolled back on 2026-10-29: `kimi-coding/kimi-k3` recovered into passthrough membership (46 → 47), violating item 1 despite unchanged catalog IDs/order. Steps 5.5–5.7 had locally passed health, isolation, inference and recovery checks but are not complete because they were reverted. Images, the full 53-ID sweep, continuation and the 64 MiB production probe were not run. No further attempt was made; see `docs/records/aisix-first-routing-fallback-2026-10-29.md`.
 
 ## 6. Record and closeout
 
