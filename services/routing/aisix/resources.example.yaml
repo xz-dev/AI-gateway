@@ -39,6 +39,19 @@ models:
       honor_retry_after: true
       trigger_statuses: [400, 401, 402, 403, 404, 408, 429, 500, 502, 503, 504]
 
+  # The single priority fallback: an ID with no exact row, route or narrower glob goes to
+  # CPA unchanged. The policy check requires exactly this row and forbids routes targeting it.
+  - display_name: "*"
+    provider: openai
+    model_name: "*"
+    provider_key: cpa-pool
+    cooldown:
+      enabled: true
+      default_seconds: 60
+      max_seconds: 300
+      honor_retry_after: true
+      trigger_statuses: [400, 401, 402, 403, 404, 408, 429, 500, 502, 503, 504]
+
   # Every routing group uses one retry contract; only strategy/hash_on/targets differ.
   # retries: 0 fails over immediately (CPA already retries per credential).
   # retry_on_429 is AISIX's own switch; fallback_on_statuses adds CPA's target-local 4xx:

@@ -19,6 +19,9 @@ REQUIRED_COOLDOWN = {
 }
 # Per-model overrides would bypass the group contract (target retries win over routing.retries).
 FORBIDDEN_DIRECT_KEYS = ("retries", "timeout", "stream_timeout")
+# The single priority fallback: AISIX resolves exact names, then longer globs, then this row.
+STAR = "*"
+STAR_ROW = {"provider": "openai", "model_name": STAR, "provider_key": "cpa-pool"}
 
 
 class PolicyError(Exception):
@@ -32,6 +35,7 @@ def validate(resources):
     if not isinstance(models, list):
         raise PolicyError("AISIX resources must contain a models list")
     routes = 0
+    stars = 0
     for model in models:
         if not isinstance(model, dict):
             raise PolicyError("every AISIX model must be an object")
@@ -40,6 +44,11 @@ def validate(resources):
         if not isinstance(name, str) or not name:
             name = "<unknown>"
         if routing is None:
+            if name == STAR:
+                stars += 1
+                for key, value in STAR_ROW.items():
+                    if model.get(key) != value:
+                        raise PolicyError(f"fallback model * must declare {key}: {value}")
             if model.get("cooldown") != REQUIRED_COOLDOWN:
                 raise PolicyError(f"direct model {name} must use the shared cooldown policy")
             for key in FORBIDDEN_DIRECT_KEYS:
@@ -63,8 +72,17 @@ def validate(resources):
         for key, value in REQUIRED_ROUTING.items():
             if routing.get(key) != value or type(routing.get(key)) is not type(value):
                 raise PolicyError(f"routing model {name} must declare {key}: {json.dumps(value)}")
+        if name == STAR:
+            raise PolicyError("model * must be the direct fallback row, not a routing model")
+        targets = routing.get("targets")
+        if isinstance(targets, list) and any(
+            isinstance(target, dict) and target.get("model") == STAR for target in targets
+        ):
+            raise PolicyError(f"routing model {name} must not target the * fallback")
     if routes == 0:
         raise PolicyError("AISIX resources must contain at least one routing model")
+    if stars != 1:
+        raise PolicyError(f"AISIX resources must contain exactly one * fallback model, found {stars}")
     return routes
 
 
@@ -119,10 +137,57 @@ def self_test():
                 },
             },
             {"display_name": "direct", "cooldown": json.loads(json.dumps(REQUIRED_COOLDOWN))},
+            {
+                "display_name": STAR,
+                **STAR_ROW,
+                "cooldown": json.loads(json.dumps(REQUIRED_COOLDOWN)),
+            },
         ]
     }
     if validate(valid) != 1:
         raise PolicyError("valid policy self-test failed")
+
+    def rejected(candidate, label):
+        try:
+            validate(candidate)
+        except PolicyError:
+            return
+        raise PolicyError(f"invalid policy self-test was accepted: {label}")
+
+    star = valid["models"][2]
+    candidate = json.loads(json.dumps(valid))
+    candidate["models"].pop(2)
+    rejected(candidate, "missing * fallback")
+    candidate = json.loads(json.dumps(valid))
+    candidate["models"].append(json.loads(json.dumps(star)))
+    rejected(candidate, "duplicate * fallback")
+    for key, value in (("model_name", "x"), ("provider_key", "other"), ("provider", "azure")):
+        candidate = json.loads(json.dumps(valid))
+        candidate["models"][2][key] = value
+        rejected(candidate, f"* fallback {key}={value}")
+    candidate = json.loads(json.dumps(valid))
+    candidate["models"][2].pop("cooldown")
+    rejected(candidate, "* fallback without cooldown")
+    candidate = json.loads(json.dumps(valid))
+    candidate["models"][0]["routing"]["targets"] = [{"model": "direct"}, {"model": STAR}]
+    rejected(candidate, "route targeting *")
+    candidate = json.loads(json.dumps(valid))
+    candidate["models"].append(
+        {"display_name": STAR, "routing": json.loads(json.dumps(valid["models"][0]["routing"]))}
+    )
+    rejected(candidate, "* as a routing model")
+    # Narrower single-* globs stay legal: their precedence over * is the feature.
+    candidate = json.loads(json.dumps(valid))
+    candidate["models"].append(
+        {
+            "display_name": "devin/*",
+            "provider": "openai",
+            "model_name": "devin/*",
+            "provider_key": "cpa-pool",
+            "cooldown": json.loads(json.dumps(REQUIRED_COOLDOWN)),
+        }
+    )
+    validate(candidate)
     for index, key, value in (
         (0, "retries", 1),
         (0, "retries", None),
@@ -190,6 +255,16 @@ def self_test():
         - 402
         - 403
         - 404
+  - display_name: "*"
+    provider: openai
+    model_name: "*"
+    provider_key: cpa-pool
+    cooldown:
+      enabled: true
+      default_seconds: 60
+      max_seconds: 300
+      honor_retry_after: true
+      trigger_statuses: [400, 401, 402, 403, 404, 408, 429, 500, 502, 503, 504]
 """
     with tempfile.NamedTemporaryFile("w", encoding="utf-8") as stream:
         stream.write(block_yaml)
