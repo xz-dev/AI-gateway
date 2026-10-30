@@ -30,6 +30,8 @@ ops/ansible/
   comment in `roles/<role>/defaults/main.yml`; `ansible-doc --type role -r roles <role>`
   shows the argument specs.
 
+User-specific host bindings belong in private `compose.override.yaml`: add `ports` to the existing host namespace owner, rather than starting an untracked relay container. For example, an additional `${TAILSCALE_IP}:9080:9080` publication on `apisix-host-netns` preserves the front-door policy and namespace isolation. Port publications are Compose structure changes: review the rendered effective diff and use a scoped manual window for the owner and all its namespace sharers; the component image/environment scope gate must not be bypassed.
+
 Setup on a controller (task-scoped, nothing system-wide):
 
 ```bash
