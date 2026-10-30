@@ -37,6 +37,11 @@ existing differing paths (image pins, builds/pull policy, resource settings,
 healthcheck and operator-network configuration); none was reconciled here.
 The full path-only audit remains in private scratch evidence.
 
+Later resolution (2026-10-30): original drift path **#17**,
+`services.apisix.healthcheck.test`, now matches tracked Compose's local
+`/healthz` probe; see the [healthcheck and orphan-cleanup record](apisix-healthcheck-and-orphan-cleanup-2026-10-30.md).
+The other audit entries were not bulk-reconciled.
+
 From `ops/ansible/`, `deploy.yml -e component=openai-api-cache-keeper --check
 --diff` passed. The reviewed approval digest was
 `3eb8acbf6b74da4d9e8dcce6f8d1ea4bca6f42f5aad6ecb3ee61d4ea404b6f60`.
