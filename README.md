@@ -69,7 +69,7 @@ Full steps: [docs/installation.md](docs/installation.md). Day-2 operations: [doc
 
 Guides and reference:
 
-- Agent workflows: [deploy, update and operate](skills/ai-gateway-ops/SKILL.md); [Sub2API business settings](skills/sub2api-ops/SKILL.md)
+- Agent workflows: [deploy, update and operate](.agents/skills/ai-gateway-ops/SKILL.md); [Sub2API business settings](.agents/skills/sub2api-ops/SKILL.md)
 - [Architecture](docs/architecture.md) — full component graph
 - [Installation](docs/installation.md) — first install and Cloudflare Tunnel
 - [Security model](docs/security.md) — boundaries, one-way edges, hardening

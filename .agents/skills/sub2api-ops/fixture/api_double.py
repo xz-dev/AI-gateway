@@ -3,7 +3,7 @@
 
 Flow: inspect -> propose -> approve (simulated) -> fresh read -> minimal update
 -> read-back. Includes a lost-response retry that reads before re-writing.
-Run: python3 skills/sub2api-ops/fixture/api_double.py  (exit 0 = pass)
+Run: python3 .agents/skills/sub2api-ops/fixture/api_double.py  (exit 0 = pass)
 """
 import copy
 import json
