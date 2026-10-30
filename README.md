@@ -12,8 +12,7 @@ A reusable Docker Compose stack that builds a self-owned AI gateway from separat
 flowchart LR
   Client --> Cloudflare --> APISIX[APISIX front door]
   APISIX --> Keepalive[SSE keepalive] --> Keeper[cache keeper + WS/SSE bridge] --> Sub2API
-  Sub2API --> Models[apisix-models] --> CPA[CLIProxyAPI]
-  Models --> AISIX --> CPA
+  Sub2API --> Models[apisix-models] --> AISIX --> CPA[CLIProxyAPI]
   APISIX -->|versioned /v1/models| Models -->|/v1/models| Catalog[model-catalog]
   Operator[localhost / Tailscale :9083] -->|/models-table| APISIX -->|/models-table| Catalog
   Catalog -.->|read-only| CPA
@@ -37,7 +36,7 @@ All components live under [`services/`](services/README.md), grouped by role; op
 | APISIX front door | [`services/firewall/apisix/`](services/firewall/apisix/README.md), `127.0.0.1:9080`; operator `9083` | Public AI route allowlist, limits, opaque `404`; catalog intersection; models table on `9083` | [Public API](docs/public-api.md), [catalog path](docs/catalog.md) |
 | Egress proxy | [`services/firewall/egress-proxy/`](services/firewall/egress-proxy/README.md) | Fail-closed Squid allowlist; the only Internet egress | Edit `data/egress-proxy/policy.json` ([egress policy](docs/egress-policy.md)) |
 | One-way relays | [`services/firewall/one-way-relay/`](services/firewall/one-way-relay/README.md) | socat relays and namespace owners for every directed edge | [Security model](docs/security.md) |
-| AI SSE keepalive proxy | [`services/middleware/ai-sse-keepalive-proxy/`](services/middleware/README.md), operator `127.0.0.1:8087` | Heartbeats for silent AI SSE streams | No configuration |
+| AI SSE keepalive proxy | [`services/middleware/ai-sse-keepalive-proxy/`](services/middleware/README.md), optional operator lane `127.0.0.1:8087` | Heartbeats for silent AI SSE streams | No configuration |
 | Cache keeper + WS/SSE bridge | [`services/middleware/`](services/middleware/README.md) | Responses history, background replay, WebSocket → HTTP/SSE | [Responses path](docs/responses-path.md) |
 | Sub2API | [`services/sub2api/`](services/sub2api/README.md), admin `127.0.0.1:8086` | The only client API-key, entitlement and quota authority | [Upstream configuration](docs/upstream-configuration.md) |
 | apisix-models | [`services/routing/apisix-models/`](services/routing/apisix-models/README.md), no host port | Constant pipe: `/v1/models` → model-catalog, everything else → AISIX | [Model routing](docs/model-routing.md) |
@@ -70,6 +69,7 @@ Full steps: [docs/installation.md](docs/installation.md). Day-2 operations: [doc
 
 Guides and reference:
 
+- Agent workflows: [deploy, update and operate](skills/ai-gateway-ops/SKILL.md); [Sub2API business settings](skills/sub2api-ops/SKILL.md)
 - [Architecture](docs/architecture.md) — full component graph
 - [Installation](docs/installation.md) — first install and Cloudflare Tunnel
 - [Security model](docs/security.md) — boundaries, one-way edges, hardening
@@ -77,7 +77,7 @@ Guides and reference:
 - [Upstream configuration](docs/upstream-configuration.md) — CPA, AISIX and Sub2API wiring
 - [Responses path](docs/responses-path.md) — Pi Codex transports and cache keeper
 - [WebSocket termination](docs/websocket-termination.md) — topology decision and limits
-- [Model routing](docs/model-routing.md) — inner selector and deploy checklist
+- [Model routing](docs/model-routing.md) — constant pipe, AISIX-first fallback and deploy checklist
 - [Provider sidecar](docs/provider-sidecar.md) — optional sidecar role
 - [Public API behavior](docs/public-api.md) — routes and opaque responses
 - [Operations and validation](docs/operations.md) — coupled stack, state, `validate.sh`

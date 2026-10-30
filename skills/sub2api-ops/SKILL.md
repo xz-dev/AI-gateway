@@ -29,10 +29,31 @@ deployment only; business settings belong to the panel/API.
 6. **Secrets stay out of the conversation.** Never echo tokens, raw credential
    objects, or secret-bearing commands into durable output.
 
+## Front-bridge account invariants
+
+When creating or editing an OpenAI API-key account, include these fields in the
+reviewed change and read them back after saving:
+
+- While the front keeper and `responses-ws-sse-bridge` are live, set or keep
+  `extra.openai_apikey_responses_websockets_v2_mode: "off"`. WebSocket terminates
+  before Sub2API; the bridge sends HTTP POST/SSE. Sub2API `http_bridge` drops
+  assistant/reasoning history, and `passthrough`/`ctx_pool` do not provide this
+  topology's continuation contract. The tested passthrough path rewrites frames
+  and leaves the socket unusable after a request-scoped error. Read the
+  [WS decision](../../docs/websocket-termination.md#decision) before changing modes.
+- On keeper-path accounts, disable the separate `extra.openai_passthrough` flag.
+  Its error handler bypasses error-passthrough rules and masks 4xx diagnostics as
+  `Upstream request failed`. Preserve native 400 error codes such as
+  `previous_response_not_found`; [the error-rule configuration](../../docs/sub2api-error-passthrough-configuration.md)
+  explains why a broad 400 rule is wrong. This flag is not a WebSocket mode.
+
+For existing accounts outside the approved edit, report violations and obtain
+approval rather than silently changing them. Preserve unrelated `extra` fields.
+
 ## Verified endpoints
 
 The Sub2API admin API contract is version-specific. Only the error-passthrough
-rule set is documented locally (`docs/sub2api-error-passthrough-configuration.md`,
+rule set is documented locally ([configuration guide](../../docs/sub2api-error-passthrough-configuration.md),
 method B). Account/group/mapping endpoint paths, request/response envelopes, and
 PUT replacement semantics are **pending verification against the deployed
 version** — confirm them from the live admin API (e.g. `/api/v1/admin/...`)
