@@ -1,0 +1,16 @@
+---
+# The one activation of a managed file: run exactly the named service through
+# community.docker.docker_compose_v2 (design D12). The argument spec requires
+# dependencies: false; builds and implicit pulls are never allowed.
+
+- name: Activate {{ ai_ops_managed_file_activate.service }}
+  community.docker.docker_compose_v2:
+    services: ["{{ ai_ops_managed_file_activate.service }}"]
+    state: "{{ ai_ops_managed_file_activate.state | default('present') }}"
+    recreate: "{{ ai_ops_managed_file_activate.recreate | default('always') }}"
+    dependencies: "{{ ai_ops_managed_file_activate.dependencies }}"
+    build: never
+    pull: policy
+  register: __ai_ops_managed_file_reactivate
+  # The rescue restore reports its outcome itself and must not stop the recovery.
+  failed_when: (__ai_ops_managed_file_reactivate.failed | default(false)) and not (__ai_ops_managed_file_recovery | default(false))

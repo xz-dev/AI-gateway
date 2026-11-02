@@ -1,0 +1,14 @@
+---
+argument_specs:
+  main:
+    short_description: Release one stale component writer lock after liveness checks.
+    description:
+      - Check mode shows the lock owner only. Apply requires the exact owner transaction,
+        a dead original controller, no live remote writer, and the minimum lock age.
+    options:
+      ai_ops_lock_transaction:
+        type: str
+        description: Exact owner transaction of the stale lock, from the check-mode output.
+      ai_ops_lock_min_age_seconds:
+        type: int
+        description: Minimum lock age; values below 900 are refused.

@@ -11,8 +11,8 @@
     "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "rootDir": "vendor/openai-api-pi-extension",
+    "rootDir": "vendor/openai-api-pi-extension/src",
     "outDir": ".types/core"
   },
-  "files": ["vendor/openai-api-pi-extension/metadata-core.ts", "vendor/openai-api-pi-extension/metadata-worker.ts"]
+  "files": ["vendor/openai-api-pi-extension/src/metadata-core.ts", "vendor/openai-api-pi-extension/src/metadata-worker.ts"]
 }

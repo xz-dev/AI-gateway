@@ -46,7 +46,11 @@ const LEGACY: Readonly<Record<string, string>> = {
   global_fallback: "write the rule's chain explicitly; @default inserts the root chain in place",
   exclude_models: 'use metadata.include_models, e.g. ["**", "!<model-id>"]',
   fetch_models: "remove it; channel upstream rows are read only when a chain contains @cpa-upstream",
-  bare_models_takeover: 'remove it; unprefixed models are always listed (hide them with metadata.include_models: ["*/**"])',
+  bare_models_takeover: 'remove it; admit CPA IDs without a CPA prefix through EXTRA_CPA in catalog.lua (hide members with metadata.include_models: ["*/**"])',
+};
+// Root-only removed fields.
+const LEGACY_ROOT: Readonly<Record<string, string>> = {
+  membership: "membership is decided by the profile's catalog.lua; move cpa_include entries to EXTRA_CPA in catalog.lua",
 };
 const LEGACY_CHANNEL: Readonly<Record<string, string>> = {
   ...LEGACY,
@@ -113,11 +117,10 @@ function nonEmptyString(value: unknown, path: string): string {
   return value as string;
 }
 
-function readSyncMaxContextWindow(value: unknown): boolean | SyncRules {
-  const path = "sync_max_context_window";
-  if (value === undefined || typeof value === "boolean") return value ?? false;
-  if (!Array.isArray(value)) fail(path, "expected true, false or a list of model ID globs");
-  if ((value as unknown[]).length === 0) fail(path, "an empty list selects no model; use false or omit the field");
+/** An ordered `include_models`-style glob list; an empty list is rejected with `emptyReason`. */
+function readGlobList(value: unknown, path: string, emptyReason: string): SyncRules {
+  if (!Array.isArray(value)) fail(path, "expected a list of model ID globs");
+  if ((value as unknown[]).length === 0) fail(path, emptyReason);
   return (value as unknown[]).map((item, index) => {
     const at = `${path}[${index}]`;
     if (typeof item !== "string" || item === "") fail(at, "expected a non-empty glob string");
@@ -133,6 +136,13 @@ function readSyncMaxContextWindow(value: unknown): boolean | SyncRules {
     }
     return { raw, exclude, glob };
   });
+}
+
+function readSyncMaxContextWindow(value: unknown): boolean | SyncRules {
+  const path = "sync_max_context_window";
+  if (value === undefined || typeof value === "boolean") return value ?? false;
+  if (!Array.isArray(value)) fail(path, "expected true, false or a list of model ID globs");
+  return readGlobList(value, path, "an empty list selects no model; use false or omit the field");
 }
 
 function readOverrides(value: unknown, path: string): Row | undefined {
@@ -170,7 +180,7 @@ export function parseConfig(text: string): GatewayConfig {
   const doc = parseDocument(text, { uniqueKeys: true, prettyErrors: false });
   if (doc.errors.length > 0) fail("config", `invalid YAML: ${doc.errors[0]!.message.split("\n")[0]}`);
   const root = mapping(doc.toJS({ maxAliasCount: 100 }), "config");
-  checkKeys(root, "", ROOT_KEYS, { ...LEGACY, ...SHARED_KEYS });
+  checkKeys(root, "", ROOT_KEYS, { ...LEGACY, ...LEGACY_ROOT, ...SHARED_KEYS });
 
   let metadata: MetadataConfig;
   try {

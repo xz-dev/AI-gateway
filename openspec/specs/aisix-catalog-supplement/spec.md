@@ -6,29 +6,19 @@ Supplement the existing enriched CPA catalog with router-exclusive model IDs fro
 
 ## Requirements
 
-### Requirement: Supplement is an exact original-inventory difference
-
-The catalog SHALL compute unique AISIX models API IDs minus complete original CPA models API IDs captured before CPA-local identity filtering. Comparison SHALL be case-sensitive; accepted IDs SHALL preserve their complete bytes.
-
-#### Scenario: Overlapping ID filtered by CPA identity rules
-- **WHEN** an ID exists in both inventories but CPA-local filtering rejects it
-- **THEN** the supplement does not resurrect it
-
-#### Scenario: Duplicates and case-distinct IDs
-- **WHEN** the router lists repeated or case-distinct IDs
-- **THEN** exact duplicates are removed and accepted IDs keep their original spelling
-
 ### Requirement: Existing enrichment and authority are retained
 
-Only router-exclusive IDs SHALL be supplemented via existing enrichment mechanisms. CPA metadata, static override precedence, and final Sub2API entitlement intersection SHALL remain authoritative. The supplement SHALL NOT require AISIX admin APIs or a new catalog service.
+AISIX IDs SHALL be enriched through the existing mechanisms. A CPA-admitted ID SHALL keep the CPA native row as its base record. Static override precedence and the final Sub2API entitlement intersection SHALL remain authoritative. The AISIX source SHALL NOT require AISIX admin APIs or a new catalog service.
 
 #### Scenario: Supplemental model is unauthorized
-- **WHEN** a router-exclusive model is absent from a client's Sub2API entitlements
+
+- **WHEN** an AISIX model is absent from a client's Sub2API entitlements
 - **THEN** the client-visible catalog excludes it
 
 #### Scenario: No supplemental IDs
-- **WHEN** every router ID already exists in the original CPA inventory
-- **THEN** no supplement-only metadata reads occur and existing output is unchanged
+
+- **WHEN** every AISIX ID is also admitted from CPA
+- **THEN** no AISIX-only metadata reads occur and the CPA-admitted output is unchanged
 
 ### Requirement: Optional failures cannot consume successful CPA results
 
@@ -42,3 +32,17 @@ The optional source SHALL be disabled by default with bounded reads that cannot 
 #### Scenario: Valid empty inventory
 - **WHEN** a valid empty router inventory follows a nonempty one
 - **THEN** the supplement becomes empty without stale router-only models
+
+### Requirement: AISIX contributes its complete inventory
+
+The catalog SHALL add every unique ID listed by the AISIX models API to catalog membership, whether or not CPA also lists it. Comparison SHALL be exact and case-sensitive. Accepted IDs SHALL keep their complete bytes. Output order follows the catalog output order in `codex-models-enricher`, not AISIX order.
+
+#### Scenario: Router ID that CPA also lists bare
+
+- **WHEN** AISIX lists `gpt-6.1-sol` and CPA's native manifest also lists a bare `gpt-6.1-sol`
+- **THEN** `gpt-6.1-sol` is a catalog member
+
+#### Scenario: Duplicates and case-distinct IDs
+
+- **WHEN** the router lists repeated or case-distinct IDs
+- **THEN** exact duplicates are removed and accepted IDs keep their original spelling

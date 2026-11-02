@@ -1,0 +1,56 @@
+---
+# Controller scratch (design D5): runs in check mode too and is never a change.
+
+- name: Render policy locally into staging
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ ai_ops_scripts_dir }}/render-egress-policy.py"
+      - "{{ ai_ops_config_dir }}/data/egress-proxy/policy.json"
+      - "{{ ai_ops_squid_staging }}"
+  delegate_to: localhost
+  changed_when: false
+  check_mode: false
+  tags: [always]  # a gate: an unvalidated render must never reach upload
+
+- name: Generate throwaway CA for offline parse validation
+  ansible.builtin.shell: >
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=ops-validation
+    -addext basicConstraints=critical,CA:TRUE
+    -addext keyUsage=critical,keyCertSign,cRLSign
+    -keyout {{ ai_ops_squid_staging | quote }}/ca.key -out {{ ai_ops_squid_staging | quote }}/ca.crt 2>/dev/null
+    && chmod 644 {{ ai_ops_squid_staging | quote }}/ca.key {{ ai_ops_squid_staging | quote }}/ca.crt
+  delegate_to: localhost
+  changed_when: false
+  check_mode: false
+  tags: [always]
+
+- name: Validate rendered config with pinned Squid (k parse)
+  ansible.builtin.command:
+    argv:
+      - podman
+      - run
+      - --rm
+      - --entrypoint
+      - /usr/sbin/squid
+      - -v
+      - "{{ ai_ops_squid_staging }}:/etc/squid/generated:ro"
+      - -v
+      - "{{ ai_ops_squid_staging }}/ca.crt:/etc/squid/ca.crt:ro"
+      - -v
+      - "{{ ai_ops_squid_staging }}/ca.key:/etc/squid/ca.key:ro"
+      - "{{ ai_ops_squid_image }}"
+      - -k
+      - parse
+      - -f
+      - /etc/squid/generated/squid.conf
+  delegate_to: localhost
+  register: __ai_ops_squid_parse
+  changed_when: false
+  check_mode: false
+  tags: [always]
+
+- name: Show parse result
+  ansible.builtin.debug:
+    var: __ai_ops_squid_parse.stderr_lines | default([]) + __ai_ops_squid_parse.stdout_lines
+  tags: [always]

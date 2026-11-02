@@ -16,12 +16,12 @@ Health has three separate meanings:
 | sub2api | `GET /health`, HTTP 200 | Application health endpoint; dependency semantics belong to Sub2API |
 | openai-api-cache-keeper | `GET /healthz`, HTTP 200 | Keeper HTTP liveness, not proof of cache writes, hits or replay |
 | responses-ws-sse-bridge | `GET :8086/healthz`, HTTP 200 | Bridge local liveness; deployed 2026-10-23, see the [rollout record](records/deployment-batch-20261023.md#recovery-guard--deployed) |
-| models-enricher | `GET /healthz`, HTTP 200 | Enricher local liveness |
+| model-catalog | `GET /healthz`, HTTP 200 | Catalog local liveness |
 | ai-sse-keepalive-proxy | `GET /healthz`, HTTP 200 | Keepalive proxy local liveness |
 | apisix | Local `GET /healthz`, expected HTTP 404 | APISIX's unmatched-route rejection responds; no upstream request |
-| apisix-models | Local `GET /healthz`, HTTP 200 | APISIX's explicit local health route responds; no CPA request |
+| apisix-models | Local `GET /healthz`, HTTP 200 | `fault-injection` abort answers locally; no upstream request |
 
-The CPA key comes from the existing `apisix-models` container environment; the front keeper does not hold it. It remains in process memory, not arguments or logs. A missing key or HTTP 401/403 is **unknown**, not a restart decision. An inaccessible namespace is also unknown. Deployment refuses unknown or failed probes.
+The CPA key comes from the `model-catalog` container's `CPA_CLIENT_KEY`; neither the front keeper nor `apisix-models` holds one. It remains in process memory, not arguments or logs. A missing key or HTTP 401/403 is **unknown**, not a restart decision. An inaccessible namespace is also unknown. Deployment refuses unknown or failed probes.
 
 Recovery policy:
 
@@ -55,7 +55,7 @@ The combined cadence explains the approximately 10.6-second noise; this was
 internal probe traffic, not evidence of an external client misconfiguration.
 
 Changing the repository does not update production. Deploy the recovery script
-through its guarded `deploy-recovery` entry point, and separately review the
+through its guarded `playbooks/recovery.yml` entry point, and separately review the
 public APISIX HEALTHCHECK Compose update/recreate. The component image/env-only
 transaction does not permit healthcheck changes; do not use full-stack `up` as
 a workaround or activate the deferred Operator services. No keeper recreate or
@@ -63,16 +63,16 @@ cache wipe is needed for this probe fix. Keep catalog authentication intact.
 
 ## Deploy and inspect
 
-Deploy the explicit `apisix-models` local health route and strict health status check first. Its old `/healthz` catch-all reached CPA; that would turn an upstream outage into an unsafe proxy-restart signal. The old shell check also accepted HTTP 502 and 503 because it ended with `true`.
+Deploy the explicit `apisix-models` local health route and strict health status check first. Its old `/healthz` catch-all reached CPA (the pinned APISIX 3.19 lacks `request-termination`, so the first local route was silently rejected until `fault-injection` replaced it); that would turn an upstream outage into an unsafe proxy-restart signal. The old shell check also accepted HTTP 502 and 503 because it ended with `true`.
 
 From `ops/ansible/`:
 
 ```bash
-ansible-playbook ops.yml --tags deploy-recovery -e ai_ops_mode=plan
-ansible-playbook ops.yml --tags deploy-recovery -e ai_ops_mode=apply
+ansible-playbook playbooks/recovery.yml --check --diff
+ansible-playbook playbooks/recovery.yml
 ```
 
-Plan compares the four candidate script/unit checksums with live files and reports which need upload; it does not copy files or start the timer. Apply copies the recovery script, its read-only `gateway_health.py` role probes, and units; checks application probes without restarting, verifies units, and enables the timer. It does not deploy application routes or recreate containers. Inspect the route and healthcheck change separately before deploying them.
+The check run shows the diff of the two scripts and two units against the live files; it does not copy files or start the timer. Apply copies the recovery script, its read-only `gateway_health.py` role probes, and units; checks application probes without restarting; a changed unit notifies the `daemon-reload` and timer-restart handlers, which run before the units are verified and the timer is enabled. It does not deploy application routes or recreate containers. Inspect the route and healthcheck change separately before deploying them.
 
 ```bash
 systemctl status ai-gateway-recovery.timer --no-pager
@@ -116,7 +116,7 @@ cached continuations are not restored.
 
 The updated recovery source includes bridge `:8086/healthz` among its eight
 application checks. This addition is not deployed merely by committing the source;
-use the separate reviewed `deploy-recovery` operation. The timer restarts only
+use the separate reviewed `playbooks/recovery.yml` operation. The timer restarts only
 running containers that fail probes. It still skips stopped or exited containers
 and cannot break Compose boot health gates. Boot start depends on
 `ai-gateway.service` and Compose `depends_on`. On 2026-10-23 a VM reboot
@@ -175,14 +175,13 @@ The deployed host guard observes every running container, including the standalo
 | cloudflared | Local `:20241/ready`, strict HTTP 200 | Tunnel readiness; Cloudflare dependency failure does not authorize restart |
 | aisix-status | Local `:8080/`, strict expected 404 | Local handler's rejection route, not AISIX readiness |
 | AISIX | Its actual `172.30.68.2:9090/metrics`, strict HTTP 200 | Existing metrics listener, not an assumed loopback binding or an inference request |
-| model-catalog-sidecar | `172.30.41.3:8080/models-table/refresh`, **GET**, strict expected 403 | Nginx's local method restriction rejects GET before proxying; never POST or trigger a refresh |
 | Redis | Direct local RESP PING, exact `+PONG` | Error replies are not success; an authentication error is unknown, not proof the process died |
 | Squid/Unbound | Squid's local rejection of `GET *`, expected HTTP 400, plus native resolver/Squid readiness reported separately | No destination lookup or provider request |
 | PostgreSQL | Audited native `pg_isready` with fresh engine result | Accepting PostgreSQL connections, not proof of application credentials or query correctness |
 | provider-sidecar | Audited native authenticated local HTTP health and virtual-DNS check, with fresh engine result | Includes DNS readiness; no auto-restart on upstream failure |
 | cpa-model-sync | Most recent complete JSON cycle summary from at most 64 KiB of existing json-file logs; within twice its configured interval plus 120 seconds | Progress and dependencies are separate: `ok=true, ready=false` is a live worker with failed/unconfirmed channels, not fully healthy |
 
-HTTP addresses above match the current static topology. Update them deliberately when that topology changes. Missing evidence, unsupported roles, inaccessible process files, and stale native health results are unknown, never fixed-success fallbacks. New containers with unknown roles do not silently become green.
+The former `model-catalog-sidecar` observation was removed with the sidecar; model-catalog is covered by its application check above. HTTP addresses above match the current static topology. Update them deliberately when that topology changes. Missing evidence, unsupported roles, inaccessible process files, and stale native health results are unknown, never fixed-success fallbacks. New containers with unknown roles do not silently become green.
 
 The updated source emits `checks` for eight application recovery decisions, read-only `startup_unit`, `coverage.running`, `coverage.observed`, and per-container `coverage.checks`. Compare running/observed counts and inspect **both** `ok` and any `ready` field. A successful unit result is not an all-dependencies-green signal.
 

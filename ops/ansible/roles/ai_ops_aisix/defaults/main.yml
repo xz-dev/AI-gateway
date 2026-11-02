@@ -1,0 +1,7 @@
+---
+# Direct-connect models explicitly adopted into resources.yaml: reported orphan
+# candidates need this list to approve their deletion from the effective set.
+ai_ops_aisix_adopted_direct_models: []
+
+# Direct-connect models intentionally kept standalone (never orphan candidates).
+ai_ops_aisix_standalone_retained: []

@@ -5,13 +5,7 @@ PREFIX=/usr/local/apisix
 CONFIG_TEMPLATE=/opt/apisix.yaml.tpl
 APISIX_CONFIG=${PREFIX}/conf/apisix.yaml
 
-case "${CPA_API_KEY:-}" in
-  *'&'*|*'/'*|*\\*)
-    echo 'CPA_API_KEY has unsafe chars for sed' >&2
-    exit 1
-    ;;
-esac
-sed "s|__CPA_API_KEY__|${CPA_API_KEY}|g" "${CONFIG_TEMPLATE}" > "${APISIX_CONFIG}"
+cp "${CONFIG_TEMPLATE}" "${APISIX_CONFIG}"
 
 while awk 'NR > 1 && $2 == "00000000" && $8 == "00000000" {found=1} END {exit(found ? 0 : 1)}' /proc/net/route ||
       awk '$1 == "00000000000000000000000000000000" && $2 == "00" && $10 != "lo" {found=1} END {exit(found ? 0 : 1)}' /proc/net/ipv6_route; do

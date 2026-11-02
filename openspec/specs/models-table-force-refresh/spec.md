@@ -103,26 +103,26 @@ The service SHALL initiate one full-chain refresh in the background at startup a
 - **AND** later triggers cannot start another job
 
 ### Requirement: Force-refresh action remains diagnostic-only
-The force-refresh route SHALL be reachable only through the existing localhost/Tailscale models-table diagnostic exposure and SHALL NOT be exposed by the public model-catalog entrance.
+The models table and its force-refresh route SHALL be served by a dedicated front-door listener. That listener SHALL be bound only to localhost and the Tailscale address on port `9083`, and it SHALL forward these paths directly to `model-catalog`. Localhost and Tailscale are a trusted domain, so the listener SHALL NOT add source-address restrictions. The public front-door listener SHALL NOT route `/models-table` or `/models-table/refresh`.
 
 #### Scenario: Diagnostic route is available on port 9083
-- **WHEN** an authorized network client accesses the existing `:9083` diagnostic surface
-- **THEN** it can view the refresh form and submit the refresh action
+- **WHEN** a client on localhost or the tailnet accesses `:9083/models-table`
+- **THEN** it can view the table and the refresh form and submit the refresh action
 
 #### Scenario: Public catalog surface does not expose refresh
-- **WHEN** a caller accesses the public model-catalog entrance
-- **THEN** `/models-table/refresh` is not routed to the force-refresh handler
+- **WHEN** a caller accesses `/models-table` or `/models-table/refresh` through the public front-door listener
+- **THEN** the request is not routed to `model-catalog`
 
 ### Requirement: Models table shows hidden and referenced-only models
-The models table SHALL list every admitted model, including models that `include_models` hides.
+The models table SHALL list every membership candidate, including candidates that the membership script rejects and members that `include_models` hides.
 
 Each hidden model SHALL be marked hidden and SHALL show what decided it:
-- the deciding rule path and pattern, for example `include_models[1]` and `!**/gpt-image-*`; or
-- "no include rule matched".
+- for a candidate the script rejected: `catalog.lua` and the script's reason;
+- for a member that `include_models` hides: the deciding rule path and pattern, for example `include_models[1]` and `!**/gpt-image-*`, or "no include rule matched".
 
-A hidden model that the compile set needs through `inherit` or `metadata_from` SHALL additionally be marked "referenced by" with the referencing slugs, and SHALL show its compiled metadata. Other hidden models SHALL show no compiled metadata, chain or source fields, because they were not processed.
+A hidden model that the compile set needs through `inherit` or `metadata_from` SHALL additionally be marked "referenced by" with the referencing slugs, and SHALL show its compiled metadata. Only members hidden by `include_models` can be referenced this way. Other hidden models SHALL show no compiled metadata, chain or source fields, because they were not processed.
 
-The table SHALL summarize kept, hidden and referenced-only counts. These markings SHALL NOT affect JSON catalog contents.
+The table SHALL summarize kept, hidden and referenced-only counts, and SHALL count script-rejected candidates separately from `include_models` hides. These markings SHALL NOT affect JSON catalog contents.
 
 #### Scenario: Excluded model shown with its rule
 - **WHEN** `include_models: ["**", "!**/gpt-image-*"]` and CPA admits `codex/gpt-image-1`
@@ -135,3 +135,15 @@ The table SHALL summarize kept, hidden and referenced-only counts. These marking
 #### Scenario: Unmatched model shown as hidden
 - **WHEN** `include_models: ["codex/**"]` and CPA admits `other/m`
 - **THEN** the row for `other/m` is marked hidden with "no include rule matched"
+
+#### Scenario: Script-rejected candidate shown with its reason
+- **WHEN** the default script rejects the bare CPA ID `gpt-6.1-sol` with the reason "CPA ID without a CPA prefix"
+- **THEN** the row for `gpt-6.1-sol` is marked hidden by `catalog.lua` with that reason, shows no compiled metadata, and is counted as script-rejected
+
+#### Scenario: Empty catalog from the script
+- **WHEN** the script successfully rejects every candidate
+- **THEN** the table lists every candidate as hidden by `catalog.lua` with its reason, the kept count is 0, and no failed attempt is shown
+
+#### Scenario: Failed script attempt shown
+- **WHEN** the latest collection failed with a membership script error
+- **THEN** the table shows the failed attempt and its error class, and its rows are those of the generation still served

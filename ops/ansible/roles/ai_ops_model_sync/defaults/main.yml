@@ -1,0 +1,11 @@
+---
+# Exact approval digest printed by the deploy-config.yml --check --diff preview.
+# Leave empty until every per-channel addition and removal has been reviewed.
+ai_ops_model_sync_approved_digest: ""
+
+# Bounded wait for the recreated sidecar's immediate first synchronization round.
+ai_ops_model_sync_verify_retries: 30
+ai_ops_model_sync_verify_delay_seconds: 2
+
+# Maximum current-container log lines searched for the first round summary.
+ai_ops_model_sync_log_tail: 200

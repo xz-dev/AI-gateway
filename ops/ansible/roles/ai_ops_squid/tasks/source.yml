@@ -1,0 +1,29 @@
+---
+- name: Read authoritative squid policy checksum
+  ansible.builtin.stat:
+    path: "{{ ai_ops_config_dir }}/data/egress-proxy/policy.json"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  register: __ai_ops_squid_source
+  failed_when: not __ai_ops_squid_source.stat.exists
+  tags: [always]
+
+# In a full deploy check run the tree is not deployed yet, so its provenance cannot match.
+- name: Verify deployed tree and source provenance before source sync
+  ansible.builtin.shell: |
+    set -e
+    cd {{ ai_ops_squid_remote_dir | quote }}
+    grep -Fx -- '# policy-sha256: {{ __ai_ops_squid_source.stat.checksum }}' squid.conf
+    sha256sum -c .manifest.txt --quiet
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode or ai_ops_squid_source_only | bool
+  tags: [always]
+
+- name: Copy source squid policy without activation
+  ansible.builtin.copy:
+    src: "{{ ai_ops_config_dir }}/data/egress-proxy/policy.json"
+    dest: "{{ ai_ops_squid_remote_dir | dirname }}/policy.json"
+    mode: "0600"
+    backup: true
+  tags: [upload]

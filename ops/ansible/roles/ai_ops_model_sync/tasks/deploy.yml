@@ -1,0 +1,169 @@
+---
+# deploy-config.yml -e component=cpa-model-sync: drift gate, read-only live preview,
+# approval digest, single-service recreate, CPA read-back verification.
+
+- name: Prepare model-sync policy
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: prepare
+    apply:
+      tags: [always]
+  vars:
+    ai_ops_managed_file_label: cpa-model-sync/config.json
+    ai_ops_managed_file_local: "{{ ai_ops_config_dir }}/services/cpa/cpa-model-sync/config.json"
+    ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/cpa/cpa-model-sync/config.json"
+  tags: [always]
+
+- name: Preview the policy change
+  when: ai_ops_managed_file_differs
+  tags: [always]
+  block:
+    - name: Read cpa-model-sync identity
+      ansible.builtin.include_tasks:
+        file: identity.yml
+        apply:
+          tags: [always]
+
+    - name: Require current cpa-model-sync image identity
+      ansible.builtin.assert:
+        that:
+          - __ai_ops_model_sync_image_id | trim != ""
+        fail_msg: cpa-model-sync image identity is unavailable; preview approval cannot be bound.
+
+    - name: Read candidate policy locally
+      ansible.builtin.slurp:
+        src: "{{ ai_ops_config_dir }}/services/cpa/cpa-model-sync/config.json"
+      delegate_to: localhost
+      register: __ai_ops_model_sync_candidate
+      no_log: true
+
+    - name: Preview candidate against live CPA without PATCH
+      community.docker.docker_compose_v2_exec:
+        service: cpa-model-sync
+        argv:
+          - env
+          - CPA_MODEL_SYNC_IMAGE_IDENTITY={{ __ai_ops_model_sync_image_id | trim }}
+          - /usr/local/bin/cpa-model-sync
+          - --preview
+          - "-"
+        stdin: "{{ __ai_ops_model_sync_candidate.content | b64decode }}"
+        stdin_add_newline: false
+        tty: false
+      register: __ai_ops_model_sync_preview_raw
+      changed_when: false
+      failed_when: __ai_ops_model_sync_preview_raw.rc != 0
+      check_mode: false
+      no_log: true
+
+    - name: Parse model-sync preview
+      ansible.builtin.set_fact:
+        __ai_ops_model_sync_preview: "{{ __ai_ops_model_sync_preview_raw.stdout | from_json }}"
+      no_log: true
+
+    - name: Show model-sync approval identity
+      ansible.builtin.debug:
+        msg:
+          approval_digest: "{{ __ai_ops_model_sync_preview.approval_digest }}"
+          policy_digest: "{{ __ai_ops_model_sync_preview.policy_digest }}"
+          image_identity: "{{ __ai_ops_model_sync_preview.image_identity }}"
+
+    - name: Show model-sync channel additions and removals
+      ansible.builtin.debug:
+        msg:
+          kind: "{{ item.kind }}"
+          prefix: "{{ item.prefix }}"
+          skipped: "{{ item.skipped }}"
+          current_count: "{{ item.current_count }}"
+          desired_count: "{{ item.desired_count }}"
+          additions: "{{ item.additions }}"
+          removals: "{{ item.removals }}"
+      loop: "{{ __ai_ops_model_sync_preview.channels }}"
+      loop_control:
+        label: "{{ item.kind }}/{{ item.prefix }}"
+
+    - name: Require fresh approved model-sync preview for apply
+      ansible.builtin.assert:
+        that:
+          - ai_ops_model_sync_approved_digest | length > 0
+          - ai_ops_model_sync_approved_digest == __ai_ops_model_sync_preview.approval_digest
+        fail_msg: >-
+          Model-sync preview is not approved or became stale. Run with --check --diff, review every
+          addition/removal, then apply with
+          -e ai_ops_model_sync_approved_digest={{ __ai_ops_model_sync_preview.approval_digest }}
+      when: not ansible_check_mode
+
+- name: Deploy approved model-sync policy
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: deploy
+  vars:
+    ai_ops_managed_file_label: cpa-model-sync/config.json
+    ai_ops_managed_file_local: "{{ ai_ops_config_dir }}/services/cpa/cpa-model-sync/config.json"
+    ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/cpa/cpa-model-sync/config.json"
+    # The sidecar runs as 65534:65534 and reads the bind-mounted policy at
+    # startup; a restrictive local mode must never propagate to production.
+    ai_ops_managed_file_mode: "0644"
+    ai_ops_managed_file_activate: {service: cpa-model-sync, dependencies: false}
+    ai_ops_managed_file_verify:
+      role: ai_ops_model_sync
+      tasks_from: verify
+      expected:
+        policy_digest: "{{ __ai_ops_model_sync_preview.policy_digest | default('') }}"
+        state_digest: "{{ __ai_ops_model_sync_preview.desired_state_digest | default('') }}"
+        image_identity: "{{ __ai_ops_model_sync_preview.image_identity | default('') }}"
+      recovery_expected:
+        policy_digest: "{{ ai_ops_managed_file_remote_checksum }}"
+        state_digest: "{{ __ai_ops_model_sync_preview.current_state_digest | default('') }}"
+        image_identity: "{{ __ai_ops_model_sync_preview.image_identity | default('') }}"
+    ai_ops_managed_file_failure_receipt:
+      path: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-failed-{{ now(fmt='%s') }}.txt"
+      content: |
+        operation=model-sync-deploy mode=apply
+        approval_digest={{ __ai_ops_model_sync_preview.approval_digest | default('unknown') }}
+        candidate_policy_digest={{ __ai_ops_model_sync_preview.policy_digest | default('unknown') }}
+        recovery_policy_digest={{ ai_ops_model_sync_verified_policy_digest | default('unknown') }}
+        recovery_state_digest={{ ai_ops_model_sync_verified_state_digest | default('unknown') }}
+        recovery_verification={{ 'failed' if ai_ops_managed_file_recovery_failed | default(false) else 'passed' }}
+        outcome={{ 'recovery-required' if ai_ops_managed_file_recovery_failed | default(false) else 'candidate-failed-recovered' }}
+  tags: [always]
+
+- name: Record the verified model-sync transition
+  when: ai_ops_managed_file_uploaded
+  tags: [activate]
+  block:
+    - name: Preserve protected model-sync transition evidence
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-sync-transition.json"
+        mode: "0600"
+        content: >-
+          {{ {
+            'approval_digest': __ai_ops_model_sync_preview.approval_digest,
+            'policy_digest': __ai_ops_model_sync_preview.policy_digest,
+            'image_identity': __ai_ops_model_sync_preview.image_identity,
+            'current_state_digest': __ai_ops_model_sync_preview.current_state_digest,
+            'desired_state_digest': __ai_ops_model_sync_preview.desired_state_digest,
+            'channels': __ai_ops_model_sync_preview.channels
+          } | to_nice_json }}
+      no_log: true
+
+    - name: Write sanitized model-sync receipt
+      ansible.builtin.copy:
+        dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-{{ now(fmt='%s') }}.txt"
+        mode: "0600"
+        content: |
+          operation=model-sync-deploy mode=apply
+          approval_digest={{ __ai_ops_model_sync_preview.approval_digest }}
+          policy_digest={{ ai_ops_model_sync_verified_policy_digest }}
+          image_identity={{ ai_ops_model_sync_verified_image }}
+          container_id={{ ai_ops_model_sync_verified_container }}
+          state_digest={{ ai_ops_model_sync_verified_state_digest }}
+          updated={{ ai_ops_model_sync_summary.updated }}
+          unchanged={{ ai_ops_model_sync_summary.unchanged }}
+          failed={{ ai_ops_model_sync_summary.failed }}
+          unconfirmed={{ ai_ops_model_sync_summary.unconfirmed }}
+          skipped={{ ai_ops_model_sync_summary.skipped }}
+          {% for channel in __ai_ops_model_sync_preview.channels %}
+          channel={{ channel.kind }}/{{ channel.prefix }} current_count={{ channel.current_count }} desired_count={{ channel.desired_count }}
+          {{- ' ' }}current_digest={{ channel.current_digest }} desired_digest={{ channel.desired_digest }}
+          {% endfor %}
+          outcome=success

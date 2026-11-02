@@ -33,7 +33,7 @@ cd "$HOME/AI-gateway"
 
    The public contract is intentionally narrow: the sidecar is OpenAI-compatible at `/v1`, listens on plain HTTP port `8080` inside its shared tunnel namespace, publishes no host port, runs as the declared non-root user, and obtains all Internet access through TUN → relay → Squid. The generator does not know or store any vendor-specific runtime setting.
 
-6. Validate and start. AISIX uses the official `ghcr.io/api7/aisix` release; GitHub Actions publishes the independent status image to GHCR from its tracked Dockerfile. Compose consumes fixed version tags and never compiles them on the production host; ai-sse-keepalive-proxy and models-enricher remain local builds:
+6. Validate and start. AISIX uses the official `ghcr.io/api7/aisix` release; GitHub Actions publishes the independent status image to GHCR from its tracked Dockerfile. Compose consumes fixed version tags and never compiles them on the production host; ai-sse-keepalive-proxy and model-catalog remain local builds:
 
    ```bash
    git submodule update --init --recursive

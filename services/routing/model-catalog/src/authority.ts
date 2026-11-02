@@ -1,21 +1,44 @@
-// Authority snapshot: CPA native inventory, management discovery and identity, and the optional
-// AISIX inventory, collected independently of catalog traffic and published as immutable generations.
+// Authority snapshot: CPA native inventory, management discovery of CPA prefixes and the prefix
+// mode, and the optional AISIX inventory, collected independently of catalog traffic and
+// published as immutable generations.
 import { createHash } from "node:crypto";
 import { CpaClient, decodeNativeManifest, type Channel, type Discovery } from "./cpa.ts";
 import { HttpPool, InvalidResponseError } from "./http.ts";
 import { exactModelID, isRecord, parseJSON, type Row } from "./json.ts";
 import type { Logger } from "./log.ts";
 import { errorMessage } from "./log.ts";
+import {
+  MembershipScriptError,
+  REJECTED_DEFAULT_REASON,
+  runMembershipScript,
+  type Candidate,
+  type Decision,
+  type MembershipScript,
+  type MemberSource,
+  type PrefixMode,
+  type RunOptions,
+} from "./membership.ts";
 import { readJSON, type JsonResult, type ReadCache, type ReadOptions } from "./read-cache.ts";
 
 export type Availability = "usable" | "empty" | "failed";
 
-export interface AdmittedModel {
+export type { PrefixMode } from "./membership.ts";
+
+/** A member chosen by the membership script, in candidate order (output order is set by the build). */
+export interface MemberEntry {
   readonly id: string;
-  /** Position of the CPA native manifest row (the `@self` record) in `nativeRows(generation)`. */
-  readonly index: number;
-  /** Emit this CPA record exactly as-is: OAuth-only routes, or identity that could not be read. */
+  readonly origin: MemberSource;
+  /** CPA members: position of the native manifest row (the `@self` record) in `nativeRows(generation)`. */
+  readonly index?: number;
+  /** Emit this CPA record as CPA returned it (only `priority` replaced): the native flag without `compile`. */
   readonly preserveNative: boolean;
+}
+
+/** A candidate the membership script rejected, shown on the models table only. */
+export interface RejectedCandidate {
+  readonly id: string;
+  readonly sources: readonly MemberSource[];
+  readonly reason: string;
 }
 
 export interface AuthorityGeneration {
@@ -28,14 +51,17 @@ export interface AuthorityGeneration {
    * resident; the string is the one the authority read cache already holds.
    */
   readonly nativeText: string;
-  /** Admitted CPA models in native manifest order; first occurrence wins for duplicate IDs. */
-  readonly admitted: readonly AdmittedModel[];
-  /** AISIX IDs absent from the complete raw CPA inventory, in first-seen order with exact bytes. */
-  readonly supplemental: readonly string[];
+  /** Members decided by `catalog.lua`, in candidate order (CPA first occurrence, AISIX, static). */
+  readonly members: readonly MemberEntry[];
+  readonly rejected: readonly RejectedCandidate[];
+  /** Every unique AISIX ID, in first-seen order with exact bytes. */
+  readonly aisixIDs: readonly string[];
   readonly channels: readonly Channel[];
   readonly discoveryIncomplete: boolean;
-  /** Admitted records kept as-is because identity data was unavailable. */
-  readonly identityFallbackCount: number;
+  /** How CPA IDs were admitted: CPA prefix rule, forced-prefix compatibility, or fallback. */
+  readonly prefixMode: PrefixMode;
+  /** CPA members kept as-is because prefix discovery was incomplete. */
+  readonly prefixFallbackCount: number;
 }
 
 export interface RefreshOutcome {
@@ -43,6 +69,8 @@ export interface RefreshOutcome {
   /** A new generation was published by this attempt. */
   readonly published: boolean;
   readonly errors: readonly string[];
+  /** The membership script failed; nothing was published and the previous generation keeps serving. */
+  readonly scriptError?: MembershipScriptError;
   /** Inputs answered from a retained response instead of a fresh read. */
   readonly staleInputs: number;
 }
@@ -52,199 +80,192 @@ const EMPTY: AuthorityGeneration = Object.freeze({
   cpa: "failed",
   aisix: "failed",
   nativeText: "",
-  admitted: Object.freeze([]),
-  supplemental: Object.freeze([]),
+  members: Object.freeze([]),
+  rejected: Object.freeze([]),
+  aisixIDs: Object.freeze([]),
   channels: Object.freeze([]),
   discoveryIncomplete: true,
-  identityFallbackCount: 0,
+  prefixMode: "fallback",
+  prefixFallbackCount: 0,
 });
 
 // ---------------------------------------------------------------------------
-// Identity: management evidence only filters current members; it never adds public records.
+// Membership inputs: CPA prefixes and the prefix mode come from management data only.
 
-export interface Identities {
-  readonly qualified: ReadonlySet<string>;
-  readonly unavailable: ReadonlySet<string>;
-  readonly nativeOnly: ReadonlySet<string>;
-  /** OAuth originals/aliases whose own ID carries a vendor namespace (e.g. devin/swe-2): unprefixed. */
-  readonly bare: ReadonlySet<string>;
-  readonly incomplete: boolean;
+export interface Prefixes {
+  /** `fallback` when a management read failed with no eligible cached response. */
+  readonly mode: PrefixMode;
+  /** Key-channel prefixes plus OAuth prefixes inferred from `P/x` + `x` registrations. */
+  readonly prefixes: ReadonlySet<string>;
+  /** IDs an OAuth account registers under an inferred prefix (forced mode: every OAuth registration). */
+  readonly oauth: ReadonlySet<string>;
   readonly texts: readonly string[];
 }
 
-type AuthFile = { name: string; provider: string; disabled: boolean };
+type AuthFile = { name: string; disabled: boolean };
 
-function wrappedField(text: string, field: string, allowNull = false): unknown {
+function wrappedField(text: string, field: string): unknown {
   const wrapped = parseJSON(text);
-  if (!isRecord(wrapped) || !(field in wrapped) || (wrapped[field] === null && !allowNull)) {
-    throw new InvalidResponseError("missing identity response field");
-  }
+  if (!isRecord(wrapped) || !(field in wrapped) || wrapped[field] === null) throw new InvalidResponseError("missing management response field");
   return wrapped[field];
 }
 
 function decodeAuthFiles(text: string): AuthFile[] {
   const files = wrappedField(text, "files");
-  if (!Array.isArray(files)) throw new InvalidResponseError("invalid auth identity");
+  if (!Array.isArray(files)) throw new InvalidResponseError("invalid auth file list");
   return files.map((file) => {
-    if (!isRecord(file) || typeof file.name !== "string" || typeof file.provider !== "string" || !file.name || !file.provider) {
-      throw new InvalidResponseError("invalid auth identity");
-    }
-    return { name: file.name, provider: file.provider, disabled: file.disabled === true };
+    if (!isRecord(file) || typeof file.name !== "string" || !file.name) throw new InvalidResponseError("invalid auth file list");
+    return { name: file.name, disabled: file.disabled === true };
   });
 }
 
 function decodeModelIDs(text: string): string[] {
   const models = wrappedField(text, "models");
-  if (!Array.isArray(models)) throw new InvalidResponseError("invalid model identity");
+  if (!Array.isArray(models)) throw new InvalidResponseError("invalid registered models");
   return models.map((model) => {
-    if (!isRecord(model) || typeof model.id !== "string" || model.id === "") throw new InvalidResponseError("invalid model identity");
+    if (!isRecord(model) || typeof model.id !== "string" || model.id === "") throw new InvalidResponseError("invalid registered models");
     return model.id;
   });
 }
 
-function decodeAliases(text: string): Map<string, Array<{ name: string; alias: string }>> {
-  const value = wrappedField(text, "oauth-model-alias", true);
-  const out = new Map<string, Array<{ name: string; alias: string }>>();
-  if (value === null) return out;
-  if (!isRecord(value)) throw new InvalidResponseError("invalid alias identity");
-  for (const [provider, entries] of Object.entries(value)) {
-    if (entries === null) continue;
-    if (!Array.isArray(entries)) throw new InvalidResponseError("invalid alias identity");
-    out.set(
-      provider,
-      entries.map((entry) => {
-        if (!isRecord(entry) || typeof entry.name !== "string" || typeof entry.alias !== "string" || !entry.name || !entry.alias) {
-          throw new InvalidResponseError("invalid alias identity");
-        }
-        return { name: entry.name, alias: entry.alias };
-      }),
-    );
+function decodeForceModelPrefix(text: string): boolean {
+  const value = wrappedField(text, "force-model-prefix");
+  if (typeof value !== "boolean") throw new InvalidResponseError("invalid force-model-prefix");
+  return value;
+}
+
+/** First segments `P` with both `P/x` and `x` registered: CPA's default `applyModelPrefixes` shape. */
+export function inferredPrefixes(registered: readonly string[]): Set<string> {
+  const ids = new Set(registered);
+  const out = new Set<string>();
+  for (const id of ids) {
+    const slash = id.indexOf("/");
+    if (slash > 0 && ids.has(id.slice(slash + 1))) out.add(id.slice(0, slash));
   }
   return out;
 }
 
-export async function readIdentities(cpa: CpaClient, discovery: Discovery, options: ReadOptions): Promise<Identities> {
-  const qualified = new Set<string>();
-  const unavailable = new Set<string>();
-  const nativeOnly = new Set<string>();
-  const bare = new Set<string>();
+export async function readPrefixes(cpa: CpaClient, discovery: Discovery, options: ReadOptions): Promise<Prefixes> {
+  const prefixes = new Set<string>();
+  const oauth = new Set<string>();
   const texts: string[] = [];
-  let incomplete = discovery.incomplete;
-  for (const channel of discovery.channels) {
-    if (!channel.prefix) continue;
-    for (const id of channel.models) qualified.add(`${channel.prefix}/${id}`);
+  for (const channel of discovery.channels) if (channel.prefix) prefixes.add(channel.prefix);
+  const fallback = (step: string): Prefixes => {
+    cpa.log.warn("CPA prefix discovery failed; admitting slash IDs as CPA returned them", { step });
+    return { mode: "fallback", prefixes, oauth, texts };
+  };
+  let forced: boolean;
+  try {
+    const result = await cpa.managementRead("/v0/management/force-model-prefix", decodeForceModelPrefix, options);
+    forced = result.value;
+    texts.push(result.text);
+  } catch {
+    return fallback("force-model-prefix");
   }
-  const fail = (step: string) => cpa.log.warn("catalog identity read failed", { step });
   let files: AuthFile[];
   try {
     const result = await cpa.managementRead("/v0/management/auth-files", decodeAuthFiles, options);
     files = result.value;
     texts.push(result.text);
   } catch {
-    fail("auth list");
-    return { qualified, unavailable, nativeOnly, bare, incomplete: true, texts };
+    return fallback("auth list");
   }
-  if (files.length === 0) return { qualified, unavailable, nativeOnly, bare, incomplete, texts };
-
-  let aliases: Map<string, Array<{ name: string; alias: string }>> | undefined;
-  try {
-    const result = await cpa.managementRead("/v0/management/oauth-model-alias", decodeAliases, options);
-    aliases = result.value;
-    texts.push(result.text);
-  } catch {
-    texts.push("");
-  }
-  const active = files.filter((file) => !file.disabled);
-  const perFile = await Promise.all(
-    active.map(async (file) => {
-      let registered: JsonResult<string[]>;
-      try {
-        registered = await cpa.managementRead(`/v0/management/auth-files/models?name=${encodeURIComponent(file.name)}`, decodeModelIDs, options);
-      } catch {
-        return { file, registered: undefined, definitions: undefined };
-      }
-      let definitions: JsonResult<string[]> | undefined;
-      if (aliases) {
-        try {
-          definitions = await cpa.managementRead(`/v0/management/model-definitions/${encodeURIComponent(file.provider)}`, decodeModelIDs, options);
-        } catch {
-          definitions = undefined;
-        }
-      }
-      return { file, registered, definitions };
-    }),
+  const registered = await Promise.all(
+    files
+      .filter((file) => !file.disabled)
+      .map((file) => cpa.managementRead(`/v0/management/auth-files/models?name=${encodeURIComponent(file.name)}`, decodeModelIDs, options).catch(() => undefined)),
   );
-  for (const { file, registered, definitions } of perFile) {
-    if (!registered) {
-      // Without the account's registration set, overlaps with other channels cannot be excluded.
-      incomplete = true;
-      fail("auth models");
-      texts.push("");
+  let failed = false;
+  for (const result of registered) {
+    if (!result) {
+      failed = true;
       continue;
     }
-    texts.push(registered.text, definitions?.text ?? "");
-    if (!aliases || !definitions) {
-      for (const id of registered.value) unavailable.add(id);
-      fail("OAuth definitions or aliases");
+    texts.push(result.text);
+    if (forced) {
+      for (const id of result.value) oauth.add(id);
       continue;
     }
-    const originals = new Set(definitions.value);
-    const aliasIDs = new Set<string>();
-    for (const alias of aliases.get(file.provider) ?? []) if (originals.has(alias.name)) aliasIDs.add(alias.alias);
-    for (const id of registered.value) {
-      // Originals and bare aliases are not routes; a namespaced original is an unprefixed model.
-      if (originals.has(id) || aliasIDs.has(id)) {
-        if (id.includes("/")) bare.add(id);
-        continue;
-      }
-      // A route must strip to this provider's original or alias at some `/` boundary.
-      for (let index = id.indexOf("/", 1); index > 0; index = id.indexOf("/", index + 1)) {
-        const name = id.slice(index + 1);
-        if (originals.has(name) || aliasIDs.has(name)) {
-          if (!qualified.has(id)) nativeOnly.add(id);
-          qualified.add(id);
-          break;
-        }
-      }
+    const own = inferredPrefixes(result.value);
+    for (const prefix of own) prefixes.add(prefix);
+    for (const id of result.value) {
+      const slash = id.indexOf("/");
+      if (slash > 0 && own.has(id.slice(0, slash))) oauth.add(id);
     }
   }
-  return { qualified, unavailable, nativeOnly, bare, incomplete, texts };
+  if (failed) return fallback("auth models");
+  if (discovery.incomplete) return fallback("channel discovery");
+  return { mode: forced ? "forced" : "prefix", prefixes, oauth, texts };
 }
 
-/**
- * Filters native rows by identity. Unprefixed models are always admitted for chain enrichment
- * (former bare_models_takeover); prefixed ones need a positive identity match, except that read
- * failures keep the existing CPA record unchanged instead of dropping it.
- */
 /** Parses the generation's native rows; callers drop them when their build ends. */
 export function nativeRows(generation: AuthorityGeneration): Row[] {
   return generation.nativeText === "" ? [] : decodeNativeManifest(generation.nativeText);
 }
 
-export function admitModels(rows: readonly Row[], ids: Identities, staticSlugs: ReadonlySet<string>): { admitted: AdmittedModel[]; fallbackCount: number } {
-  const admitted: AdmittedModel[] = [];
-  const seen = new Set<string>();
-  let fallbackCount = 0;
-  for (const [index, row] of rows.entries()) {
-    const id = exactModelID(row);
-    if (seen.has(id)) continue;
-    if ((!id.includes("/") || ids.bare.has(id)) && !ids.qualified.has(id)) {
-      admitted.push({ id, index, preserveNative: false });
-    } else if (ids.qualified.has(id)) {
-      admitted.push({ id, index, preserveNative: ids.nativeOnly.has(id) && !staticSlugs.has(id) });
-    } else if (ids.incomplete || ids.unavailable.has(id)) {
-      fallbackCount++;
-      admitted.push({ id, index, preserveNative: !staticSlugs.has(id) });
-    } else {
+/** The shortest known CPA prefix `P` such that `id` starts with `P/` at a `/` boundary. */
+function shortestPrefix(id: string, prefixes: ReadonlySet<string>): string | undefined {
+  for (let index = id.indexOf("/"); index > 0; index = id.indexOf("/", index + 1)) if (prefixes.has(id.slice(0, index))) return id.slice(0, index);
+  return undefined;
+}
+
+export interface MembershipInput {
+  readonly candidates: readonly Candidate[];
+  /** Native manifest row index of each CPA candidate, by candidate position. */
+  readonly rowIndex: ReadonlyArray<number | undefined>;
+}
+
+/**
+ * Every unique candidate in candidate order: CPA native IDs (first occurrence), then AISIX, then
+ * static slugs. The native flag: OAuth registrations under an inferred prefix (forced mode: every
+ * OAuth registration; fallback: every CPA row), never for static slugs.
+ */
+export function membershipCandidates(rows: readonly Row[], prefixes: Prefixes, aisixIDs: readonly string[], staticSlugs: readonly string[]): MembershipInput {
+  const index = new Map<string, { sources: Partial<Record<MemberSource, true>>; row?: number }>();
+  for (const [row, value] of rows.entries()) {
+    const id = exactModelID(value);
+    if (!index.has(id)) index.set(id, { sources: { cpa: true }, row });
+  }
+  const add = (id: string, source: MemberSource) => {
+    const entry = index.get(id);
+    if (entry) entry.sources[source] = true;
+    else index.set(id, { sources: { [source]: true } });
+  };
+  for (const id of aisixIDs) add(id, "aisix");
+  for (const slug of staticSlugs) add(slug, "static");
+  const candidates: Candidate[] = [];
+  const rowIndex: Array<number | undefined> = [];
+  for (const [id, { sources, row }] of index) {
+    const prefix = shortestPrefix(id, prefixes.prefixes);
+    const native = sources.cpa === true && sources.static !== true && (prefixes.mode === "fallback" || prefixes.oauth.has(id));
+    candidates.push({ id, sources, mode: prefixes.mode, has_prefix: prefix !== undefined, ...(prefix === undefined ? {} : { prefix }), native });
+    rowIndex.push(row);
+  }
+  return { candidates, rowIndex };
+}
+
+const SOURCE_ORDER: readonly MemberSource[] = ["cpa", "aisix", "static"];
+
+/** Members and rejected candidates from the script's decisions (one per candidate). */
+export function applyDecisions(input: MembershipInput, decisions: readonly Decision[]): { members: MemberEntry[]; rejected: RejectedCandidate[] } {
+  const members: MemberEntry[] = [];
+  const rejected: RejectedCandidate[] = [];
+  for (const [position, candidate] of input.candidates.entries()) {
+    const decision = decisions[position]!;
+    const sources = SOURCE_ORDER.filter((source) => candidate.sources[source]);
+    if (!decision.keep) {
+      rejected.push({ id: candidate.id, sources, reason: decision.reason ?? REJECTED_DEFAULT_REASON });
       continue;
     }
-    seen.add(id);
+    const origin = decision.source ?? sources[0]!;
+    if (origin === "cpa") members.push({ id: candidate.id, origin, index: input.rowIndex[position], preserveNative: candidate.native && !decision.compile });
+    else members.push({ id: candidate.id, origin, preserveNative: false });
   }
-  return { admitted, fallbackCount };
+  return { members, rejected };
 }
 
 /** Runtime conflicts that make the configured catalog ambiguous. */
-export function runtimeConflicts(channels: readonly Channel[], customPoolKeys: Iterable<string>, admitted: readonly AdmittedModel[]): string[] {
+export function runtimeConflicts(channels: readonly Channel[], customPoolKeys: Iterable<string>, members: readonly MemberEntry[]): string[] {
   const conflicts: string[] = [];
   const prefixes = new Map<string, string>();
   for (const channel of channels) {
@@ -258,7 +279,8 @@ export function runtimeConflicts(channels: readonly Channel[], customPoolKeys: I
   }
   if (conflicts.length > 0) return conflicts;
   const nativePrefixes = new Set<string>();
-  for (const model of admitted) {
+  for (const model of members) {
+    if (model.origin !== "cpa") continue;
     const slash = model.id.indexOf("/");
     if (slash > 0) nativePrefixes.add(model.id.slice(0, slash));
   }
@@ -307,16 +329,9 @@ export class AisixClient {
   }
 }
 
-/** unique(AISIX) minus the complete raw CPA inventory; case-sensitive, first-seen order. */
-export function supplementalIDs(aisixIDs: readonly string[], rawCpaIDs: ReadonlySet<string>): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const id of aisixIDs) {
-    if (id.trim() === "" || rawCpaIDs.has(id) || seen.has(id)) continue;
-    seen.add(id);
-    out.push(id);
-  }
-  return out;
+/** Exact-byte, case-sensitive dedup in first-seen order. */
+export function uniqueIDs(ids: readonly string[]): string[] {
+  return [...new Set(ids)];
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +340,13 @@ export function supplementalIDs(aisixIDs: readonly string[], rawCpaIDs: Readonly
 export interface AuthorityOwnerOptions {
   cpa: CpaClient;
   aisix?: AisixClient;
-  staticSlugs: ReadonlySet<string>;
+  /** Static model slugs in configuration order. */
+  staticSlugs: readonly string[];
+  /** The profile's `catalog.lua`, loaded and dry-run at startup. */
+  script: MembershipScript;
+  /** Worker file and bounds overrides (tests). */
+  membership?: RunOptions;
+  clock?: () => number;
   /** Budget for the mandatory CPA phase. */
   cpaTimeoutMs: number;
   /** Independent budget for the optional AISIX phase. */
@@ -335,7 +356,12 @@ export interface AuthorityOwnerOptions {
 
 export class AuthorityOwner {
   #current: AuthorityGeneration = EMPTY;
+  /** Inputs fingerprint plus the decisions digest of the current generation. */
   #fingerprint = "";
+  /** Inputs fingerprint and decisions of the last successful script run. */
+  #inputs = "";
+  #decided: { members: MemberEntry[]; rejected: RejectedCandidate[]; digest: string } | undefined;
+  #scriptFailure: { at: number; error: MembershipScriptError } | undefined;
   #active: { promise: Promise<RefreshOutcome>; bypass: boolean } | undefined;
 
   readonly options: AuthorityOwnerOptions;
@@ -346,6 +372,11 @@ export class AuthorityOwner {
 
   current(): AuthorityGeneration {
     return this.#current;
+  }
+
+  /** The latest membership script failure, until a later run succeeds. */
+  scriptFailure(): { at: number; error: MembershipScriptError } | undefined {
+    return this.#scriptFailure;
   }
 
   /** Coalesced: callers join an active attempt unless they need a forced one and it is not. */
@@ -378,41 +409,43 @@ export class AuthorityOwner {
     // Mandatory CPA phase.
     let cpaState: Availability = "failed";
     let nativeText = "";
-    let admitted: AdmittedModel[] = [];
+    let rows: readonly Row[] = [];
+    let prefixes: Prefixes | undefined;
     let channels: readonly Channel[] = [];
     let discoveryIncomplete = true;
-    let identityFallbackCount = 0;
-    const rawCpaIDs = new Set<string>();
     const cpaOptions = phase(this.options.cpaTimeoutMs);
     try {
       const native = await cpa.nativeManifest(cpaOptions);
       part(native.text);
       nativeText = native.text;
-      for (const row of native.value) rawCpaIDs.add(exactModelID(row));
-      cpaState = rawCpaIDs.size > 0 ? "usable" : "empty";
+      rows = native.value;
+      cpaState = native.value.length > 0 ? "usable" : "empty";
       const discovery = await cpa.discover(cpaOptions);
       discovery.texts.forEach(part);
-      const ids = await readIdentities(cpa, discovery, cpaOptions);
-      ids.texts.forEach(part);
-      ({ admitted, fallbackCount: identityFallbackCount } = admitModels(native.value, ids, staticSlugs));
+      prefixes = await readPrefixes(cpa, discovery, cpaOptions);
+      prefixes.texts.forEach(part);
+      part(`!mode:${prefixes.mode}`);
       channels = discovery.channels;
       discoveryIncomplete = discovery.incomplete;
-      if (discovery.incomplete) log.warn("channel identity discovery incomplete");
-      if (identityFallbackCount > 0) log.warn("catalog identity unavailable; preserving CPA records", { count: identityFallbackCount });
+      if (discovery.incomplete) log.warn("channel discovery incomplete");
     } catch (error) {
+      cpaState = "failed";
+      nativeText = "";
+      rows = [];
+      prefixes = undefined;
       errors.push(`CPA catalog: ${errorMessage(error)}`);
       part("!cpa-failed");
     }
 
     // Optional AISIX phase: isolated budget; failure never touches CPA output.
     let aisixState: AuthorityGeneration["aisix"] = "disabled";
-    let supplemental: string[] = [];
+    let aisixIDs: string[] = [];
     if (aisix) {
       try {
         const result = await aisix.fetchModelIDs(phase(this.options.aisixTimeoutMs));
         part(result.text);
         aisixState = result.value.length > 0 ? "usable" : "empty";
-        if (cpaState !== "failed") supplemental = supplementalIDs(result.value, rawCpaIDs);
+        aisixIDs = uniqueIDs(result.value);
       } catch (error) {
         aisixState = "failed";
         errors.push(`AISIX catalog: ${errorMessage(error)}`);
@@ -420,8 +453,42 @@ export class AuthorityOwner {
       }
     }
 
-    const fingerprint = hash.digest("hex");
+    // Membership stage (design D4): the script decides every candidate. Unchanged inputs reuse the
+    // last decisions; a forced refresh runs the script again.
+    const inputs = hash.digest("hex");
     const previous = this.#current;
+    let members: MemberEntry[] = [];
+    let rejected: RejectedCandidate[] = [];
+    let digest = "!no-membership";
+    if (prefixes) {
+      if (!bypass && this.#decided && inputs === this.#inputs) ({ members, rejected, digest } = this.#decided);
+      else {
+        const input = membershipCandidates(rows, prefixes, aisixIDs, staticSlugs);
+        try {
+          const run = await runMembershipScript(this.options.script, input.candidates, this.options.membership);
+          ({ members, rejected } = applyDecisions(input, run.decisions));
+        } catch (error) {
+          const scriptError = error instanceof MembershipScriptError ? error : new MembershipScriptError("worker_exit", errorMessage(error));
+          this.#scriptFailure = { at: (this.options.clock ?? Date.now)(), error: scriptError };
+          log.warn("membership script failed; previous generation keeps serving", {
+            class: scriptError.errorClass,
+            ...(scriptError.candidate === undefined ? {} : { candidate: scriptError.candidate }),
+            err: scriptError.message,
+          });
+          return { generation: previous, published: false, errors: [...errors, scriptError.message], staleInputs, scriptError };
+        }
+        this.#scriptFailure = undefined;
+        digest = createHash("sha256").update(JSON.stringify([members, rejected])).digest("hex");
+        this.#inputs = inputs;
+        this.#decided = { members, rejected, digest };
+        if (members.length === 0 && input.candidates.length > 0) log.info("catalog.lua kept no candidate; publishing an empty catalog", { candidates: input.candidates.length, rejected: rejected.length });
+      }
+    }
+    const prefixMode: PrefixMode = prefixes?.mode ?? "fallback";
+    const prefixFallbackCount = prefixMode === "fallback" ? members.filter((member) => member.origin === "cpa" && member.preserveNative).length : 0;
+    if (prefixFallbackCount > 0) log.warn("CPA prefixes unavailable; preserving CPA slash records", { count: prefixFallbackCount });
+
+    const fingerprint = `${inputs}:${digest}`;
     if (previous.generation !== 0 && fingerprint === this.#fingerprint) {
       // Same content: hold the read cache's current string so an equal old copy is not kept alive.
       if (nativeText !== "") this.#current = Object.freeze({ ...previous, nativeText });
@@ -432,12 +499,18 @@ export class AuthorityOwner {
       cpa: cpaState,
       aisix: aisixState,
       nativeText,
-      admitted: Object.freeze(admitted),
-      supplemental: Object.freeze(supplemental),
+      members: Object.freeze(members),
+      rejected: Object.freeze(rejected),
+      aisixIDs: Object.freeze(aisixIDs),
       channels: Object.freeze(channels),
       discoveryIncomplete,
-      identityFallbackCount,
+      prefixMode,
+      prefixFallbackCount,
     });
+    if (prefixMode !== previous.prefixMode || previous.generation === 0) {
+      if (prefixMode === "forced") log.info("CPA forces model prefixes; catalog membership in compatibility mode");
+      else if (prefixMode === "prefix") log.info("catalog membership follows the CPA prefix rule");
+    }
     this.#current = next;
     this.#fingerprint = fingerprint;
     return { generation: next, published: true, errors, staleInputs };

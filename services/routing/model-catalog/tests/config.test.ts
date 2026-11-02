@@ -95,6 +95,13 @@ test("sync_max_context_window: boolean or an ordered glob list with include_mode
   rejects("sync_max_context_window: yes-please", /^sync_max_context_window: expected true, false or a list/);
 });
 
+test("membership is a legacy field: every shape points to EXTRA_CPA in catalog.lua", () => {
+  for (const value of ['membership:\n  cpa_include: ["devin/*"]', "membership: {}", "membership: [devin/*]"]) {
+    rejects(value, /^membership: removed field; .*move cpa_include entries to EXTRA_CPA in catalog\.lua/);
+  }
+  rejects("bare_models_takeover: true", /^bare_models_takeover: removed field; .*EXTRA_CPA in catalog\.lua/);
+});
+
 test("the tracked example configuration is valid", async () => {
   const { readFile } = await import("node:fs/promises");
   const config = parseConfig(await readFile(new URL("../config.yaml", import.meta.url), "utf8"));

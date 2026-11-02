@@ -1,0 +1,67 @@
+---
+# Controller scratch, not managed state: run in check mode too and never report a change.
+
+- name: Read the controller architecture
+  ansible.builtin.command: uname -m
+  delegate_to: localhost
+  run_once: true
+  register: __ai_ops_renderer_arch
+  changed_when: false
+  check_mode: false
+
+- name: Select the pinned renderer
+  ansible.builtin.set_fact:
+    ai_ops_compose_renderer_path: "{{ ai_ops_compose_renderer_dir }}/docker-compose"
+    __ai_ops_renderer_sha256: "{{ ai_ops_compose_renderer_sha256[__ai_ops_renderer_arch.stdout | trim] | default('') }}"
+
+- name: Require a recorded checksum for this architecture
+  ansible.builtin.assert:
+    that: __ai_ops_renderer_sha256 | length == 64
+    fail_msg: No ai_ops_compose_renderer_sha256 entry for controller architecture {{ __ai_ops_renderer_arch.stdout | trim }}.
+
+- name: Read the cached renderer checksum
+  ansible.builtin.stat:
+    path: "{{ ai_ops_compose_renderer_path }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  run_once: true
+  register: __ai_ops_renderer_cached
+
+- name: Refuse a cached renderer that does not match the pin
+  ansible.builtin.assert:
+    that: not __ai_ops_renderer_cached.stat.exists or __ai_ops_renderer_cached.stat.checksum == __ai_ops_renderer_sha256
+    fail_msg: >-
+      Renderer checksum mismatch: {{ ai_ops_compose_renderer_path }} is not the pinned Compose
+      {{ ai_ops_compose_renderer_version }}; refusing to use it. Delete the file so preflight fetches it again.
+
+- name: Create the task-scoped renderer directory
+  ansible.builtin.file:
+    path: "{{ ai_ops_compose_renderer_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  run_once: true
+  changed_when: false
+  check_mode: false
+  when: not __ai_ops_renderer_cached.stat.exists
+
+- name: Fetch the pinned renderer with its checksum
+  ansible.builtin.get_url:
+    url: "{{ ai_ops_compose_renderer_base_url }}/v{{ ai_ops_compose_renderer_version }}/docker-compose-linux-{{ __ai_ops_renderer_arch.stdout | trim }}"
+    dest: "{{ ai_ops_compose_renderer_path }}"
+    checksum: "sha256:{{ __ai_ops_renderer_sha256 }}"
+    mode: "0755"
+  delegate_to: localhost
+  run_once: true
+  changed_when: false
+  check_mode: false
+  when: not __ai_ops_renderer_cached.stat.exists
+
+- name: Read the renderer version
+  ansible.builtin.command:
+    argv: ["{{ ai_ops_compose_renderer_path }}", version, --short]
+  delegate_to: localhost
+  run_once: true
+  register: __ai_ops_renderer_version
+  changed_when: false
+  check_mode: false

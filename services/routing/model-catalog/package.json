@@ -1,5 +1,5 @@
 {
-  "name": "models-enricher",
+  "name": "model-catalog",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,6 +16,7 @@
     "@opencode-ai/models": "0.0.117",
     "minimatch": "10.2.6",
     "modelparams": "0.0.72",
+    "wasmoon": "1.16.0",
     "yaml": "2.9.1"
   },
   "devDependencies": {
@@ -24,7 +25,7 @@
     "typescript": "7.0.2"
   },
   "imports": {
-    "#core": "./vendor/openai-api-pi-extension/metadata-core.ts",
-    "#core-worker": "./vendor/openai-api-pi-extension/metadata-worker.ts"
+    "#core": "./vendor/openai-api-pi-extension/src/metadata-core.ts",
+    "#core-worker": "./vendor/openai-api-pi-extension/src/metadata-worker.ts"
   }
 }

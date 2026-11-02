@@ -1,0 +1,6 @@
+---
+# unlock.yml: recover only this exact owner transaction, after local/remote liveness
+# checks, and only for a lock at least 15 minutes old. It never changes or activates
+# configuration.
+ai_ops_lock_transaction: ''
+ai_ops_lock_min_age_seconds: 900

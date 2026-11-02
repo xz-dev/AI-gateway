@@ -17,6 +17,10 @@ for command in openssl python3; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
+# The membership script mount source: a missing path would make the runtime create a directory.
+catalog_script=services/routing/model-catalog/catalog.lua
+if [ ! -f "$catalog_script" ] || [ -L "$catalog_script" ]; then echo "$catalog_script must be a regular file" >&2; exit 1; fi
+
 value_from_env() {
   local key=$1
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$env_file"
@@ -51,9 +55,9 @@ import json
 from pathlib import Path
 
 keys = json.loads(Path("services/routing/aisix/caller-keys.json").read_text())
-if set(keys) != {"sub2api", "enricher_catalog"} or not all(isinstance(value, str) and value for value in keys.values()):
+if set(keys) != {"sub2api", "model_catalog"} or not all(isinstance(value, str) and value for value in keys.values()):
     raise SystemExit("services/routing/aisix/caller-keys.json has an invalid shape")
-for name in ("sub2api", "enricher_catalog"):
+for name in ("sub2api", "model_catalog"):
     print(hashlib.sha256(keys[name].encode()).hexdigest())
 PY
   )
@@ -74,6 +78,14 @@ for path in .env .pi .migration-evidence compose.override.yaml services/cpa/conf
     exit 1
   fi
 done
+
+# Tailscale addresses are deployment inputs (${TAILSCALE_IP}); never commit one.
+if grep -Eq '(^|[^0-9.])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+' compose.yaml; then
+  echo 'compose.yaml must not contain a literal Tailscale address; use the TAILSCALE_IP variable' >&2
+  exit 1
+fi
+# The production inventory is private; tracked Ansible files carry only the example.
+python3 ops/scripts/check-tracked-inventory.py .
 
 cpa_config=services/cpa/config/config.example.yaml
 [ "$runtime_mode" = 0 ] || cpa_config=data/cpa/conf/config.yaml
@@ -297,7 +309,7 @@ if not services or not networks:
 # cache/spool has one named disk volume, mounted only by its owner at its path.
 CACHE_VOLUMES = {
     "openai-api-cache-keeper-cache": ("openai-api-cache-keeper", "/var/tmp/openai-api-cache-keeper"),
-    "models-enricher-cache": ("models-enricher", "/var/cache/models-enricher"),
+    "model-catalog-cache": ("model-catalog", "/var/cache/model-catalog"),
     "responses-ws-sse-bridge-spool": ("responses-ws-sse-bridge", "/spool"),
 }
 if "default" in networks or set(compose.get("volumes") or {}) != set(CACHE_VOLUMES):
@@ -318,8 +330,8 @@ for service, config in services.items():
 for source, (owner, target) in CACHE_VOLUMES.items():
     if (source, target) not in set(volume_mounts(services.get(owner, {}))):
         raise SystemExit(f"{owner} must mount its dedicated disk cache volume")
-if ((services.get("models-enricher") or {}).get("environment") or {}).get("CACHE_DIR") != "/var/cache/models-enricher":
-    raise SystemExit("models-enricher CACHE_DIR must use its dedicated disk cache volume")
+if ((services.get("model-catalog") or {}).get("environment") or {}).get("CACHE_DIR") != "/var/cache/model-catalog":
+    raise SystemExit("model-catalog CACHE_DIR must use its dedicated disk cache volume")
 
 def service_networks(config):
     value = config.get("networks") or {}
@@ -420,19 +432,31 @@ def private_host_binding(port, target_port, published_port=None):
         return False
 
 for port, expected in (
-    ("127.0.0.1:9083:9080", True), ("100.94.238.35:9083:9080", True),
-    ("[::1]:9083:9080", True), ("0.0.0.0:9083:9080", False),
-    ("[::]:9083:9080", False), ("9083:9080", False),
-    ({"host_ip": "0.0.0.0", "published": "9083", "target": 9080}, False),
-    ({"host_ip": "127.0.0.1", "published": "9083", "target": 9080}, True),
-    ({"published": "9083", "target": 9080}, False),
-    ("203.0.113.1:9083:9080", False),
+    ("127.0.0.1:9083:9083", True), ("100.64.0.2:9083:9083", True),
+    ("[::1]:9083:9083", True), ("0.0.0.0:9083:9083", False),
+    ("[::]:9083:9083", False), ("9083:9083", False),
+    ({"host_ip": "0.0.0.0", "published": "9083", "target": 9083}, False),
+    ({"host_ip": "127.0.0.1", "published": "9083", "target": 9083}, True),
+    ({"published": "9083", "target": 9083}, False),
+    ("203.0.113.1:9083:9083", False),
 ):
-    if private_host_binding(port, 9080, 9083) != expected:
+    if private_host_binding(port, 9083, 9083) != expected:
         raise SystemExit(f"models-table binding self-test failed: {port}")
-table_ports = services.get("models-table-host-netns", {}).get("ports") or []
-if not table_ports or not all(private_host_binding(port, 9080, 9083) for port in table_ports):
+
+def published_port(port):
+    if isinstance(port, dict):
+        return str(port.get("published", ""))
+    parts = str(port).partition("/")[0].rsplit(":", 2)
+    return parts[-2] if len(parts) >= 2 else ""
+
+# The front-door host namespace publishes the public API port and the operator
+# models-table listener 9083; 9083 is loopback/Tailscale only, never wildcard.
+front_ports = services.get("apisix-host-netns", {}).get("ports") or []
+table_ports = [port for port in front_ports if published_port(port) == "9083"]
+if not table_ports or not all(private_host_binding(port, 9083, 9083) for port in table_ports):
     raise SystemExit("models-table port 9083 must publish only on loopback or an explicit Tailscale address, never wildcard/public")
+if len(front_ports) - len(table_ports) != 1:
+    raise SystemExit("front-door host namespace may publish only the API port and the 9083 models table")
 
 network_members = {name: members(name) for name in networks}
 
@@ -458,7 +482,7 @@ if (services.get("sub2api", {}).get("environment") or {}).get("SECURITY_TRUST_FO
 # one-way source/target relay pair, checked by the generic edge loop below.
 aisix_edges = {
     "sub2api-aisix": ("sub2api-netns", "aisix-netns"),
-    "enricher-aisix": ("models-enricher-netns", "aisix-netns"),
+    "catalog-aisix": ("model-catalog-netns", "aisix-netns"),
     "apisix-models-aisix": ("apisix-models-netns", "aisix-netns"),
     "aisix-cpa": ("aisix-netns", "cpa-netns"),
 }
@@ -475,7 +499,7 @@ for name, service in (("aisix", aisix_service), ("aisix-status", status_service)
 if aisix_service.get("network_mode") != "service:aisix-netns":
     raise SystemExit("AISIX must share the route-stripped aisix-netns namespace")
 aisix_owner = services.get("aisix-netns", {})
-if service_networks(aisix_owner) != {"aisix-host-source", "aisix-status-admin", "sub2api-aisix-target", "enricher-aisix-target", "apisix-models-aisix-target", "aisix-cpa-source"}:
+if service_networks(aisix_owner) != {"aisix-host-source", "aisix-status-admin", "sub2api-aisix-target", "catalog-aisix-target", "apisix-models-aisix-target", "aisix-cpa-source"}:
     raise SystemExit("aisix-netns has an unexpected network membership")
 aisix_ports = aisix_owner.get("ports") or []
 if not aisix_ports:
@@ -495,19 +519,21 @@ for port in aisix_ports:
     if target != 3001:
         raise SystemExit("AISIX namespace may publish only the status relay port 3001")
 
-routing_service = services.get("models-enricher", {})
-if routing_service.get("network_mode") != "service:models-enricher-netns" or routing_service.get("ports"):
-    raise SystemExit("models-enricher routing index must remain inside its route-stripped namespace")
-if (routing_service.get("healthcheck") or {}).get("test") != ["CMD", "/models-enricher", "healthcheck"]:
-    raise SystemExit("models-enricher must report canonical-snapshot readiness without publishing the index")
-relay_dependencies = services.get("apisix-models-enricher-relay", {}).get("depends_on") or {}
-if (relay_dependencies.get("models-enricher") or {}).get("condition") != "service_started":
-    raise SystemExit("the selector relay must start during a cold snapshot so classified requests can return 503")
-selector_service = services.get("apisix-models", {})
-if selector_service.get("ports") or selector_service.get("network_mode") != "service:apisix-models-netns":
-    raise SystemExit("catalog routing selector must not publish an application port")
-if "/opt/apisix/custom/routing_selector.lua" not in volume_targets(selector_service):
-    raise SystemExit("catalog routing selector module must be mounted read-only into APISIX")
+routing_service = services.get("model-catalog", {})
+if routing_service.get("network_mode") != "service:model-catalog-netns" or routing_service.get("ports"):
+    raise SystemExit("model-catalog routing index must remain inside its route-stripped namespace")
+if (routing_service.get("healthcheck") or {}).get("test") != ["CMD", "/model-catalog", "healthcheck"]:
+    raise SystemExit("model-catalog must report canonical-snapshot readiness without publishing the index")
+if (routing_service.get("environment") or {}).get("CATALOG_SCRIPT_PATH") != "/app/catalog.lua" or "/app/catalog.lua" not in volume_targets(routing_service):
+    raise SystemExit("model-catalog must mount catalog.lua read-only at CATALOG_SCRIPT_PATH=/app/catalog.lua")
+relay_dependencies = services.get("apisix-models-catalog-relay", {}).get("depends_on") or {}
+if (relay_dependencies.get("model-catalog") or {}).get("condition") != "service_started":
+    raise SystemExit("the apisix-models catalog relay must start during a cold model-catalog snapshot")
+pipe_service = services.get("apisix-models", {})
+if pipe_service.get("ports") or pipe_service.get("network_mode") != "service:apisix-models-netns":
+    raise SystemExit("apisix-models must not publish an application port")
+if any(target.startswith("/opt/apisix/custom") for target in volume_targets(pipe_service)):
+    raise SystemExit("apisix-models is a constant pipe and must not mount custom Lua")
 
 # One front keeper and a stateless WS bridge share keepalive's namespace.
 keeper = services.get("openai-api-cache-keeper", {})
@@ -583,11 +609,15 @@ if status_relay.get("network_mode") != "service:aisix-netns" or not relay_is_har
 if "TCP4-LISTEN:3001,bind=172.30.66.2," not in relay_text or "TCP4:172.30.68.3:8080" not in relay_text:
     raise SystemExit("AISIX status relay must forward only port 3001 to the isolated renderer")
 
-internal_membership_exceptions = {
-    # The front APISIX, catalog bridge, and private table host share this
-    # established catalog-source segment; every other internal net is a pair.
-    "apisix-catalog-source": {"apisix-netns", "model-catalog-sidecar", "models-table-host-netns"},
-}
+# The front door reads the catalog (GET /v1/models) and the models table over two
+# direct two-member pairs; neither carries public inference.
+for name, expected_members in (
+    ("front-catalog", {"apisix-netns", "apisix-models-netns"}),
+    ("front-model-table", {"apisix-netns", "model-catalog-netns"}),
+):
+    if (networks.get(name) or {}).get("internal") is not True or network_members.get(name) != expected_members:
+        raise SystemExit(f"{name} must be an internal pair {sorted(expected_members)}")
+internal_membership_exceptions = {}
 for name, config in networks.items():
     config = config or {}
     current = network_members[name]
@@ -618,17 +648,6 @@ for source_name in sorted(name for name in networks if name.endswith("-source") 
         raise SystemExit(f"missing target network for {source_name}")
     source_members = network_members[source_name]
     target_members = network_members[target_name]
-    if source_name == "apisix-catalog-source":
-        bridge = services.get("model-catalog-sidecar", {})
-        if target_members != {"model-catalog-sidecar", "apisix-models-netns"}:
-            raise SystemExit(f"invalid catalog target membership: {sorted(target_members)}")
-        if str(bridge.get("user")) != "101:101" or bridge.get("read_only") is not True or bridge.get("ports"):
-            raise SystemExit("catalog bridge must be non-root/read-only without ports")
-        if {str(cap).upper() for cap in bridge.get("cap_drop", [])} != {"ALL"} or bridge.get("cap_add"):
-            raise SystemExit("catalog bridge must drop all capabilities")
-        if "no-new-privileges:true" not in bridge.get("security_opt", []):
-            raise SystemExit("catalog bridge must set no-new-privileges")
-        continue
     relays = source_members & target_members
     if len(relays) != 1:
         raise SystemExit(f"edge {source_name} must have exactly one shared relay")
@@ -647,11 +666,6 @@ for source_name in sorted(name for name in networks if name.endswith("-host-sour
         if status_relay.get("network_mode") != "service:aisix-netns" or not relay_is_hardened("aisix-status-relay"):
             raise SystemExit("AISIX status host edge must use its hardened namespace relay")
         continue
-    if source_name == "models-table-host-source":
-        table_relay = services.get("models-table-relay", {})
-        if table_relay.get("network_mode") != "service:models-table-host-netns" or not relay_is_hardened("models-table-relay"):
-            raise SystemExit("models table host edge must use its hardened namespace relay")
-        continue
     prefix = source_name[:-12]
     target_name = f"host-{prefix}-target"
     if target_name not in networks:
@@ -660,6 +674,14 @@ for source_name in sorted(name for name in networks if name.endswith("-host-sour
     if owner not in network_members[target_name]:
         raise SystemExit(f"host namespace owner does not join {target_name}")
     relays = [name for name, config in services.items() if config.get("network_mode") == f"service:{owner}" and "LISTEN:" in command_text(config)]
+    if owner == "apisix-host-netns":
+        # Second relay: the operator models-table listener, 9083 to the front door's 9083 only.
+        table_relay = services.get("apisix-host-table-relay", {})
+        if "apisix-host-table-relay" not in relays or not relay_is_hardened("apisix-host-table-relay") \
+                or "TCP4-LISTEN:9083,bind=172.30.5.2," not in command_text(table_relay) \
+                or "TCP4:172.30.6.2:9083," not in command_text(table_relay):
+            raise SystemExit("models table host edge must forward 9083 only to the front door's 9083 listener")
+        relays.remove("apisix-host-table-relay")
     if len(relays) != 1 or not relay_is_hardened(relays[0]):
         raise SystemExit(f"host edge must have one hardened relay: {source_name}")
 
@@ -714,9 +736,23 @@ for service, config in services.items():
     if service != "egress-proxy" and any(target.endswith("/ca.key") for target in volume_targets(config)):
         raise SystemExit(f"dedicated CA private key mounted by service: {service}")
 PY
+# apisix-models never reaches CPA directly; only AISIX's single * row falls back to it.
+python3 ops/scripts/check-apisix-models-no-cpa.py "$rendered" "$rendered_format" services/routing/apisix-models/apisix.yaml
+break_rendered=$tmpdir/compose-cpa-relay-break
+break_args=(-f "$root/compose.yaml" -f "$root/ops/scripts/tests/fixtures/apisix-models-cpa-relay.override.yaml")
+if [ "$rendered_format" = json ]; then
+  "${COMPOSE[@]}" "${break_args[@]}" --env-file "$env_file" config --format json >"$break_rendered" 2>/dev/null
+else
+  "${COMPOSE[@]}" "${break_args[@]}" --env-file "$env_file" config >"$break_rendered" 2>/dev/null
+fi
+if python3 ops/scripts/check-apisix-models-no-cpa.py "$break_rendered" "$rendered_format" services/routing/apisix-models/apisix.yaml 2>/dev/null; then
+  echo 'apisix-models CPA-cut check accepted the re-added CPA relay fixture' >&2
+  exit 1
+fi
 python3 ops/scripts/tests/test-standard-cache-topology.py
 python3 ops/scripts/tests/test-component-deploy.py
 python3 ops/scripts/tests/test-keeper-observe.py
+python3 ops/scripts/tests/test-migrate-services-layout.py
 
 # Build local components and parse their native configuration. These are syntax
 # gates, not snapshots of ports, service counts, or application policy values.
@@ -784,85 +820,81 @@ for required in (
         raise SystemExit(f"incomplete Pi Codex auth normalization: {required}")
 if "Bearer " in route or 'clear_header("X-API-Key")' in route:
     raise SystemExit("Pi Codex normalization must not embed or clear the Sub2API credential")
+
+# The models table is served only on the 9083 operator listener, straight to model-catalog.
+def route_block(route_id):
+    marker = f"  - id: {route_id}\n"
+    if text.count(marker) != 1:
+        raise SystemExit(f"APISIX must declare exactly one {route_id} route")
+    start = text.index(marker)
+    end = text.find("\n  - id:", start + len(marker))
+    return text[start:] if end < 0 else text[start:end]
+for route_id, uri, method in (("models-table", "/models-table", "GET"), ("models-table-refresh", "/models-table/refresh", "POST")):
+    block = route_block(route_id)
+    for required in (f"uri: {uri}\n", f"methods: [{method}]", '[server_port, "==", "9083"]', "upstream_id: model-catalog"):
+        if required not in block:
+            raise SystemExit(f"incomplete operator models-table route {route_id}: {required}")
+if text.count("upstream_id: model-catalog") != 2 or text.count('[server_port, "==", "9083"]') != 2:
+    raise SystemExit("only the two 9083 models-table routes may reach model-catalog")
+lua = (Path(sys.argv[1]).parent / "lua/model_list_intersection.lua").read_text(encoding="utf-8")
+if 'local ORIGINAL_UPSTREAM_HOST = "apisix-models"' not in lua or "local ORIGINAL_UPSTREAM_PORT = 9080" not in lua:
+    raise SystemExit("front-door catalog leg must read apisix-models directly over front-catalog")
 PY
 
 python3 - "$root/services/routing/apisix-models/apisix.yaml" <<'PY'
+import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+routes_text = text[text.index("routes:\n"):]
 
 def route(route_id):
     marker = f"  - id: {route_id}\n"
-    if text.count(marker) != 1:
+    if routes_text.count(marker) != 1:
         raise SystemExit(f"APISIX models must declare exactly one {route_id} route")
-    start = text.index(marker)
-    end = text.find("\n  - id:", start + len(marker))
-    return text[start:] if end < 0 else text[start:end]
+    start = routes_text.index(marker)
+    end = routes_text.find("\n  - id:", start + len(marker))
+    return routes_text[start:] if end < 0 else routes_text[start:end]
 
-selector = route("catalog-routing-selector")
-for required in (
-    "priority: 100",
-    "      - /v1/chat/completions\n      - /v1/images/generations",
-    "      - POST",
-    'require("routing_selector").run(_, ctx, "__CPA_API_KEY__")',
-    "disable_proxy_buffering: true",
-):
-    if required not in selector:
-        raise SystemExit(f"incomplete catalog routing selector: {required}")
-if "/v1/responses" in selector:
-    raise SystemExit("Responses must use their separate expanded-history size boundary")
-for forbidden in ("ai-proxy-multi", "alias-gpt-", "alias-grok-", "alias-team-"):
+# Constant pipe: AISIX resolves every model (exact, narrower glob, then * -> CPA).
+if re.findall(r"(?m)^  - id: ([\w-]+)$", routes_text) != ["local-health", "codex-models", "aisix"]:
+    raise SystemExit("apisix-models must declare only local-health, codex-models and the aisix pipe")
+for forbidden in ("global_rules", "serverless-", "client-control", "__CPA_API_KEY__", "routing_selector", "request-termination", "/rk", "response-keeper", "127.0.0.1:8085"):
     if forbidden in text:
-        raise SystemExit(f"legacy HTTP alias still conflicts with catalog selection: {forbidden}")
-if "  - id: ws-alias\n" in text:
-    raise SystemExit("retired ws-alias route must not return (retired in 103ecac)")
+        raise SystemExit(f"apisix-models must not contain {forbidden}")
+health = route("local-health")
+for required in ("uri: /healthz", "methods: [GET, HEAD]", "fault-injection:", "http_status: 200"):
+    if required not in health:
+        raise SystemExit(f"apisix-models /healthz must be answered locally: {required}")
+if "upstream" in health:
+    raise SystemExit("apisix-models /healthz must not reach an upstream")
 models = route("codex-models")
-if "      - GET" not in models or "arg_client_version" in models or "upstream_id: enricher" not in models:
-    raise SystemExit("standard and Codex model lists must both reach models-enricher")
-table = route("models-table")
-if "uri: /models-table" not in table or "methods: [GET]" not in table or 'realip_remote_addr", "==", "172.30.42.3"' not in table or "upstream_id: enricher" not in table:
-    raise SystemExit("models table diagnostic route changed")
-refresh = route("models-table-refresh")
-if "uri: /models-table/refresh" not in refresh or "methods: [POST]" not in refresh or 'realip_remote_addr", "==", "172.30.42.3"' not in refresh or "upstream_id: enricher" not in refresh:
-    raise SystemExit("models table refresh route must remain exact and sidecar-only")
-edits = route("aisix-images-edits")
-for required in ("uri: /v1/images/edits", "      - POST", "upstream_id: aisix"):
-    if required not in edits:
-        raise SystemExit(f"incomplete AISIX images edits route: {required}")
-if "__CPA_API_KEY__" in edits or text.count("__CPA_API_KEY__") != 2 or selector.count("__CPA_API_KEY__") != 1:
-    raise SystemExit("CPA service credentials must occur only at the two HTTP selector boundaries")
-if '  - id: aisix\n' not in text or '      "aisix:3000": 1' not in text:
-    raise SystemExit("catalog selector AISIX upstream is missing")
-responses = route("responses-routing-selector")
-for required in ("uri: /v1/responses", "methods: [POST]", "priority: 110", 'require("routing_selector").run(_, ctx, "__CPA_API_KEY__")', "upstream_id: cpa", "disable_proxy_buffering: true", "max_body_size: 67108864"):
-    if required not in responses:
-        raise SystemExit(f"incomplete standard Responses selector: {required}")
-if 'max_body_size: 16777216' not in text or '["route_id", "~=", "responses-routing-selector"]' not in text:
-    raise SystemExit("other routes must keep 16 MiB while Responses admits bounded expanded history")
-if "/rk" in text or "upstream_id: response-keeper" in text or '      "127.0.0.1:8085": 1' in text or '  - id: self\n' in text:
-    raise SystemExit("inner APISIX must not retain private aliases, a duplicate keeper or a self loop")
-if "enable_websocket: true" not in route("catch-all") or "upstream_id: cpa" not in route("catch-all"):
-    raise SystemExit("native WebSocket forwarding must remain on the normal downstream path")
+for required in ("uri: /v1/models", "methods: [GET]", "upstream_id: model-catalog"):
+    if required not in models:
+        raise SystemExit(f"standard and Codex model lists must both reach model-catalog: {required}")
+if "arg_client_version" in models or text.count("upstream_id: model-catalog") != 1 or "/models-table" in text:
+    raise SystemExit("apisix-models must route only /v1/models to model-catalog, never the models table")
+pipe = route("aisix")
+for required in ("uri: /*", "priority: 1\n", "enable_websocket: true", "disable_proxy_buffering: true", "upstream_id: aisix"):
+    if required not in pipe:
+        raise SystemExit(f"incomplete apisix-models AISIX pipe: {required}")
+if '      "aisix:3000": 1' not in text or re.findall(r'(?m)^      "([^"]+)": 1$', text) != ["model-catalog:8090", "aisix:3000"]:
+    raise SystemExit("apisix-models upstreams must be exactly model-catalog and AISIX")
 PY
 
 apisix_image=$(value_from_env APISIX_IMAGE)
 [ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.19.0-debian
-sed 's|__CPA_API_KEY__|fixture-cpa-key|g' "$root/services/routing/apisix-models/apisix.yaml" >"$tmpdir/apisix-models.yaml"
 "${RUNTIME[@]}" run --rm --sysctl net.ipv4.ip_nonlocal_bind=1 --network none \
   -e APISIX_STAND_ALONE=true \
   -v "$root/services/routing/apisix-models/config.yaml:/usr/local/apisix/conf/config.yaml:ro" \
-  -v "$tmpdir/apisix-models.yaml:/usr/local/apisix/conf/apisix.yaml:ro" \
-  -v "$root/services/routing/apisix-models/routing_selector.lua:/opt/apisix/custom/routing_selector.lua:ro" \
+  -v "$root/services/routing/apisix-models/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro" \
   "$apisix_image" apisix test >/dev/null
-"${RUNTIME[@]}" run --rm --network none \
-  -v "$root/services/routing/apisix-models:/work:ro" \
-  --entrypoint /usr/local/openresty/bin/resty \
-  "$apisix_image" /work/routing_selector_test.lua >/dev/null
 "${RUNTIME[@]}" run --rm --network none \
   -v "$root/services/firewall/apisix/lua:/work:ro" \
   --entrypoint /usr/local/openresty/bin/resty \
   "$apisix_image" /work/model_list_intersection_test.lua >/dev/null
+"$root/ops/scripts/tests/test-catalog-routes.sh" "$apisix_image" >/dev/null
 "${RUNTIME[@]}" run --rm --sysctl net.ipv4.ip_nonlocal_bind=1 \
   -e APISIX_STAND_ALONE=true \
   -v "$root/services/firewall/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro" \
@@ -874,18 +906,27 @@ sed 's|__CPA_API_KEY__|fixture-cpa-key|g' "$root/services/routing/apisix-models/
 for plane_dir in services/firewall/apisix services/routing/apisix-models; do
   plane=${plane_dir##*/}
   plane_routes=$root/$plane_dir/apisix.yaml
-  [ "$plane" = apisix ] || plane_routes=$tmpdir/apisix-models.yaml
   listeners=$("${RUNTIME[@]}" run --rm --network none -e APISIX_STAND_ALONE=true \
     -v "$root/$plane_dir/config.yaml:/usr/local/apisix/conf/config.yaml:ro" \
     -v "$plane_routes:/usr/local/apisix/conf/apisix.yaml:ro" \
     --entrypoint /bin/sh "$apisix_image" -ec \
     'apisix init >/dev/null; sed -n "s/^[[:space:]]*listen[[:space:]]\{1,\}\([^ ;]*\).*/\1/p" /usr/local/apisix/conf/nginx.conf | sort -u')
   while IFS= read -r listener; do
+    # Only the front door adds the operator models-table listener on its host relay target.
+    [ "$plane:$listener" != apisix:172.30.6.2:9083 ] || continue
     case $listener in
       unix:*|127.0.0.1:*|172.30.*:9080) ;;
       *) echo "$plane renders a non-explicit or TLS listener: $listener" >&2; exit 1 ;;
     esac
   done <<<"$listeners"
+  if [ "$plane" = apisix-models ]; then
+    # Loopback (healthcheck), the Sub2API relay target and the front-door catalog leg only.
+    tcp_listeners=$(grep ':9080$' <<<"$listeners" | tr '\n' ' ')
+    [ "$tcp_listeners" = '127.0.0.1:9080 172.30.12.2:9080 172.30.45.3:9080 ' ] || {
+      echo "apisix-models renders unexpected listeners: $tcp_listeners" >&2
+      exit 1
+    }
+  fi
 done
 
 if command -v shellcheck >/dev/null; then shellcheck ops/scripts/*.sh services/firewall/egress-proxy/*.sh; fi

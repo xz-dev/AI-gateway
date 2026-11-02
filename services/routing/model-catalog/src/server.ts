@@ -37,7 +37,7 @@ function clientSignal(req: IncomingMessage, res: ServerResponse): AbortSignal {
 
 export function handler(service: CatalogService, log: Logger) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const url = new URL(req.url ?? "/", "http://enricher");
+    const url = new URL(req.url ?? "/", "http://model-catalog");
     const method = req.method ?? "GET";
     try {
       switch (url.pathname) {

@@ -1,0 +1,457 @@
+#!/usr/bin/env bash
+# Fixture rehearsal for deploy-config.yml / rollback-config.yml -e component=model-catalog.
+# Uses a fake compose/runtime harness; exercises drift gate, candidate validation,
+# force-recreate scope, digest/readiness verification, recovery, and rollback.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/../../.." && pwd)
+tmp=$(mktemp -d)
+if [[ ${KEEP_TMP:-0} == 1 ]]; then
+    echo "fixture_tmp=$tmp" >&2
+else
+    trap 'rm -rf "$tmp"' EXIT
+fi
+
+state="$tmp/state"
+deploy="$tmp/deploy"
+private="$tmp/private"
+mkdir -p "$state" "$deploy/.ai-ops-state" "$deploy/services/routing/model-catalog" "$private/services/routing/model-catalog"
+
+cat >"$tmp/inventory" <<'EOF'
+[gateway]
+fixture ansible_connection=local ansible_host=127.0.0.1
+EOF
+
+cat >"$tmp/fake-runtime" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_STATE/runtime-calls"
+case "${1:-}" in
+  version) echo fixture-runtime ;;
+  inspect) echo sha256:fixture-image ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$tmp/fake-runtime"
+
+cat >"$tmp/fake-compose" <<'PY'
+#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+state = Path(os.environ["FAKE_STATE"])
+deploy = Path(os.environ["FAKE_DEPLOY_ROOT"])
+mode = os.environ.get("FAKE_MODE", "success")
+args = sys.argv[1:]
+with (state / "compose-calls").open("a") as out:
+    out.write(f"mode={mode} " + " ".join(args) + "\n")
+
+if args[:2] == ["version", "--short"]:
+    print("2.40.3")
+    raise SystemExit(0)
+for i, arg in enumerate(args):
+    if arg in {"ps", "exec", "up", "logs", "config"}:
+        command = arg
+        rest = args[i + 1 :]
+        break
+else:
+    raise SystemExit(2)
+
+config_path = deploy / "services/routing/model-catalog/config.yaml"
+config = config_path.read_bytes() if config_path.exists() else b""
+script_path = deploy / "services/routing/model-catalog/catalog.lua"
+script = script_path.read_bytes() if script_path.exists() else None
+old = b"OLD-CONFIG" in config
+new = b"NEW-CONFIG" in config
+protected_services = [
+    "model-catalog-netns", "catalog-cpa-relay",
+    "apisix-models-catalog-relay", "apisix-models",
+]
+
+def validate(data: bytes):
+    """Simulate /model-catalog validate-config: reject malformed/invalid."""
+    try:
+        text = data.decode()
+    except UnicodeDecodeError:
+        raise SystemExit(1)
+    if "cpa_base_url" not in text:
+        raise SystemExit(1)
+    if "[invalid-regex" in text or "INVALID" in text:
+        raise SystemExit(1)
+    digest = hashlib.sha256(data).hexdigest()
+    return {"version": 1, "config_digest": digest}
+
+def healthcheck_ok():
+    """Candidate container readiness: new config fails readiness in failure modes."""
+    if mode == "recovery-fails":
+        return False
+    if mode == "candidate-unready":
+        return old
+    if mode == "script-unready":
+        return script is not None and b"NEW-SCRIPT" not in script
+    return True
+
+if command == "ps":
+    if "-q" in rest:
+        service = rest[-1]
+        if service == "model-catalog":
+            if mode == "candidate-exit" and new:
+                raise SystemExit(0)  # empty output: container gone
+            # Fresh ID after each activation: count `up` calls.
+            activations = int((state / "activation-count").read_text() or "0") if (state / "activation-count").exists() else 0
+            print(f"me-container-v{activations}")
+        elif service in protected_services:
+            activations = int((state / "activation-count").read_text() or "0") if (state / "activation-count").exists() else 0
+            if mode == "protected-drift" and service == "catalog-cpa-relay" and activations > 0:
+                print(f"{service}-drifted")
+            else:
+                print(f"{service}-stable")
+        else:
+            raise SystemExit(2)
+    else:
+        print(json.dumps({"Service": "model-catalog", "State": "running"}))
+elif command == "up":
+    n = int((state / "activation-count").read_text() or "0") if (state / "activation-count").exists() else 0
+    (state / "activation-count").write_text(str(n + 1))
+elif command == "exec":
+    # rest: -T <service> <cmd...>
+    service = rest[1]
+    cmd = rest[2:]
+    if service != "model-catalog":
+        raise SystemExit(2)
+    if cmd[:2] == ["/model-catalog", "validate-config"]:
+        stdin = sys.stdin.buffer.read() if "-" in cmd[2:] else b""
+        data = stdin if cmd[2] == "-" else config
+        result = validate(data)
+        if cmd[3:4] == ["--script"]:
+            lua = stdin if cmd[4] == "-" else script
+            if lua is None or b"function select" not in lua or b"INVALID-LUA" in lua:
+                raise SystemExit(1)
+            result["script_digest"] = hashlib.sha256(lua).hexdigest()
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    elif cmd[:2] == ["/model-catalog", "healthcheck"]:
+        raise SystemExit(0 if healthcheck_ok() else 1)
+    else:
+        raise SystemExit(2)
+elif command == "config":
+    print(json.dumps({"services": {"model-catalog": {"image": "fixture-image"}}}))
+elif command == "logs":
+    print("starting")
+PY
+chmod +x "$tmp/fake-compose"
+
+old_cfg='cpa_base_url: http://cpa
+# OLD-CONFIG
+channels:
+  demo: {fetch_models: false}
+'
+new_cfg='cpa_base_url: http://cpa
+# NEW-CONFIG
+channels:
+  demo: {fetch_models: false, source_priority: [models.dev/openai]}
+'
+bad_cfg='cpa_base_url: http://cpa
+channels:
+  demo: {exclude: ["[invalid-regex"]}
+'
+
+old_lua='-- OLD-SCRIPT
+function select(m) return true end
+'
+new_lua='-- NEW-SCRIPT
+function select(m) return m.sources.aisix == true end
+'
+inc_cfg='cpa_base_url: http://cpa
+# NEW-CONFIG
+metadata:
+  include_models: ["**", "!**/gpt-image-*"]
+'
+remote_lua="$deploy/services/routing/model-catalog/catalog.lua"
+private_lua="$private/services/routing/model-catalog/catalog.lua"
+lua_state="$deploy/.ai-ops-state/model-catalog__catalog.lua"
+write_old() { printf '%s' "$old_cfg" >"$deploy/services/routing/model-catalog/config.yaml"; printf '%s' "$old_lua" >"$remote_lua"; }
+write_new_local() { printf '%s' "$new_cfg" >"$private/services/routing/model-catalog/config.yaml"; }
+set_baseline_old() { printf '%s' "$old_cfg" >"$deploy/.ai-ops-state/model-catalog__config.yaml.baseline"; }
+clear_calls() { : >"$state/compose-calls"; : >"$state/runtime-calls"; rm -f "$state/activation-count"; }
+assert_no_match() {
+    local pattern=$1 file=$2
+    if grep -Eq "$pattern" "$file"; then
+        echo "unexpected match '$pattern' in $file" >&2
+        exit 1
+    fi
+}
+
+eval "$(python3 "$root/ops/scripts/tests/fixture_env.py" shell "$tmp")"
+export AI_OPS_SHIM_COMPOSE="$tmp/fake-compose" AI_OPS_SHIM_RUNTIME="$tmp/fake-runtime"
+
+playbook() {
+    local operation=$1 mode_value=$2 output=$3 check=()
+    shift 3
+    [[ $mode_value == plan ]] && check=(--check --diff)
+    FAKE_STATE="$state" FAKE_DEPLOY_ROOT="$deploy" FAKE_MODE="${FAKE_MODE:-success}" \
+    ansible-playbook "$root/ops/ansible/playbooks/$operation.yml" -i "$tmp/inventory" "${check[@]}" \
+      -e component=model-catalog \
+      -e @"$tmp/fixture-vars.json" \
+      -e "ai_ops_config_dir=$private" \
+      -e "ai_ops_deploy_root=$deploy" \
+      -e "ai_ops_compose_cmd=$tmp/fake-compose" \
+      -e ai_ops_runtime=docker \
+      -e ai_ops_model_catalog_verify_retries=2 \
+      -e ai_ops_model_catalog_verify_delay_seconds=0 \
+      "$@" >"$output" 2>&1
+}
+
+# --- Plan: validate candidate, show diff, no upload or recreation ---
+write_old
+write_new_local
+set_baseline_old
+clear_calls
+playbook deploy-config plan "$tmp/plan.out"
+grep -q 'NEW-CONFIG' "$tmp/plan.out"           # diff shown
+grep -q 'config_digest' "$tmp/plan.out"         # validation digest shown
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+assert_no_match ' up ' "$state/compose-calls"
+
+# --- Approved apply: upload, recreate only model-catalog, verify ---
+clear_calls
+playbook deploy-config apply "$tmp/apply.out"
+assert_no_match 'fixture-protected-container-secret' "$tmp/apply.out"
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$new_cfg")
+cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$new_cfg")
+grep -q 'up -d --force-recreate --no-deps --no-build model-catalog' "$state/compose-calls"
+# Protected services were queried for identity but never recreated.
+assert_no_match ' up .*catalog-cpa-relay' "$state/compose-calls"
+assert_no_match ' up .*model-catalog-netns' "$state/compose-calls"
+receipt=$(find "$deploy/.ai-ops-state" -name 'receipt-model-catalog-[0-9]*.txt' | head -1)
+grep -q 'outcome=success' "$receipt"
+assert_no_match 'OLD-CONFIG|NEW-CONFIG|cpa_base_url' "$receipt"
+test "$(stat -c %a "$receipt")" = 600
+test "$(stat -c %a "$deploy/services/routing/model-catalog/config.yaml")" = 644
+
+# --- No-op: matching local/remote/baseline skips everything ---
+clear_calls
+playbook deploy-config apply "$tmp/noop.out"
+assert_no_match 'exec -T model-catalog' "$state/compose-calls"
+assert_no_match ' up ' "$state/compose-calls"
+
+# --- First adoption: matching local/remote establishes baseline without recreation ---
+write_old
+printf '%s' "$old_cfg" >"$private/services/routing/model-catalog/config.yaml"
+rm -f "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline"
+clear_calls
+playbook deploy-config apply "$tmp/adopt.out"
+cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$old_cfg")
+assert_no_match 'exec -T model-catalog' "$state/compose-calls"
+assert_no_match ' up ' "$state/compose-calls"
+
+# --- Invalid candidate fails validation; nothing uploaded/recreated ---
+write_old
+set_baseline_old
+printf '%s' "$bad_cfg" >"$private/services/routing/model-catalog/config.yaml"
+clear_calls
+if playbook deploy-config apply "$tmp/invalid.out"; then
+    echo 'invalid config unexpectedly succeeded' >&2
+    exit 1
+fi
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+assert_no_match ' up ' "$state/compose-calls"
+
+# --- Candidate readiness failure: restore old config, prove recovery ---
+write_old
+write_new_local
+set_baseline_old
+clear_calls
+rm -f "$deploy/.ai-ops-state"/receipt-model-catalog-failed-*.txt
+export FAKE_MODE=candidate-unready
+if playbook deploy-config apply "$tmp/fail.out"; then
+    echo 'unready candidate unexpectedly succeeded' >&2
+    exit 1
+fi
+unset FAKE_MODE
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$old_cfg")
+test "$(cat "$state/activation-count")" -eq 2
+grep -q 'recovery verification=passed' "$tmp/fail.out"
+failure_receipt=$(find "$deploy/.ai-ops-state" -name 'receipt-model-catalog-failed-*.txt' | head -1)
+grep -q 'outcome=candidate-failed-recovered' "$failure_receipt"
+test "$(stat -c %a "$failure_receipt")" = 600
+
+# --- Recovery also unready: recovery-required ---
+write_old
+write_new_local
+set_baseline_old
+clear_calls
+rm -f "$deploy/.ai-ops-state"/receipt-model-catalog-failed-*.txt
+export FAKE_MODE=recovery-fails
+if playbook deploy-config apply "$tmp/recfail.out"; then
+    echo 'recovery-fails unexpectedly succeeded' >&2
+    exit 1
+fi
+unset FAKE_MODE
+grep -q 'recovery verification=failed' "$tmp/recfail.out"
+recovery_receipt=$(find "$deploy/.ai-ops-state" -name 'receipt-model-catalog-failed-*.txt' | head -1)
+grep -q 'outcome=recovery-required' "$recovery_receipt"
+
+# --- Protected container drift during verification fails the deploy ---
+write_old
+write_new_local
+set_baseline_old
+clear_calls
+export FAKE_MODE=protected-drift
+if playbook deploy-config apply "$tmp/drift.out"; then
+    echo 'protected-drift unexpectedly succeeded' >&2
+    exit 1
+fi
+unset FAKE_MODE
+assert_no_match 'fixture-protected-container-secret' "$tmp/drift.out"
+grep -q 'protected container' "$tmp/drift.out" || grep -q 'catalog-cpa-relay' "$tmp/drift.out"
+
+# --- Guarded rollback restores the protected config ---
+printf '%s' "$new_cfg" >"$deploy/services/routing/model-catalog/config.yaml"
+printf '%s' "$new_cfg" >"$deploy/.ai-ops-state/model-catalog__config.yaml.baseline"
+printf '%s' "$old_cfg" >"$deploy/.ai-ops-state/model-catalog__config.yaml.predeploy"
+printf '%s' "$old_cfg" >"$private/services/routing/model-catalog/config.yaml"
+clear_calls
+playbook rollback-config apply "$tmp/rollback.out"
+assert_no_match 'fixture-protected-container-secret' "$tmp/rollback.out"
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$old_cfg")
+rollback_receipt=$(find "$deploy/.ai-ops-state" -name 'receipt-model-catalog-rollback-*.txt' | head -1)
+grep -q 'outcome=success' "$rollback_receipt"
+
+# --- Independent remote drift blocks rollback ---
+printf '%s' "$new_cfg" >"$deploy/.ai-ops-state/model-catalog__config.yaml.baseline"
+printf 'cpa_base_url: http://drifted\n' >"$deploy/services/routing/model-catalog/config.yaml"
+clear_calls
+if playbook rollback-config apply "$tmp/rollback-drift.out"; then
+    echo 'rollback over independent drift unexpectedly succeeded' >&2
+    exit 1
+fi
+grep -q 'changed independently' "$tmp/rollback-drift.out"
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf 'cpa_base_url: http://drifted\n')
+assert_no_match ' up ' "$state/compose-calls"
+
+# ===== catalog.lua: the second profile file =====
+reset_profile() {
+    write_old
+    set_baseline_old
+    printf '%s' "$old_cfg" >"$private/services/routing/model-catalog/config.yaml"
+    printf '%s' "$old_lua" >"$lua_state.baseline"
+    rm -f "$lua_state.predeploy" "$deploy/.ai-ops-state/model-catalog__config.yaml.predeploy" "$deploy/.ai-ops-state"/receipt-model-catalog-*.txt
+    clear_calls
+}
+up_count() { grep -c ' up ' "$state/compose-calls" || true; }
+
+# --- No private catalog.lua: include_models allowed, remote catalog.lua untouched ---
+reset_profile
+rm -f "$private_lua" "$lua_state.baseline"
+printf '%s' "$inc_cfg" >"$private/services/routing/model-catalog/config.yaml"
+playbook deploy-config apply "$tmp/noscript.out"
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$inc_cfg")
+cmp -s "$remote_lua" <(printf '%s' "$old_lua")
+test ! -e "$lua_state.baseline"
+test "$(up_count)" -eq 1
+grep -q 'validate-config /app/config.yaml --script /app/catalog.lua' "$state/compose-calls"
+
+# --- Custom catalog.lua with include_models fails before upload, under --check and apply ---
+for run in plan apply; do
+    reset_profile
+    printf '%s' "$inc_cfg" >"$private/services/routing/model-catalog/config.yaml"
+    printf '%s' "$new_lua" >"$private_lua"
+    if playbook deploy-config "$run" "$tmp/combo-$run.out"; then
+        echo "custom catalog.lua with include_models unexpectedly passed ($run)" >&2
+        exit 1
+    fi
+    grep -q 'model-catalog/catalog.lua is a custom membership script' "$tmp/combo-$run.out"
+    grep -q 'model-catalog/config.yaml sets metadata.include_models' "$tmp/combo-$run.out"
+    cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+    cmp -s "$remote_lua" <(printf '%s' "$old_lua")
+    assert_no_match 'exec|up' "$state/compose-calls"
+done
+
+# --- Check mode with both files changed validates both and uploads nothing ---
+reset_profile
+write_new_local
+printf '%s' "$new_lua" >"$private_lua"
+playbook deploy-config plan "$tmp/plan-both.out"
+grep -q 'NEW-SCRIPT' "$tmp/plan-both.out"
+grep -q 'validate-config /app/config.yaml --script -' "$state/compose-calls"
+grep -q 'validate-config -' "$state/compose-calls"
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+cmp -s "$remote_lua" <(printf '%s' "$old_lua")
+test ! -e "$lua_state.predeploy"
+assert_no_match ' up ' "$state/compose-calls"
+
+# --- Invalid catalog.lua fails validation; nothing uploaded ---
+reset_profile
+printf -- '-- INVALID-LUA
+function select(m) return 1 end
+' >"$private_lua"
+if playbook deploy-config apply "$tmp/badlua.out"; then
+    echo 'invalid catalog.lua unexpectedly succeeded' >&2
+    exit 1
+fi
+cmp -s "$remote_lua" <(printf '%s' "$old_lua")
+assert_no_match ' up ' "$state/compose-calls"
+
+# --- Script-only change: validated with --script -, uploaded, one recreate, verified ---
+reset_profile
+printf '%s' "$new_lua" >"$private_lua"
+playbook deploy-config apply "$tmp/script-only.out"
+cmp -s "$remote_lua" <(printf '%s' "$new_lua")
+cmp -s "$lua_state.baseline" <(printf '%s' "$new_lua")
+cmp -s "$lua_state.predeploy" <(printf '%s' "$old_lua")
+cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.predeploy" <(printf '%s' "$old_cfg")
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+test "$(up_count)" -eq 1
+grep -q 'validate-config /app/config.yaml --script -' "$state/compose-calls"
+assert_no_match 'validate-config - ' "$state/compose-calls"
+receipt=$(find "$deploy/.ai-ops-state" -name 'receipt-model-catalog-[0-9]*.txt' | head -1)
+grep -q '^uploaded=model-catalog/catalog.lua$' "$receipt"
+grep -q "^script_digest=$(printf '%s' "$new_lua" | sha256sum | cut -d' ' -f1)$" "$receipt"
+assert_no_match 'NEW-SCRIPT|select' "$receipt"
+
+# --- Rollback after the script-only deploy restores catalog.lua, keeps config, recreates once ---
+clear_calls
+playbook rollback-config apply "$tmp/rollback-script.out"
+cmp -s "$remote_lua" <(printf '%s' "$old_lua")
+cmp -s "$lua_state.baseline" <(printf '%s' "$old_lua")
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+test "$(up_count)" -eq 1
+
+# --- Both files changed and verification fails: both restored, recreated on the restored pair ---
+reset_profile
+write_new_local
+printf '%s' "$new_lua" >"$private_lua"
+export FAKE_MODE=script-unready
+if playbook deploy-config apply "$tmp/both-fail.out"; then
+    echo 'failed verification unexpectedly succeeded' >&2
+    exit 1
+fi
+unset FAKE_MODE
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$old_cfg")
+cmp -s "$remote_lua" <(printf '%s' "$old_lua")
+cmp -s "$deploy/.ai-ops-state/model-catalog__config.yaml.baseline" <(printf '%s' "$old_cfg")
+cmp -s "$lua_state.baseline" <(printf '%s' "$old_lua")
+test "$(up_count)" -eq 2
+grep -q 'recovery verification=passed' "$tmp/both-fail.out"
+
+# --- Both files changed: one recreate; first adoption of an existing script needs no recreate ---
+reset_profile
+write_new_local
+printf '%s' "$new_lua" >"$private_lua"
+playbook deploy-config apply "$tmp/both.out"
+cmp -s "$deploy/services/routing/model-catalog/config.yaml" <(printf '%s' "$new_cfg")
+cmp -s "$remote_lua" <(printf '%s' "$new_lua")
+test "$(up_count)" -eq 1
+rm -f "$lua_state.baseline"
+clear_calls
+playbook deploy-config apply "$tmp/adopt-script.out"
+cmp -s "$lua_state.baseline" <(printf '%s' "$new_lua")
+assert_no_match ' up ' "$state/compose-calls"
+rm -f "$private_lua"
+
+echo 'ansible_model_catalog_config=passed'

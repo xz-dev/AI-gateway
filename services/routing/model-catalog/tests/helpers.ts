@@ -54,7 +54,7 @@ export function captureLog(): CapturedLog {
 }
 
 export function tempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "models-enricher-test-"));
+  return mkdtemp(join(tmpdir(), "model-catalog-test-"));
 }
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

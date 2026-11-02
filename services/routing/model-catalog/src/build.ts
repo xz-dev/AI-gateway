@@ -1,5 +1,5 @@
 // Catalog build pipeline (design D5).
-// prepare(): per authority generation — membership, include_models selection, the compile set
+// prepare(): per authority generation — the script's members in output order, include_models selection, the compile set
 //   (kept plus their inherit/metadata_from closure) and one compile in a short-lived worker.
 // project(): per client version — on-demand @cpa-upstream reads, record-source resolution,
 //   rule overrides and gateway post-processing. Intermediates are function-local.
@@ -11,6 +11,7 @@ import { makeResolver, matchRules, neededSites, runCompileWorker, selectModels, 
 import type { Channel, CpaClient } from "./cpa.ts";
 import { exactModelID, mergePatch, type Row } from "./json.ts";
 import type { Logger } from "./log.ts";
+import type { MemberSource } from "./membership.ts";
 import { postprocess } from "./postprocess.ts";
 import type { ReadOptions } from "./read-cache.ts";
 import { readCpaUpstreamChannels, type UpstreamChannelRead } from "./upstream.ts";
@@ -20,7 +21,7 @@ const PROTECTED = new Set(["slug", "id"]);
 export class CatalogUnavailableError extends Error {}
 export class CatalogConfigError extends Error {}
 
-export type MemberOrigin = "cpa" | "aisix" | "static";
+export type MemberOrigin = MemberSource;
 
 export interface Member {
   readonly id: string;
@@ -54,6 +55,29 @@ export interface BuildDeps {
   readonly log: Logger;
 }
 
+/** Unicode code-point order; UTF-16 surrogates (U+10000 and up) sort after U+E000–U+FFFF. */
+function compareCodePoints(a: string, b: string): number {
+  const length = Math.min(a.length, b.length);
+  for (let index = 0; index < length; index++) {
+    let x = a.charCodeAt(index);
+    let y = b.charCodeAt(index);
+    if (x === y) continue;
+    if (x >= 0xd800) x += x < 0xe000 ? 0x2000 : -0x800;
+    if (y >= 0xd800) y += y < 0xe000 ? 0x2000 : -0x800;
+    return x - y;
+  }
+  return a.length - b.length;
+}
+
+/** Catalog output order: IDs without `/` first, then all others; each group in code-point order. */
+export function compareCatalogIDs(a: string, b: string): number {
+  const aBare = !a.includes("/");
+  return aBare !== !b.includes("/") ? (aBare ? -1 : 1) : compareCodePoints(a, b);
+}
+
+/** Codex `priority` for the member at output position `index`: 1-based, ascending sorts first. */
+export const codexPriority = (index: number) => index + 1;
+
 /** Hidden pool IDs: `<custom key>/<name>`. */
 function poolIDs(config: GatewayConfig): Set<string> {
   const out = new Set<string>();
@@ -64,27 +88,18 @@ function poolIDs(config: GatewayConfig): Set<string> {
 export async function prepare(deps: BuildDeps, authority: AuthorityGeneration, signal?: AbortSignal): Promise<PreparedGeneration> {
   const { config } = deps;
   if (authority.cpa === "failed") throw new CatalogUnavailableError("CPA native manifest unavailable");
-  const conflicts = runtimeConflicts(authority.channels, config.customChannels.keys(), authority.admitted);
+  const conflicts = runtimeConflicts(authority.channels, config.customChannels.keys(), authority.members);
   if (conflicts.length > 0) throw new CatalogConfigError(conflicts.join("; "));
 
   // Parsed here and owned by this build only; the authority keeps just the validated text.
   const rows = nativeRows(authority);
-  const members: Member[] = [];
-  const seen = new Set<string>();
-  for (const model of authority.admitted) {
-    seen.add(model.id);
-    members.push({ id: model.id, origin: "cpa", row: rows[model.index], preserveNative: model.preserveNative });
-  }
-  for (const id of authority.supplemental) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    members.push({ id, origin: "aisix", preserveNative: false });
-  }
-  for (const model of config.staticModels) {
-    if (seen.has(model.slug)) continue;
-    seen.add(model.slug);
-    members.push({ id: model.slug, origin: "static", preserveNative: false });
-  }
+  // The membership script settled each member's source (and so its CPA base row); output order is
+  // fixed once per generation.
+  const members: Member[] = authority.members.map((member) =>
+    member.origin === "cpa" ? { id: member.id, origin: member.origin, row: rows[member.index!], preserveNative: member.preserveNative } : { id: member.id, origin: member.origin, preserveNative: false },
+  );
+  members.sort((a, b) => compareCatalogIDs(a.id, b.id));
+  const seen = new Set(members.map((member) => member.id));
 
   const selection = selectModels(config.metadata, members.map((member) => member.id));
   const kept = new Set(selection.kept);
@@ -261,11 +276,19 @@ export async function project(deps: BuildDeps, prepared: PreparedGeneration, opt
     syncMaxContextWindow: (slug) => synced.has(slug),
     log: deps.log,
   });
+  // Members are already in output order; `priority` is the one field rewritten on passthrough rows,
+  // which get a shallow copy so the generation's native row stays untouched.
   const models: Row[] = [];
   for (const member of prepared.members) {
     if (!prepared.kept.has(member.id)) continue;
     const entry = entries.get(member.id);
-    if (entry && exactModelID(entry) !== "") models.push(entry);
+    if (!entry || exactModelID(entry) === "") continue;
+    const priority = codexPriority(models.length);
+    if (preserveNative.has(member.id)) models.push({ ...entry, priority });
+    else {
+      entry.priority = priority;
+      models.push(entry);
+    }
   }
   return { models, entries, staleInputs };
 }

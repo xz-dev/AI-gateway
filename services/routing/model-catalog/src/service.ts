@@ -305,6 +305,10 @@ export class CatalogService {
     try {
       const outcome = await this.owner.refresh({ bypass: true, signal });
       staleInputs += outcome.staleInputs + (outcome.generation.aisix === "failed" ? 1 : 0);
+      if (outcome.scriptError) {
+        // The generation still served keeps its table; the attempt is reported as failed.
+        return { ok: false, at: this.clock(), staleInputs, status: 500, error: outcome.scriptError.message };
+      }
       if (outcome.generation.cpa === "failed") {
         return { ok: false, at: this.clock(), staleInputs, status: 502, error: outcome.errors.join("; ") || "CPA native manifest unavailable" };
       }
@@ -337,6 +341,11 @@ export class CatalogService {
     else if (table.staleInputs > 0) notice = { level: "warning", text: "部分输入刷新失败；显示由最后成功输入重新合成的目录" };
     if (attempted && !attempted.ok) {
       notice = { level: "warning", text: `上次刷新失败 · ${new Date(attempted.at).toISOString()}${attempted.error ? ` · ${attempted.error}` : ""}${notice ? ` · ${notice.text}` : ""}` };
+    }
+    // A scheduled authority collection can fail on catalog.lua without a table refresh job.
+    const failure = this.owner.scriptFailure();
+    if (failure && !(attempted && !attempted.ok && attempted.at >= failure.at)) {
+      notice = { level: "warning", text: `catalog.lua 执行失败 · ${new Date(failure.at).toISOString()} · ${failure.error.message} · 仍在提供上一代目录${notice ? ` · ${notice.text}` : ""}` };
     }
     const page = { notice, lastSuccess: this.#lastSuccess, nextScheduled: this.#nextScheduled, renderedAt: table?.at ?? this.clock() };
     return table ? this.#tableReply(200, page) : { status: 200, contentType: HTML, body: renderTableHead(page) + TABLE_TAIL };

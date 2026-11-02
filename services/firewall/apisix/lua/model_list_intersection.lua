@@ -14,17 +14,18 @@ local string_lower = string.lower
 local string_match = string.match
 local table_concat = table.concat
 local table_insert = table.insert
+local table_sort = table.sort
 local tonumber = tonumber
 local tostring = tostring
 local type = type
 
 local _M = {}
 
--- basic 腿：Sub2API（组 entitlement 名单）；original 腿：model-catalog 边车 → apisix-models → enricher
+-- basic 腿：Sub2API（组 entitlement 名单）；original 腿：apisix-models（front-catalog 直连）→ model-catalog
 local BASIC_UPSTREAM_HOST = "ai-sse-keepalive-ingress-relay"
 local BASIC_UPSTREAM_PORT = 8080
-local ORIGINAL_UPSTREAM_HOST = "model-catalog-sidecar"
-local ORIGINAL_UPSTREAM_PORT = 8080
+local ORIGINAL_UPSTREAM_HOST = "apisix-models"
+local ORIGINAL_UPSTREAM_PORT = 9080
 local BASIC_MAX_BYTES = 64 * 1024 * 1024
 local ORIGINAL_MAX_BYTES = 64 * 1024 * 1024
 local FINAL_MAX_BYTES = 64 * 1024 * 1024
@@ -39,9 +40,9 @@ local ACTIVE_KEY = "active"
 local ACTIVE_LEASE_SECONDS = 660
 -- One shared key serializes every external models request across callers and workers.
 local MAX_INFLIGHT = 1
--- 槽位占满时阻塞等待：后续请求通常能命中 enricher 的 catalog flight 缓存
+-- 槽位占满时阻塞等待：后续请求通常能命中 model-catalog 的 catalog flight 缓存
 -- （leader 一次构建，follower 直接取结果），等待即复用而非排队重做。
--- 等待预算需覆盖 enricher 的 OverallDeadline(25s) 冷启动构建上限。
+-- 等待预算需覆盖 model-catalog 的 OverallDeadline(25s) 冷启动构建上限。
 local ACQUIRE_WAIT_SECONDS = 30
 local ACQUIRE_RETRY_DELAY = 0.1
 
@@ -306,7 +307,7 @@ local function object_fields(body, start)
     end
 end
 
-local function filter_original(document, allowed, raw)
+local function catalog_records(document, raw)
     local source, err = catalog(document)
     if not source then
         return nil, err
@@ -324,7 +325,7 @@ local function filter_original(document, allowed, raw)
         return nil, "model collection boundary missing"
     end
 
-    local filtered = {}
+    local records = {}
     local pos = skip_space(raw, first + 1)
     for _, item in ipairs(source.items) do
         local id, id_err = model_id(item, source.id_field)
@@ -341,15 +342,40 @@ local function filter_original(document, allowed, raw)
                 seen[key] = true
             end
         end
-        if allowed[id] then
-            table_insert(filtered, raw:sub(pos, finish - 1))
-        end
+        table_insert(records, {id = id, fragment = raw:sub(pos, finish - 1),
+            bare = not id:find("/", 1, true), index = #records + 1})
         pos = skip_space(raw, finish)
         if raw:sub(pos, pos) == "," then
             pos = skip_space(raw, pos + 1)
         end
     end
-    return raw:sub(1, first) .. table_concat(filtered, ",") .. raw:sub(last - 1)
+    return records, first, last
+end
+
+local function rewrite_catalog(document, raw, allowed)
+    local records, first, last = catalog_records(document, raw)
+    if not records then
+        return nil, first
+    end
+    if not allowed then
+        table_sort(records, function(a, b)
+            if a.bare ~= b.bare then
+                return a.bare
+            end
+            if a.id ~= b.id then
+                -- LuaJIT 按 UTF-8 字节比较；有效 UTF-8 的字节序等于 Unicode 码点序。
+                return a.id < b.id
+            end
+            return a.index < b.index
+        end)
+    end
+    local fragments = {}
+    for _, record in ipairs(records) do
+        if not allowed or allowed[record.id] then
+            table_insert(fragments, record.fragment)
+        end
+    end
+    return raw:sub(1, first) .. table_concat(fragments, ",") .. raw:sub(last - 1)
 end
 
 local function apply_upstream_headers(headers)
@@ -358,6 +384,15 @@ local function apply_upstream_headers(headers)
             ngx.header[name] = value
         end
     end
+end
+
+local function basic_passthrough(response)
+    -- 提前固定 opaque 404，避免 header_filter 改写后 ngx.exit(401) 再次设置状态。
+    if response.status == 401 then
+        return 404, ""
+    end
+    apply_upstream_headers(response.headers)
+    return response.status, response.body
 end
 
 local function gateway_error(reason)
@@ -468,6 +503,26 @@ local function merge_vary(value)
     return table_concat(merged, ", ")
 end
 
+local function final_response(response, body)
+    local etag = '"apisix-' .. ngx.md5(body) .. '"'
+    apply_upstream_headers(response.headers)
+    ngx.header["Content-Type"] =
+        response_header(response.headers, "content-type") or "application/json"
+    ngx.header["Cache-Control"] = "private, no-cache"
+    ngx.header["ETag"] = etag
+    ngx.header["Vary"] = merge_vary(response_header(response.headers, "vary"))
+
+    if ngx.var.http_if_match and
+       not etag_matches(ngx.var.http_if_match, etag, false) then
+        return 412, ""
+    end
+    if etag_matches(ngx.var.http_if_none_match, etag, true) then
+        return 304, ""
+    end
+
+    return response.status, body
+end
+
 function _M.admit(_, ctx)
     local path = ngx.var.uri
     if ngx.req.get_method() ~= "GET" or
@@ -479,6 +534,31 @@ function _M.admit(_, ctx)
     if not acquired then
         return busy_response(acquire_err)
     end
+end
+
+function _M.list(_, ctx)
+    local status, body, headers = _M.admit(_, ctx)
+    if status then
+        return status, body, headers
+    end
+
+    local basic, basic_err = fetch(BASIC_UPSTREAM_HOST, BASIC_UPSTREAM_PORT,
+        ngx.var.uri, ngx.var.args, BASIC_MAX_BYTES, copy_request_headers(BASIC_UPSTREAM_HOST))
+    if not basic then
+        return gateway_error(basic_err)
+    end
+    if basic.status >= 200 and basic.status < 300 then
+        local document, decode_err = record_json.decode(basic.body)
+        local ordered, order_err
+        if document then
+            ordered, order_err = rewrite_catalog(document, basic.body)
+        end
+        if ordered then
+            return final_response(basic, ordered)
+        end
+        core.log.warn("model-list ordering skipped: ", tostring(decode_err or order_err))
+    end
+    return basic_passthrough(basic)
 end
 
 function _M.run(_, ctx)
@@ -493,17 +573,16 @@ function _M.run(_, ctx)
         return
     end
 
-    -- 串行双腿：basic 先行（隐式鉴权 + entitlement）；非 2xx 原样透传且不发 original 腿
+    -- 串行双腿：basic 先行（隐式鉴权 + entitlement）；非 2xx 不发 original 腿，401 预先塑形为 opaque 404
     -- basic 腿携带与 original 相同的 query：Sub2API 带 client_version 走本地生成（mapping 并集 ∩ 组清单），
-    -- slug 集合即组 entitlement；其元数据不可信（硬编码兑底），交集时仅取 slug、内容取自 enricher
+    -- slug 集合即组 entitlement；其元数据不可信（硬编码兑底），交集时仅取 slug、内容取自 model-catalog
     local basic, basic_err = fetch(BASIC_UPSTREAM_HOST, BASIC_UPSTREAM_PORT,
         path, raw_query, BASIC_MAX_BYTES, copy_request_headers(BASIC_UPSTREAM_HOST))
     if not basic then
         return gateway_error(basic_err)
     end
     if basic.status < 200 or basic.status >= 300 then
-        apply_upstream_headers(basic.headers)
-        return basic.status, basic.body
+        return basic_passthrough(basic)
     end
 
     local original, original_err = fetch(ORIGINAL_UPSTREAM_HOST, ORIGINAL_UPSTREAM_PORT,
@@ -531,7 +610,7 @@ function _M.run(_, ctx)
         return gateway_error("invalid basic catalog: " .. tostring(allowed_err))
     end
 
-    local body, filter_err = filter_original(original_document, allowed, original.body)
+    local body, filter_err = rewrite_catalog(original_document, original.body, allowed)
     if not body then
         return gateway_error("invalid original catalog: " .. tostring(filter_err))
     end
@@ -539,23 +618,8 @@ function _M.run(_, ctx)
         return gateway_error("filtered catalog exceeds limit")
     end
 
-    local etag = '"apisix-' .. ngx.md5(body) .. '"'
-    apply_upstream_headers(original.headers)
-    ngx.header["Content-Type"] =
-        response_header(original.headers, "content-type") or "application/json"
-    ngx.header["Cache-Control"] = "private, no-cache"
-    ngx.header["ETag"] = etag
-    ngx.header["Vary"] = merge_vary(response_header(original.headers, "vary"))
-
-    if ngx.var.http_if_match and
-       not etag_matches(ngx.var.http_if_match, etag, false) then
-        return 412, ""
-    end
-    if etag_matches(ngx.var.http_if_none_match, etag, true) then
-        return 304, ""
-    end
-
-    return 200, body
+    original.status = 200
+    return final_response(original, body)
 end
 
 return _M

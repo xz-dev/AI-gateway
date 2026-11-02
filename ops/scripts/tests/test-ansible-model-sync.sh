@@ -46,6 +46,9 @@ args = sys.argv[1:]
 with (state / "compose-calls").open("a") as out:
     out.write(f"mode={mode} " + " ".join(args) + "\n")
 
+if args[:2] == ["version", "--short"]:
+    print("2.40.3")
+    raise SystemExit(0)
 for i, arg in enumerate(args):
     if arg in {"ps", "exec", "up", "logs"}:
         command = arg
@@ -138,20 +141,27 @@ chmod +x "$tmp/fake-compose"
 
 cat >"$tmp/no-hook.yml" <<'EOF'
 ---
-- name: deploy-file compatibility without verification hook
+- name: ai_ops_managed_file deploy without verification hook
   hosts: gateway
   gather_facts: false
+  module_defaults:
+    community.docker.docker_compose_v2:
+      project_src: "{{ ai_ops_compose_project_src }}"
+      project_name: "{{ ai_ops_compose_project }}"
+      files: "{{ ai_ops_compose_files }}"
+      env_files: "{{ ai_ops_compose_env_files }}"
   roles:
     - role: ai_ops
   tasks:
-    - ansible.builtin.include_role:
-        name: ai_ops
-        tasks_from: deploy-file
+    - name: Deploy a file with activation and no verifier
+      ansible.builtin.include_role:
+        name: ai_ops_managed_file
+        tasks_from: deploy
       vars:
-        ai_file_label: no-hook.txt
-        ai_file_local: "{{ fixture_local }}"
-        ai_file_remote: "{{ fixture_remote }}"
-        ai_activate_cmd: /bin/true
+        ai_ops_managed_file_label: no-hook.txt
+        ai_ops_managed_file_local: "{{ fixture_local }}"
+        ai_ops_managed_file_remote: "{{ fixture_remote }}"
+        ai_ops_managed_file_activate: {service: cpa-model-sync, dependencies: false}
 EOF
 
 old='{"cpa_url":"http://fixture","client_version":"test","channels":{"fixture":{"include":["^OLD$"]}}}'
@@ -169,27 +179,28 @@ assert_no_match() {
     fi
 }
 
+eval "$(python3 "$root/ops/scripts/tests/fixture_env.py" shell "$tmp")"
+export AI_OPS_SHIM_COMPOSE="$tmp/fake-compose" AI_OPS_SHIM_RUNTIME="$tmp/fake-runtime"
+common=(-e @"$tmp/fixture-vars.json" -e "ai_ops_config_dir=$private" -e "ai_ops_deploy_root=$deploy"
+        -e "ai_ops_compose_cmd=$tmp/fake-compose" -e ai_ops_runtime=docker)
+
 playbook() {
-    local tag=$1 mode_value=$2 output=$3
+    local operation=$1 mode_value=$2 output=$3 check=()
     shift 3
+    [[ $mode_value == plan ]] && check=(--check --diff)
     FAKE_STATE="$state" FAKE_DEPLOY_ROOT="$deploy" FAKE_MODE="${FAKE_MODE:-success}" \
-    ansible-playbook "$root/ops/ansible/ops.yml" -i "$tmp/inventory" --tags "$tag" \
-      -e "ai_ops_config_dir=$private" \
-      -e "ai_ops_deploy_root=$deploy" \
-      -e "ai_ops_compose_cmd=$tmp/fake-compose" \
-      -e "ai_ops_runtime=$tmp/fake-runtime" \
-      -e "ai_ops_mode=$mode_value" \
+    ansible-playbook "$root/ops/ansible/playbooks/$operation.yml" -i "$tmp/inventory" "${check[@]}" \
+      -e component=cpa-model-sync "${common[@]}" \
       -e ai_ops_model_sync_verify_retries=1 \
       -e ai_ops_model_sync_verify_delay_seconds=0 \
       "$@" >"$output" 2>&1
 }
 
-# Existing deploy-file callers retain upload/activation/baseline behavior without a verifier hook.
+# ai_ops_managed_file callers retain upload/activation/baseline behavior without a verifier hook.
 printf old >"$deploy/no-hook.txt"
 printf old >"$deploy/.ai-ops-state/no-hook.txt.baseline"
 printf new >"$private/no-hook.txt"
-ANSIBLE_ROLES_PATH="$root/ops/ansible/roles" ansible-playbook "$tmp/no-hook.yml" -i "$tmp/inventory" \
-  -e "ai_ops_deploy_root=$deploy" -e ai_ops_mode=apply \
+FAKE_STATE="$state" FAKE_DEPLOY_ROOT="$deploy" ansible-playbook "$tmp/no-hook.yml" -i "$tmp/inventory" "${common[@]}" \
   -e "fixture_local=$private/no-hook.txt" -e "fixture_remote=$deploy/no-hook.txt" \
   >"$tmp/no-hook.out" 2>&1
 cmp -s "$deploy/no-hook.txt" <(printf new)
@@ -200,7 +211,7 @@ write_old
 write_new_local
 set_baseline_old
 clear_calls
-playbook deploy-model-sync plan "$tmp/plan.out"
+playbook deploy-config plan "$tmp/plan.out"
 grep -q 'NEW' "$tmp/plan.out"
 grep -q 'OLD' "$tmp/plan.out"
 cmp -s "$deploy/services/cpa/cpa-model-sync/config.json" <(printf '%s' "$old")
@@ -209,7 +220,7 @@ approval=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appr
 
 # Stale approval blocks before upload.
 clear_calls
-if playbook deploy-model-sync apply "$tmp/stale.out" -e ai_ops_model_sync_approved_digest="$(printf 'f%.0s' {1..64})"; then
+if playbook deploy-config apply "$tmp/stale.out" -e ai_ops_model_sync_approved_digest="$(printf 'f%.0s' {1..64})"; then
     echo 'stale approval unexpectedly succeeded' >&2
     exit 1
 fi
@@ -218,7 +229,7 @@ assert_no_match ' up ' "$state/compose-calls"
 
 # Approved apply uploads, recreates only the sidecar, and verifies read-back.
 clear_calls
-FAKE_MODE=success playbook deploy-model-sync apply "$tmp/apply.out" -e ai_ops_model_sync_approved_digest="$approval"
+FAKE_MODE=success playbook deploy-config apply "$tmp/apply.out" -e ai_ops_model_sync_approved_digest="$approval"
 cmp -s "$deploy/services/cpa/cpa-model-sync/config.json" <(printf '%s' "$new")
 cmp -s "$deploy/.ai-ops-state/cpa-model-sync__config.json.baseline" <(printf '%s' "$new")
 grep -q 'up -d --force-recreate --no-deps --no-build cpa-model-sync' "$state/compose-calls"
@@ -229,9 +240,9 @@ chmod 600 "$private/services/cpa/cpa-model-sync/config.json"
 write_old
 set_baseline_old
 clear_calls
-FAKE_MODE=success playbook deploy-model-sync plan "$tmp/mode-plan.out" >/dev/null
+FAKE_MODE=success playbook deploy-config plan "$tmp/mode-plan.out" >/dev/null
 approval_mode=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["approval_digest"])' "$state/preview.json")
-FAKE_MODE=success playbook deploy-model-sync apply "$tmp/mode-apply.out" -e ai_ops_model_sync_approved_digest="$approval_mode"
+FAKE_MODE=success playbook deploy-config apply "$tmp/mode-apply.out" -e ai_ops_model_sync_approved_digest="$approval_mode"
 test "$(stat -c %a "$deploy/services/cpa/cpa-model-sync/config.json")" = 644
 printf '%s' "$new" >"$private/services/cpa/cpa-model-sync/config.json"
 receipt=$(find "$deploy/.ai-ops-state" -name 'receipt-model-sync-*.txt' | head -1)
@@ -245,12 +256,12 @@ write_old
 printf '%s' "$old" >"$private/services/cpa/cpa-model-sync/config.json"
 rm -f "$deploy/.ai-ops-state/cpa-model-sync__config.json.baseline"
 clear_calls
-playbook deploy-model-sync apply "$tmp/adopt.out"
+playbook deploy-config apply "$tmp/adopt.out"
 cmp -s "$deploy/.ai-ops-state/cpa-model-sync__config.json.baseline" <(printf '%s' "$old")
 assert_no_match 'exec -T cpa-model-sync' "$state/compose-calls"
 assert_no_match ' up ' "$state/compose-calls"
 clear_calls
-playbook deploy-model-sync apply "$tmp/noop.out"
+playbook deploy-config apply "$tmp/noop.out"
 assert_no_match 'exec -T cpa-model-sync' "$state/compose-calls"
 assert_no_match ' up ' "$state/compose-calls"
 
@@ -260,12 +271,12 @@ for failure in candidate-mismatch candidate-no-summary candidate-malformed candi
     write_new_local
     set_baseline_old
     clear_calls
-    FAKE_MODE=success playbook deploy-model-sync plan "$tmp/$failure-plan.out"
+    FAKE_MODE=success playbook deploy-config plan "$tmp/$failure-plan.out"
     approval=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["approval_digest"])' "$state/preview.json")
     clear_calls
     rm -f "$deploy/.ai-ops-state"/receipt-model-sync-failed-*.txt
     export FAKE_MODE=$failure
-    if playbook deploy-model-sync apply "$tmp/$failure.out" -e ai_ops_model_sync_approved_digest="$approval"; then
+    if playbook deploy-config apply "$tmp/$failure.out" -e ai_ops_model_sync_approved_digest="$approval"; then
         echo "$failure unexpectedly succeeded" >&2
         exit 1
     fi
@@ -284,12 +295,12 @@ write_old
 write_new_local
 set_baseline_old
 clear_calls
-FAKE_MODE=success playbook deploy-model-sync plan "$tmp/recovery-plan.out"
+FAKE_MODE=success playbook deploy-config plan "$tmp/recovery-plan.out"
 approval=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["approval_digest"])' "$state/preview.json")
 clear_calls
 rm -f "$deploy/.ai-ops-state"/receipt-model-sync-failed-*.txt
 export FAKE_MODE=recovery-mismatch
-if playbook deploy-model-sync apply "$tmp/recovery-mismatch.out" -e ai_ops_model_sync_approved_digest="$approval"; then
+if playbook deploy-config apply "$tmp/recovery-mismatch.out" -e ai_ops_model_sync_approved_digest="$approval"; then
     echo 'recovery mismatch unexpectedly succeeded' >&2
     exit 1
 fi
@@ -304,7 +315,7 @@ write_old
 set_baseline_old
 printf '%s' '{invalid' >"$private/services/cpa/cpa-model-sync/config.json"
 clear_calls
-if playbook deploy-model-sync plan "$tmp/invalid.out"; then
+if playbook deploy-config plan "$tmp/invalid.out"; then
     echo 'invalid policy unexpectedly succeeded' >&2
     exit 1
 fi
@@ -320,7 +331,7 @@ import json, sys
 json.dump({"current_state_digest":"1"*64,"image_identity":"sha256:fixture-image"}, open(sys.argv[1], "w"))
 PY
 clear_calls
-playbook rollback-model-sync apply "$tmp/rollback.out"
+playbook rollback-config apply "$tmp/rollback.out"
 cmp -s "$deploy/services/cpa/cpa-model-sync/config.json" <(printf '%s' "$old")
 cmp -s "$deploy/.ai-ops-state/cpa-model-sync__config.json.baseline" <(printf '%s' "$old")
 
@@ -328,7 +339,7 @@ cmp -s "$deploy/.ai-ops-state/cpa-model-sync__config.json.baseline" <(printf '%s
 printf '%s' "$new" >"$deploy/.ai-ops-state/cpa-model-sync__config.json.baseline"
 printf '%s' '{"independent":true}' >"$deploy/services/cpa/cpa-model-sync/config.json"
 clear_calls
-if playbook rollback-model-sync apply "$tmp/rollback-drift.out"; then
+if playbook rollback-config apply "$tmp/rollback-drift.out"; then
     echo 'rollback over independent drift unexpectedly succeeded' >&2
     exit 1
 fi

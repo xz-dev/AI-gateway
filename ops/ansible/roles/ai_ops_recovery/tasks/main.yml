@@ -1,0 +1,73 @@
+---
+- name: Require the supported Docker recovery runtime
+  ansible.builtin.assert:
+    that: ai_ops_runtime_cli == 'docker'
+    fail_msg: "Recovery uses Docker ownership labels and host network-namespace probes."
+  tags: [always]
+
+- name: Show bounded recovery deployment
+  ansible.builtin.debug:
+    msg: >-
+      Install a 30-second host timer; application probes only, 120-second grace, three failures,
+      10-minute cooldown, at most three restarts/hour/application. No database or netns restarts.
+  tags: [always]
+
+- name: Ensure recovery script directory exists
+  ansible.builtin.file:
+    path: "{{ ai_ops_deploy_root }}/ops/scripts/host"
+    state: directory
+    mode: '0755'
+  tags: [upload]
+
+- name: Copy recovery guard and read-only role probes
+  ansible.builtin.copy:
+    src: "{{ ai_ops_scripts_dir }}/host/{{ item }}"
+    dest: "{{ ai_ops_deploy_root }}/ops/scripts/host/{{ item }}"
+    mode: '0644'
+    backup: true
+  loop: [gateway_health.py, gateway-recovery.py]
+  tags: [upload]
+
+- name: Verify local application probes without restarts
+  ansible.builtin.command:
+    argv: [python3, "{{ ai_ops_deploy_root }}/ops/scripts/host/gateway-recovery.py"]
+  register: __ai_ops_recovery_observation
+  changed_when: false
+  failed_when: >-
+    __ai_ops_recovery_observation.rc != 0 or
+    ((__ai_ops_recovery_observation.stdout | from_json).checks | selectattr('action', 'equalto', 'observe')
+     | map(attribute='ok') | reject('equalto', true) | list | length > 0)
+  when: not ansible_check_mode
+  tags: [verify]
+
+- name: Install recovery service and timer
+  ansible.builtin.copy:
+    content: "{{ lookup('file', ai_ops_scripts_dir + '/host/' + item) | replace('/root/AI-gateway', ai_ops_deploy_root) }}\n"
+    dest: "{{ ai_ops_recovery_unit_dir }}/{{ item }}"
+    mode: '0644'
+    backup: true
+  loop: [ai-gateway-recovery.service, ai-gateway-recovery.timer]
+  notify: [Reload systemd units, Restart recovery timer]
+  tags: [upload]
+
+- name: Apply unit changes before verifying them
+  ansible.builtin.meta: flush_handlers
+  tags: [always]
+
+- name: Validate recovery units
+  ansible.builtin.command:
+    argv:
+      - systemd-analyze
+      - verify
+      - "{{ ai_ops_recovery_unit_dir }}/ai-gateway-recovery.service"
+      - "{{ ai_ops_recovery_unit_dir }}/ai-gateway-recovery.timer"
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [verify]
+
+- name: Enable bounded recovery timer
+  ansible.builtin.systemd_service:
+    name: ai-gateway-recovery.timer
+    enabled: true
+    state: started
+  tags: [activate]

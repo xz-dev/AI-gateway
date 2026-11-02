@@ -1,6 +1,6 @@
 # 新增 OpenAI 兼容来源（provider channel）操作手册
 
-通用流程：把一个新的 OpenAI 兼容商家（如 AIHub、Zakk 类）接入 AI-gateway 生产栈。目标主机 `root@rainyun-la` (100.94.238.35)，工作目录 `/root/AI-gateway`。
+通用流程：把一个新的 OpenAI 兼容商家（如 AIHub、Zakk 类）接入 AI-gateway 生产栈。目标主机是私有 inventory 里的生产主机，工作目录 `/root/AI-gateway`。
 
 涉及四层，顺序固定：**Squid 出口放行 → CPA 渠道注册（含模型列表）→ AISIX 路由 → 验证**。缺任何一层都会无声失败。
 
@@ -54,6 +54,8 @@ CPA 热加载此文件（日志 `server clients and configuration updated` 即�
 
 **`models` 必须非空、模型名必须是上游真实 ID**（prefix 由 CPA 加，列表里写裸 ID）。空列表有时 CPA 不注册该渠道。可先用商家 `/v1/models` 实际内容填充。
 
+CPA 默认（`force-model-prefix: false`）同时列出裸 ID（`gpt-5.6-terra`）和带前缀 ID（`aihub/gpt-5.6-terra`）。model-catalog 只收带 CPA 前缀的 ID，裸 ID 不进目录（裸 ID 请求由 AISIX 处理）。
+
 **改后必测**：用 CPA 自身的 `api-keys` key（非 mgmt.key）走 CPA：
 ```bash
 curl -H "Authorization: Bearer $CPA_CLIENT_KEY" http://127.0.0.1:8317/v1/models   # 应见 aihub/gpt-5.6-terra
@@ -74,18 +76,18 @@ curl -X POST .../v1/responses -d '{"model":"aihub/<model>","input":"hi"}'       
 
 应用：`docker compose up -d --no-deps --no-build --pull never --force-recreate aisix`（只重建 aisix，不动其它）。验证 `docker logs` 见 `resources loaded ... resources=N`。
 
-## 4. models-enricher 目录来源（`services/routing/model-catalog/config.yaml`）
+## 4. model-catalog 目录来源（`services/routing/model-catalog/config.yaml`）
 
-新 prefix 出现在 CPA 目录后，enricher 决定元数据。未配置规则的渠道使用根 `metadata.chain`。要为渠道指定来源，在 `metadata.models` 加一条规则，例如 `{match: "<prefix>/**", chain: ["models.dev/<provider>/api_key", "@self"]}`；需要渠道上游的富数据时在链中加入 `@cpa-upstream`（只在链需要时才经 CPA `api-call` 读取）。要隐藏模型，在 `metadata.include_models` 加 `!` 条目。上限同步需要时把该渠道 glob 加入根 `sync_max_context_window` 列表。改后在 `services/routing/model-catalog/` 运行 `npm test`，并用部署镜像的 `/models-enricher validate-config -` 校验私有配置（输出 `{"version":1,"config_digest":...}`）。
+新 prefix 出现在 CPA 目录后，model-catalog 决定元数据。未配置规则的渠道使用根 `metadata.chain`。要为渠道指定来源，在 `metadata.models` 加一条规则，例如 `{match: "<prefix>/**", chain: ["models.dev/<provider>/api_key", "@self"]}`；需要渠道上游的富数据时在链中加入 `@cpa-upstream`（只在链需要时才经 CPA `api-call` 读取）。要隐藏模型，在 `metadata.include_models` 加 `!` 条目。没有 CPA 前缀的 CPA 账号（如 Devin 的 `devin/<model>`）默认不进目录；要收录，在 profile 的 `catalog.lua` 里把 glob 加进 `EXTRA_CPA`（例如 `{ "devin/*" }`，见[成员脚本](model-catalog.md#membership-script)）；使用自定义 `catalog.lua` 时隐藏规则也写在脚本里，不再用 `include_models`。上限同步需要时把该渠道 glob 加入根 `sync_max_context_window` 列表。改后在 `services/routing/model-catalog/` 运行 `npm test`，并用部署镜像的 `/model-catalog validate-config -` 校验私有配置（输出 `{"version":1,"config_digest":...}`）。
 
 WebSocket 入站由 Sub2API 统一鉴权和处理；内部 models gateway 不再维护独立 WS 别名表。
 
 ## 5. 验证清单
 
 1. Squid 日志该域名 200 非 403。
-2. CPA `/v1/models` 含 `prefix/model`；`/v1/responses` 真实推理通。
+2. CPA `/v1/models` 含 `prefix/model`（默认设置下也含裸 `model`）；`/v1/responses` 真实推理通。
 3. AISIX `/status` 可见该 direct/链，`eligible`。
-4. enricher `/v1/models` 富目录含新 ID 且元数据合理。
+4. model-catalog `/v1/models` 富目录含新 ID 且元数据合理。
 5. 容器无重启崩环。
 
 ## 替换旧来源时的顺序（重要）
@@ -93,4 +95,4 @@ WebSocket 入站由 Sub2API 统一鉴权和处理；内部 models gateway 不再
 **先新后旧，推理打通才下线。** 本次教训：先把 zakk 的 Squid 放行删了再发现 aihub token 推理不通，导致唯一可用渠道降级。正确顺序：
 1. 加新来源全部四层，**一次真实推理成功**为门槛。
 2. 确认调用方已迁移到新 `prefix/`。
-3. 才移除旧 prefix 的 CPA 渠道 + Squid 规则 + AISIX direct + enricher 配置。
+3. 才移除旧 prefix 的 CPA 渠道 + Squid 规则 + AISIX direct + model-catalog 配置。

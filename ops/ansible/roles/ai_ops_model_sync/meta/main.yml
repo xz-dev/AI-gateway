@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: ai_ops_model_sync
+  author: xz-dev
+  description: Preview, deploy, verify and roll back the cpa-model-sync policy.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

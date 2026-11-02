@@ -1,0 +1,52 @@
+---
+# rollback-config.yml -e component=cpa-model-sync: restore the pre-deploy policy and
+# prove the CPA state returned to the recorded pre-transition digest.
+
+- name: Read protected model-sync transition evidence
+  ansible.builtin.slurp:
+    src: "{{ ai_ops_deploy_root }}/.ai-ops-state/model-sync-transition.json"
+  register: __ai_ops_model_sync_transition_raw
+  no_log: true
+  tags: [always]
+
+- name: Parse protected model-sync transition evidence
+  ansible.builtin.set_fact:
+    __ai_ops_model_sync_transition: "{{ __ai_ops_model_sync_transition_raw.content | b64decode | from_json }}"
+  no_log: true
+  tags: [always]
+
+- name: Roll back model-sync policy and prove CPA recovery
+  ansible.builtin.include_role:
+    name: ai_ops_managed_file
+    tasks_from: rollback
+  vars:
+    ai_ops_managed_file_label: cpa-model-sync/config.json
+    ai_ops_managed_file_remote: "{{ ai_ops_deploy_root }}/services/cpa/cpa-model-sync/config.json"
+    ai_ops_managed_file_mode: "0644"
+    ai_ops_managed_file_activate: {service: cpa-model-sync, dependencies: false}
+    ai_ops_managed_file_verify:
+      role: ai_ops_model_sync
+      tasks_from: verify
+      expected:
+        state_digest: "{{ __ai_ops_model_sync_transition.current_state_digest }}"
+        image_identity: "{{ __ai_ops_model_sync_transition.image_identity }}"
+  tags: [always]
+
+- name: Write sanitized model-sync rollback receipt
+  ansible.builtin.copy:
+    dest: "{{ ai_ops_deploy_root }}/.ai-ops-state/receipt-model-sync-rollback-{{ now(fmt='%s') }}.txt"
+    mode: "0600"
+    content: |
+      operation=model-sync-rollback
+      policy_digest={{ ai_ops_model_sync_verified_policy_digest }}
+      image_identity={{ ai_ops_model_sync_verified_image }}
+      container_id={{ ai_ops_model_sync_verified_container }}
+      state_digest={{ ai_ops_model_sync_verified_state_digest }}
+      updated={{ ai_ops_model_sync_summary.updated }}
+      unchanged={{ ai_ops_model_sync_summary.unchanged }}
+      failed={{ ai_ops_model_sync_summary.failed }}
+      unconfirmed={{ ai_ops_model_sync_summary.unconfirmed }}
+      skipped={{ ai_ops_model_sync_summary.skipped }}
+      outcome=success
+  when: not ansible_check_mode
+  tags: [activate]

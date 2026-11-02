@@ -1,0 +1,39 @@
+---
+- name: Read live front configuration checksums
+  ansible.builtin.stat:
+    path: "{{ ai_ops_deploy_root }}/{{ item }}"
+    checksum_algorithm: sha256
+  loop: [compose.yaml, compose.override.yaml, .env]
+  register: __ai_ops_component_live_files
+  no_log: true
+
+- name: Require all live configuration files
+  ansible.builtin.assert:
+    that: __ai_ops_component_live_files.results | selectattr('stat.exists', 'equalto', true) | list | length == 3
+    fail_msg: Missing live Compose file; stop and recover explicitly.
+
+- name: Collect live file hashes
+  ansible.builtin.set_fact:
+    __ai_ops_component_live_hashes: >-
+      {{ dict(__ai_ops_component_live_files.results | map(attribute='item') | zip(__ai_ops_component_live_files.results | map(attribute='stat.checksum')))
+      }}
+  no_log: true
+
+- name: Read live effective Compose without exposing secrets
+  ansible.builtin.command:
+    argv: "{{ ai_ops_compose_argv + ['config', '--no-path-resolution', '--format', 'json'] }}"
+  register: __ai_ops_component_live_config_raw
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Parse live effective Compose
+  ansible.builtin.set_fact:
+    __ai_ops_component_live_config: "{{ __ai_ops_component_live_config_raw.stdout | from_json }}"
+  no_log: true
+
+- name: Read front runtime state
+  ansible.builtin.include_tasks:
+    file: runtime.yml
+    apply:
+      tags: [always]

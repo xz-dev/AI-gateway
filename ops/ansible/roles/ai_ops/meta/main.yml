@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: ai_ops
+  author: xz-dev
+  description: Shared preflight, capacity gate and Compose invocation for AI-gateway operations.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { Row } from "../src/json.ts";
 import { nativeRows } from "../src/authority.ts";
+import { compareCatalogIDs } from "../src/build.ts";
 import { bySlug, channels, codex, harness, replyText } from "./catalog-harness.ts";
 import { json, serve, tempDir } from "./helpers.ts";
 
@@ -49,7 +50,7 @@ test("@self first keeps CPA values; later entries fill gaps; rule overrides win;
   assert.equal(six.max_output_tokens, 64000);
   // The authority snapshot is never mutated by projections.
   const authority = h.owner.current();
-  const row = nativeRows(authority)[authority.admitted.find((model) => model.id === "codex/gpt-6")!.index]!;
+  const row = nativeRows(authority)[authority.members.find((model) => model.id === "codex/gpt-6")!.index!]!;
   assert.equal(row.max_tokens, undefined);
 });
 
@@ -120,7 +121,7 @@ static_models:
 `,
   });
   const models = bySlug(await codex(h));
-  assert.deepEqual([...models.keys()], ["codex/gpt-5.6-sol", "codex/gpt-image-2", "codex/conflict", "alias/a", "claude"]);
+  assert.deepEqual([...models.keys()], ["claude", "alias/a", "codex/conflict", "codex/gpt-5.6-sol", "codex/gpt-image-2"]);
   assert.deepEqual(models.get("codex/gpt-image-2")!.output_modalities, ["image"]);
   assert.equal(models.get("codex/gpt-5.6-sol")!.output_modalities, undefined, "no built-in image special case");
   assert.equal("default_reasoning_level" in models.get("codex/conflict")!, false);
@@ -163,7 +164,7 @@ test("sync_max_context_window: enabled, per-model glob list, and off", async (t)
   assert.deepEqual(await max(""), { "xl/a": 872000, "xl/keep-b": 872000, "aihub/c": 872000, "aihub/low": 500000, "aihub/none": 500000, "aihub/explicit": 100 });
 });
 
-test("membership comes from authority only; preserveNative rows are emitted unchanged", async (t) => {
+test("membership comes from authority only; fallback rows are emitted unchanged and bare IDs are not admitted", async (t) => {
   const conflictRow = { slug: "oauth/route", default_reasoning_level: "xhigh", supported_reasoning_levels: levels("low"), unknown: null };
   const h = await harness(t, {
     channels: channels([{ prefix: "codex", models: ["m"] }]),
@@ -171,15 +172,65 @@ test("membership comes from authority only; preserveNative rows are emitted unch
     upstream: { "https://codex.example/v1/models?client_version=1.0.0": { data: [{ id: "m" }, { id: "m-new", context_length: 5 }] } },
     yaml: `metadata:\n  chain: ["@cpa-upstream", "@self"]\n`,
   });
-  // An unreadable identity list keeps unmatched prefixed rows as unchanged CPA records.
+  // An unreadable prefix input keeps CPA's slash rows as unchanged records.
   h.fake.identity = (_req, res) => json(res, {}, 503);
   const models = await codex(h);
   const slugs = models.map((model) => model.slug);
   assert.ok(slugs.includes("codex/m"));
-  assert.ok(slugs.includes("my-alias"), "admitted unprefixed models are listed");
+  assert.ok(!slugs.includes("my-alias"), "fallback admits no bare CPA ID");
   assert.ok(!slugs.includes("codex/m-new"), "channel-only models never appear");
   const preserved = models.find((model) => model.slug === "oauth/route");
-  assert.deepEqual(preserved, conflictRow, "preserveNative rows keep CPA content as-is");
+  const priority = slugs.indexOf("oauth/route") + 1;
+  assert.deepEqual(preserved, { ...conflictRow, priority }, "preserveNative rows keep CPA content as-is except priority");
+  assert.deepEqual(Object.keys(preserved!), [...Object.keys(conflictRow), "priority"], "CPA field order is kept");
+  // The generation's native row is shared by every projection and is never mutated.
+  assert.equal((await codex(h, "2.0.0")).find((model) => model.slug === "oauth/route")!.priority, priority);
+  assert.equal("priority" in nativeRows(h.owner.current())[2]!, false);
+});
+
+test("D1 order and D5: CPA rows win over AISIX; an AISIX bare ID never takes CPA's bare row", async (t) => {
+  let status = 200;
+  const aisix = await serve((_req, res) => json(res, { data: [{ id: "gpt-6.1-sol" }, { id: "codex/m" }, { id: "Router/Only" }, { id: "router/only" }, { id: "router/only" }] }, status));
+  t.after(() => aisix.close());
+  const h = await harness(t, {
+    channels: channels([{ prefix: "codex", models: ["m", "gpt-6.1-sol"] }]),
+    native: [native("codex/m", { context_window: 1000 }), native("gpt-6.1-sol", { context_window: 999 }), native("codex/gpt-6.1-sol")],
+    aisix: aisix.url,
+    yaml: `metadata:\n  chain: ["@self"]\nstatic_models:\n  - slug: alias/a\n    inherit: [codex/m]\n  - slug: codex/m\n`,
+  });
+  const models = bySlug(await codex(h));
+  assert.deepEqual([...models.keys()], ["gpt-6.1-sol", "Router/Only", "alias/a", "codex/gpt-6.1-sol", "codex/m", "router/only"]);
+  assert.equal(models.get("codex/m")!.context_window, 1000, "the CPA-admitted row is the base for an ID in both sources");
+  assert.equal(models.get("gpt-6.1-sol")!.context_window, undefined, "CPA's non-admitted bare row is never @self");
+  assert.equal(models.get("gpt-6.1-sol")!.display_name, undefined);
+
+  // An AISIX failure removes only AISIX members.
+  status = 401;
+  await h.owner.refresh({ bypass: true });
+  assert.deepEqual([...bySlug(await codex(h)).keys()], ["alias/a", "codex/gpt-6.1-sol", "codex/m"]);
+});
+
+test("output order is bare IDs first, then the rest, each in code-point order", () => {
+  const ids = ["z/a", "b", "\u{1F600}/x", "\uFFFD/x", "B", "A/b", "a", "a/b", "\u00E9"];
+  assert.deepEqual(ids.sort(compareCatalogIDs), ["B", "a", "b", "\u00E9", "A/b", "a/b", "z/a", "\uFFFD/x", "\u{1F600}/x"]);
+});
+
+test("standard list and Codex manifest share the order; priority follows it on every row; members are unchanged", async (t) => {
+  const aisix = await serve((_req, res) => json(res, { data: [{ id: "zeta" }, { id: "Alpha" }, { id: "codex/m" }] }));
+  t.after(() => aisix.close());
+  const h = await harness(t, {
+    channels: channels([{ prefix: "codex", models: ["m", "a"] }]),
+    native: [native("codex/m", { priority: 7 }), native("devin/x", { priority: 343 }), native("codex/a")],
+    aisix: aisix.url,
+    extraCpa: ["devin/*"],
+    yaml: `metadata:\n  chain: ["@self"]\nstatic_models:\n  - slug: alias/a\n    inherit: [codex/m]\n  - slug: beta\n    inherit: [codex/a]\n`,
+  });
+  const expected = ["Alpha", "beta", "zeta", "alias/a", "codex/a", "codex/m", "devin/x"];
+  const models = await codex(h);
+  assert.deepEqual(models.map((model) => model.slug), expected);
+  assert.deepEqual(models.map((model) => model.priority), [1, 2, 3, 4, 5, 6, 7], "CPA priorities are replaced, gaps-free");
+  const reply = await h.service.catalog("");
+  assert.deepEqual(JSON.parse(await replyText(reply)).data.map((entry: Row) => entry.id), expected);
 });
 
 test("@cpa-upstream reads only channels whose kept models need it; Ollama rows come from /api/show", async (t) => {
@@ -211,7 +262,7 @@ channels:
   ]);
 });
 
-test("AISIX-only IDs are supplemented and enriched through the chain", async (t) => {
+test("AISIX-only IDs are members and enriched through the chain", async (t) => {
   const aisix = await serve((_req, res) => json(res, { data: [{ id: "codex/m" }, { id: "router/only" }] }));
   t.after(() => aisix.close());
   const h = await harness(t, {
@@ -248,7 +299,7 @@ test("worker crash keeps serving the previous generation; a later good build rec
   assert.deepEqual([...bySlug(await codex(h)).keys()], ["codex/a", "codex/b"]);
 });
 
-test("the compile worker has exited after a generation build", async (t) => {
+test("the compile worker has exited after a generation build; the membership worker stays resident", async (t) => {
   const h = await harness(t, {
     channels: channels([{ prefix: "codex", models: ["a"] }]),
     native: [native("codex/a")],
@@ -257,16 +308,24 @@ test("the compile worker has exited after a generation build", async (t) => {
   });
   let created = 0;
   let exited = 0;
+  const workers = new Set<import("node:worker_threads").Worker>();
   const onWorker = (worker: import("node:worker_threads").Worker) => {
     created++;
+    workers.add(worker);
     worker.once("exit", () => exited++);
   };
   process.on("worker", onWorker);
   t.after(() => process.off("worker", onWorker));
   assert.equal(bySlug(await codex(h)).get("codex/a")!.context_window, 1);
-  for (let i = 0; i < 50 && exited < created; i++) await new Promise((r) => setTimeout(r, 20));
-  assert.equal(created, 1);
-  assert.equal(exited, 1);
+  // One membership worker for the collection (resident, warm-worker D3; spawned here unless an earlier
+  // test left one with the same script), one compile worker for the build.
+  const { membershipWorkers } = await import("../src/membership.ts");
+  const resident = membershipWorkers().resident;
+  assert.ok(resident && resident.threadId > 0, "the membership worker is resident");
+  const transient = created - (workers.has(resident) ? 1 : 0);
+  for (let i = 0; i < 50 && exited < transient; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(transient, 1, "one compile worker");
+  assert.equal(exited, 1, "the compile worker has exited");
 });
 
 test("generation pinning: a new generation never serves a previous projection", async (t) => {

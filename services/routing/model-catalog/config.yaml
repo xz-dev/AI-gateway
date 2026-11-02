@@ -1,4 +1,4 @@
-# models-enricher configuration (example; production policy lives in the private config).
+# model-catalog configuration (example; production policy lives in the private config).
 # The `metadata` block uses the openai-api-pi-extension chain schema:
 #   chain           field sources in order; each field takes its first valid value.
 #                   @self = the CPA native manifest row; @cpa-upstream = the rich row CPA reads
@@ -6,7 +6,9 @@
 #   models          ordered `match:` glob rules (`*` stays inside one segment, `**` spans `/`);
 #                   later matching rules replace the chain, overrides merge in order (RFC 7396).
 #   include_models  optional ordered globs, `!` hides, last match wins, unmatched = hidden.
-# Membership comes from CPA identity admission, the AISIX supplement and static_models only.
+# Membership is decided by the profile's catalog.lua (next to this file), before include_models.
+# The default script keeps CPA IDs under a CPA prefix, its EXTRA_CPA globs, every AISIX ID and the
+# static_models. Devin accounts register `devin/<model>` with no prefix: set EXTRA_CPA = { "devin/*" }.
 cpa_base_url: http://cpa:8317
 
 # Full-chain refresh: once at startup in the background; entry window and schedule are independent.
@@ -68,6 +70,8 @@ channels:
 
 # Statics keep only real differences from the chain-selected data.
 static_models:
+  - slug: gpt-6.1-terra
+    overrides: {context_window: 500000, max_context_window: 500000}
   - slug: gpt-5.6-terra
     overrides: {context_window: 500000, max_context_window: 500000}
   - slug: gpt-5.6-luna

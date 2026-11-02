@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: ai_ops_managed_file
+  author: xz-dev
+  description: Drift-gated deploy and rollback of one AI-gateway managed file.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

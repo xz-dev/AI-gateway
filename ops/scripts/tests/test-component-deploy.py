@@ -78,7 +78,7 @@ class ImageProof(unittest.TestCase):
                                     for call in command.call_args_list))
 
     def test_preloaded_profiles_disable_pull(self):
-        defaults = (ROOT / 'ops/ansible/roles/ai_ops/defaults/main.yml').read_text()
+        defaults = (ROOT / 'ops/ansible/roles/ai_ops_component/defaults/main.yml').read_text()
         for service in ('cloudflared', 'cpa-model-sync', 'egress-proxy'):
             with self.subTest(service=service):
                 profile = re.search(r'^  ' + re.escape(service) + r':.*\n(?:    .*\n)*', defaults, re.M)
@@ -93,7 +93,7 @@ class OwnedLock(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / '.ai-ops-state').mkdir(mode=0o700)
         self.request = {'transaction': 'a' * 32, 'controller_host': socket.gethostname(),
-                        'controller_pid': 99999999, 'service': 'models-enricher',
+                        'controller_pid': 99999999, 'service': 'model-catalog',
                         'operation': 'deploy', 'approval_digest': 'b' * 64}
         self.recovery = {'transaction': self.request['transaction'], 'controller_clear': True}
 
@@ -163,17 +163,17 @@ class RollbackSelection(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.state = self.root / '.ai-ops-state'
         self.state.mkdir(mode=0o700)
-        self.snapshot = self.state / 'front-models-enricher-original'
+        self.snapshot = self.state / 'front-model-catalog-original'
         self.snapshot.mkdir(mode=0o700)
         self.live = {'id': 'container-new', 'image': ID, 'started': '2026-10-25T01:00:00Z',
                      'running': True, 'paused': False, 'restarting': False}
-        self.owner = {'transaction': 'a'*32, 'root': str(self.root), 'service': 'models-enricher',
+        self.owner = {'transaction': 'a'*32, 'root': str(self.root), 'service': 'model-catalog',
                       'operation': 'deploy', 'started': 10}
         self.receipt = {'owner': self.owner, 'snapshot': str(self.snapshot), 'outcome': 'success'}
         LOCK.atomic_json(LOCK.paths(self.root, self.owner['transaction'])[1], self.receipt)
-        self.result = {'service': 'models-enricher', 'snapshot': str(self.snapshot), 'after': self.live}
+        self.result = {'service': 'model-catalog', 'snapshot': str(self.snapshot), 'after': self.live}
         LOCK.atomic_json(self.snapshot/'receipt.json', self.result)
-        self.request = {'service': 'models-enricher', 'snapshot': str(self.snapshot), 'live': self.live}
+        self.request = {'service': 'model-catalog', 'snapshot': str(self.snapshot), 'live': self.live}
 
     def test_exact_success_after_identity_and_unrelated_profile(self):
         other = {**self.receipt, 'owner': {**self.owner, 'service': 'other', 'transaction': 'b'*32, 'started': 20}}
@@ -209,7 +209,7 @@ class RollbackSelection(unittest.TestCase):
     def test_failed_activation_needs_its_own_recorded_after_identity(self):
         self.receipt['outcome'] = 'failed'
         LOCK.atomic_json(LOCK.paths(self.root, 'a'*32)[1], self.receipt)
-        failure = self.state/'front-models-enricher-failure.json'
+        failure = self.state/'front-model-catalog-failure.json'
         for after in (None, {**self.live, 'id': 'other'}, self.live):
             LOCK.atomic_json(failure, {**self.result, 'transaction': 'a'*32, 'after': after})
             if after == self.live:
@@ -282,43 +282,48 @@ with patch.object(connection, '_build_command', side_effect=lambda exe, subsyste
 
 class TaskOrdering(unittest.TestCase):
     def test_baseline_follows_readiness_and_group_readback(self):
-        text = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-component.yml').read_text()
+        text = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/transaction.yml').read_text()
         self.assertLess(text.index('Wait for selected component health'), text.index('Advance baselines only after'))
         self.assertLess(text.index('Refuse post-activation drift'), text.index('Advance baselines only after'))
         self.assertLess(text.index('Record stage before selected component activation'), text.index('Recreate only selected'))
         self.assertIn("'--no-deps', '--no-build', '--pull', 'never'", text)
-        helper = (ROOT / 'ops/ansible/roles/ai_ops/tasks/deploy-file.yml').read_text()
+        helper = (ROOT / 'ops/ansible/roles/ai_ops_managed_file/tasks/deploy.yml').read_text()
         self.assertNotIn('Adopt matching remote into baseline', helper)
-        tail = helper.split('- name: "Record new baseline', 1)[1]
-        self.assertIn('when: _ai_commit_baseline', tail)
-        self.assertIn('ai_activate_cmd is defined and _ai_upload is changed', helper)
-        self.assertIn('ai_defer_baseline', helper)
+        tail = helper.split('- name: Record new baseline', 1)[1]
+        self.assertIn('when: __ai_ops_managed_file_commit', tail)
+        activate = helper.split('- name: Activate {{ ai_ops_managed_file_label }}', 1)[1].split('  block:', 1)[0]
+        self.assertIn('- ai_ops_managed_file_activate is defined', activate)
+        self.assertIn('- ai_ops_managed_file_uploaded', activate)
+        self.assertLess(helper.index('Remember the verified activation'), helper.index('Record new baseline'))
         self.assertIn('Read back activated file', helper)
 
     def test_generic_and_front_share_one_transaction(self):
-        ops = (ROOT / 'ops/ansible/ops.yml').read_text()
-        self.assertIn("when: service | default('') in ai_ops_profiles", ops)
-        self.assertNotIn('Pull exact image for {{ service }}', ops)
-        self.assertNotIn('Assert {{ service }} appears in ps output', ops)
+        for operation in ('deploy', 'rollback'):
+            playbook = (ROOT / 'ops/ansible/playbooks' / (operation + '.yml')).read_text()
+            self.assertIn('name: ai_ops_component\n        tasks_from: ' + operation, playbook)
+        for path in (ROOT / 'ops/ansible').glob('[!c]*/**/*.yml'):
+            text = path.read_text()
+            self.assertNotIn('Pull exact image for', text, path)
+            self.assertNotIn('appears in ps output', text, path)
 
     def test_commands_have_bounded_async_time_and_keep_preload_identity(self):
-        text = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-component.yml').read_text()
-        defaults = (ROOT / 'ops/ansible/roles/ai_ops/defaults/main.yml').read_text()
+        text = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/transaction.yml').read_text()
+        defaults = (ROOT / 'ops/ansible/roles/ai_ops_component/defaults/main.yml').read_text()
         self.assertEqual(text.count('async: "{{ ai_ops_component_command_timeout }}"'), 2)
         self.assertIn('ai_ops_component_command_timeout: 600', defaults)
-        self.assertIn('_front_candidate_image_id == _front_planned_image_id', text)
+        self.assertIn('__ai_ops_component_candidate_image_id == __ai_ops_component_planned_image_id', text)
         self.assertIn('Validate candidate Compose explicitly', text)
         self.assertIn('Validate uploaded candidate using the exact apply Compose argv', text)
 
     def test_rollback_guard_precedes_any_mutation(self):
-        text = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-component.yml').read_text()
+        text = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/transaction.yml').read_text()
         self.assertLess(text.index('Refuse stale rollback selection'), text.index('Acquire exclusive owned'))
         self.assertEqual(text.count('rollback-guard'), 2)
         self.assertLess(text.index('Recheck rollback provenance under the owned lock'), text.index('Allocate immutable private snapshot'))
-        self.assertIn("'after': _front_failure_after | default(none)", text)
+        self.assertIn("'after': __ai_ops_component_failure_after | default(none)", text)
 
     def test_existing_native_probe_is_reused_not_reimplemented(self):
-        runtime = (ROOT / 'ops/ansible/roles/ai_ops/tasks/front-runtime.yml').read_text()
+        runtime = (ROOT / 'ops/ansible/roles/ai_ops_component/tasks/runtime.yml').read_text()
         self.assertIn('module.namespace_probe', runtime)
         self.assertIn('module.OBSERVE_HTTP', runtime)
         self.assertIn('module.worker_health', runtime)

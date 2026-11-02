@@ -1,0 +1,22 @@
+---
+# Install the bounded host recovery guard (service + timer).
+#   ansible-playbook playbooks/recovery.yml --check --diff
+- name: Install the AI-gateway host recovery guard
+  hosts: gateway
+  gather_facts: false
+  module_defaults:
+    community.docker.docker_compose_v2: &ai_ops_compose
+      project_src: "{{ ai_ops_compose_project_src }}"
+      project_name: "{{ ai_ops_compose_project }}"
+      files: "{{ ai_ops_compose_files }}"
+      env_files: "{{ ai_ops_compose_env_files }}"
+    community.docker.docker_compose_v2_exec: *ai_ops_compose
+  roles:
+    # Shared preflight; the play-level role also makes its defaults play-wide.
+    - role: ai_ops
+      tags: [always]
+  tasks:
+    - name: Install the recovery guard
+      ansible.builtin.include_role:
+        name: ai_ops_recovery
+      tags: [always]

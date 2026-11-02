@@ -1,0 +1,103 @@
+---
+# Verify one freshly started cpa-model-sync container and its CPA read-back.
+# Input: ai_ops_managed_file_verify_expected with policy_digest, state_digest and
+# image_identity.
+
+- name: Select the expected model-sync state
+  ansible.builtin.set_fact:
+    __ai_ops_model_sync_expected: "{{ ai_ops_managed_file_verify_expected }}"
+
+- name: Read cpa-model-sync identity
+  ansible.builtin.include_tasks:
+    file: identity.yml
+    apply:
+      tags: [always]
+
+- name: Require approved cpa-model-sync image identity
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_model_sync_image_id == __ai_ops_model_sync_expected.image_identity
+    fail_msg: >-
+      cpa-model-sync image changed during the operation
+      (expected={{ __ai_ops_model_sync_expected.image_identity }},
+      observed={{ __ai_ops_model_sync_image_id }}).
+
+# No logs module exists; the plain Compose argv is a kept call (design D12).
+- name: Wait for the first bounded synchronization summary
+  ansible.builtin.command:
+    argv: "{{ ai_ops_compose_base_argv + ['logs', '--no-color', '--tail', ai_ops_model_sync_log_tail | string, 'cpa-model-sync'] }}"
+  register: __ai_ops_model_sync_logs
+  changed_when: false
+  check_mode: false
+  vars:
+    # The last log line whose JSON object carries the five summary counters.
+    __ai_ops_model_sync_summaries: >-
+      {{ (__ai_ops_model_sync_logs.stdout_lines | default([]) + __ai_ops_model_sync_logs.stderr_lines | default([]))
+         | map('regex_search', '\{.*\}\s*$') | select
+         | select('search', '"updated"\s*:') | select('search', '"unchanged"\s*:') | select('search', '"failed"\s*:')
+         | select('search', '"unconfirmed"\s*:') | select('search', '"skipped"\s*:') | list }}
+  retries: "{{ ai_ops_model_sync_verify_retries }}"
+  delay: "{{ ai_ops_model_sync_verify_delay_seconds }}"
+  until: __ai_ops_model_sync_logs.rc == 0 and __ai_ops_model_sync_summaries | length > 0
+  failed_when: __ai_ops_model_sync_logs.rc != 0 or __ai_ops_model_sync_summaries | length == 0
+
+- name: Parse synchronization summary
+  ansible.builtin.set_fact:
+    __ai_ops_model_sync_summary: >-
+      {{ ((__ai_ops_model_sync_logs.stdout_lines + __ai_ops_model_sync_logs.stderr_lines)
+          | map('regex_search', '\{.*\}\s*$') | select
+          | select('search', '"updated"\s*:') | select('search', '"unchanged"\s*:') | select('search', '"failed"\s*:')
+          | select('search', '"unconfirmed"\s*:') | select('search', '"skipped"\s*:') | list | last) | from_json }}
+
+- name: Require a successful synchronization round
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_model_sync_summary.failed | int == 0
+      - __ai_ops_model_sync_summary.unconfirmed | int == 0
+    fail_msg: >-
+      cpa-model-sync round was incomplete
+      (failed={{ __ai_ops_model_sync_summary.failed }},
+      unconfirmed={{ __ai_ops_model_sync_summary.unconfirmed }}).
+
+- name: Read back CPA model-set digests
+  community.docker.docker_compose_v2_exec:
+    service: cpa-model-sync
+    argv:
+      - env
+      - CPA_MODEL_SYNC_IMAGE_IDENTITY={{ __ai_ops_model_sync_image_id }}
+      - /usr/local/bin/cpa-model-sync
+      - --preview
+      - /app/config.json
+    tty: false
+  register: __ai_ops_model_sync_readback_raw
+  changed_when: false
+  failed_when: __ai_ops_model_sync_readback_raw.rc != 0
+  check_mode: false
+  no_log: true
+
+- name: Parse CPA read-back
+  ansible.builtin.set_fact:
+    __ai_ops_model_sync_readback: "{{ __ai_ops_model_sync_readback_raw.stdout | from_json }}"
+  no_log: true
+
+- name: Require policy and CPA state to match the approved transition
+  ansible.builtin.assert:
+    that:
+      - __ai_ops_model_sync_readback.version | int == 1
+      - __ai_ops_model_sync_readback.policy_digest == __ai_ops_model_sync_expected.policy_digest
+      - __ai_ops_model_sync_readback.image_identity == __ai_ops_model_sync_expected.image_identity
+      - __ai_ops_model_sync_readback.current_state_digest == __ai_ops_model_sync_expected.state_digest
+    fail_msg: >-
+      cpa-model-sync read-back did not match the approved state
+      (expected_policy={{ __ai_ops_model_sync_expected.policy_digest }},
+      observed_policy={{ __ai_ops_model_sync_readback.policy_digest | default('missing') }},
+      expected_state={{ __ai_ops_model_sync_expected.state_digest }},
+      observed_state={{ __ai_ops_model_sync_readback.current_state_digest | default('missing') }}).
+
+- name: Preserve sanitized verification facts
+  ansible.builtin.set_fact:
+    ai_ops_model_sync_verified_container: "{{ __ai_ops_model_sync_container_id }}"
+    ai_ops_model_sync_verified_image: "{{ __ai_ops_model_sync_image_id }}"
+    ai_ops_model_sync_verified_policy_digest: "{{ __ai_ops_model_sync_readback.policy_digest }}"
+    ai_ops_model_sync_verified_state_digest: "{{ __ai_ops_model_sync_readback.current_state_digest }}"
+    ai_ops_model_sync_summary: "{{ __ai_ops_model_sync_summary }}"

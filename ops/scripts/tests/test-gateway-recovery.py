@@ -149,7 +149,7 @@ class RecoveryTests(unittest.TestCase):
         started = "1970-01-01T00:00:01+00:00"
         containers = [{"Id": service, "Name": f"/ai-gateway-{service}-1", "Config": {
             "Labels": {"com.docker.compose.project": "ai-gateway", "com.docker.compose.service": service},
-            "Env": ["CPA_API_KEY=offline-sensitive-fixture"]},
+            "Env": ["CPA_CLIENT_KEY=offline-sensitive-fixture"]},
             "State": {"Running": True, "Pid": 123, "StartedAt": started}}
             for service in recovery.CHECKS]
         attempts = []
@@ -183,11 +183,11 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("restart_outcome_unknown_cooldown", output.getvalue())
         self.assertNotIn("offline-sensitive-fixture", output.getvalue())
 
-    def test_catalog_key_comes_from_apisix_models_not_cache_keeper(self):
+    def catalog_keys(self, environments):
         started = "1970-01-01T00:00:01+00:00"
         containers = [{"Id": service, "Name": f"/ai-gateway-{service}-1", "Config": {
             "Labels": {"com.docker.compose.project": "ai-gateway", "com.docker.compose.service": service},
-            "Env": ["CPA_API_KEY=models-key"] if service == "apisix-models" else []},
+            "Env": environments.get(service, [])},
             "State": {"Running": True, "Pid": 123, "StartedAt": started}}
             for service in recovery.CHECKS]
         keys = []
@@ -205,9 +205,23 @@ class RecoveryTests(unittest.TestCase):
                 mock.patch.object(recovery.time, "time", return_value=1000), \
                 contextlib.redirect_stdout(io.StringIO()):
             recovery.run(False)
-        self.assertEqual(keys, ["models-key"])
+        return keys
+
+    def test_catalog_key_comes_from_model_catalog_only(self):
+        # apisix-models no longer holds a CPA credential; a stale one must never be read.
+        keys = self.catalog_keys({
+            "model-catalog": ["CPA_CLIENT_KEY=catalog-key", "CPA_API_KEY=other"],
+            "apisix-models": ["CPA_API_KEY=stale-models-key", "CPA_CLIENT_KEY=stale-models-key"],
+        })
+        self.assertEqual(keys, ["catalog-key"])
         self.assertIn("openai-api-cache-keeper", recovery.CHECKS)
         self.assertNotIn("response-keeper", recovery.CHECKS)
+
+    def test_missing_catalog_key_fails_closed(self):
+        self.assertEqual(self.catalog_keys({"model-catalog": ["CPA_API_KEY=not-the-client-key"]}), [None])
+        self.assertIsNone(recovery.probe_http(self.port, "/v1/models", 200, catalog=True)["ok"])
+        source = (ROOT / "ops/scripts/host/gateway-recovery.py").read_text()
+        self.assertNotIn('by_service["apisix-models"]', source)
 
     def test_failed_stack_startup_is_observation_only(self):
         for state in ("active", "failed"):
