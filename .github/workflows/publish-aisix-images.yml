@@ -50,15 +50,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if docker buildx imagetools inspect "${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}" >/dev/null 2>&1; then
-            echo "Version tag already exists; bump the component VERSION file." >&2
+          ref="${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}"
+          if lookup_error="$(docker buildx imagetools inspect "$ref" 2>&1)"; then
+            echo "Version tag already exists; refusing to overwrite it." >&2
             exit 1
+          else
+            lookup_status=$?
+            case "$lookup_status:$lookup_error" in
+              "1:ERROR: $ref: not found"|"1:ERROR: $ref: manifest unknown") ;;
+              *) printf '%s\n' "$lookup_error" >&2; exit "$lookup_status" ;;
+            esac
           fi
       - uses: docker/build-push-action@v6
         with:
           context: ./services/routing/${{ matrix.component }}
           push: true
           pull: true
+          platforms: linux/amd64
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
             ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
@@ -69,3 +77,30 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
           provenance: mode=max
           sbom: true
+      - name: Verify published AISIX binary and runtime
+        if: matrix.component == 'aisix'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+          test "$(docker run --rm --network none --entrypoint /usr/local/bin/aisix "$IMAGE" --version)" = 'aisix 1.8.0-pr1387'
+          test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = '10001'
+          test "$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = '06e8075266119380844aa4e9fcb9fb80468715eb'
+          mkdir -p "$RUNNER_TEMP/aisix-smoke"
+          # Standalone boot requires exactly one resource source: a tiny valid
+          # resources.yaml (single mapping, supported _format_version), same
+          # shape production uses, so the smoke exercises the real boot path.
+          printf 'proxy:\n  addr: "0.0.0.0:3000"\nadmin:\n  addr: "127.0.0.1:3001"\nresources_file: /etc/aisix/resources.yaml\n' > "$RUNNER_TEMP/aisix-smoke/config.yaml"
+          printf '_format_version: "1"\n' > "$RUNNER_TEMP/aisix-smoke/resources.yaml"
+          chmod 755 "$RUNNER_TEMP/aisix-smoke"
+          chmod 644 "$RUNNER_TEMP/aisix-smoke/config.yaml" "$RUNNER_TEMP/aisix-smoke/resources.yaml"
+          docker run -d --name aisix-pr1387-smoke --network none --mount "type=bind,src=$RUNNER_TEMP/aisix-smoke/config.yaml,dst=/etc/aisix/config.yaml,readonly" --mount "type=bind,src=$RUNNER_TEMP/aisix-smoke/resources.yaml,dst=/etc/aisix/resources.yaml,readonly" "$IMAGE"
+          trap 'docker logs aisix-pr1387-smoke; docker rm -f aisix-pr1387-smoke' EXIT
+          pid="$(docker inspect --format '{{.State.Pid}}' aisix-pr1387-smoke)"
+          for attempt in $(seq 1 60); do
+            if sudo nsenter -t "$pid" -n curl -fsS http://127.0.0.1:3000/livez; then exit 0; fi
+            sleep 1
+          done
+          exit 1
