@@ -299,7 +299,7 @@ services:
         ipv4_address: 172.30.60.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api:0.2.16-pr7157-pr7217-pr3172-pr8191-ab6b00e@sha256:77f4715f0aa7f66dc1364b162ec4ffd6eab7874b0916d5be4e7a4c6b7b389950}
+    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api:0.2.19-pr7157-pr7217-pr8191-60dbe85@sha256:fcf582f2bb50491f46d6e2818ba699f14e2cf001b719592b9c444421cc870336}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
@@ -942,7 +942,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a}
+    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix:1.8.0-pr1387-06e8075-r2@sha256:651b0787cf9d97df84b81e4d43def76343561b92553baa392fbb87430a9a3b70}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped
