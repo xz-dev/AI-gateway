@@ -92,7 +92,7 @@ jobs:
           # Standalone boot requires exactly one resource source: a tiny valid
           # resources.yaml (single mapping, supported _format_version), same
           # shape production uses, so the smoke exercises the real boot path.
-          printf 'proxy:\n  addr: "0.0.0.0:3000"\nadmin:\n  addr: "127.0.0.1:3001"\nresources_file: /etc/aisix/resources.yaml\n' > "$RUNNER_TEMP/aisix-smoke/config.yaml"
+          printf 'proxy:\n  addr: "0.0.0.0:3000"\nadmin:\n  addr: "127.0.0.1:3001"\n  admin_keys:\n    - "ci-smoke-admin-key-not-a-secret"\nresources_file: /etc/aisix/resources.yaml\n' > "$RUNNER_TEMP/aisix-smoke/config.yaml"
           printf '_format_version: "1"\n' > "$RUNNER_TEMP/aisix-smoke/resources.yaml"
           chmod 755 "$RUNNER_TEMP/aisix-smoke"
           chmod 644 "$RUNNER_TEMP/aisix-smoke/config.yaml" "$RUNNER_TEMP/aisix-smoke/resources.yaml"
