@@ -4,7 +4,7 @@
 
 - name: Read the host Compose version
   ansible.builtin.command:
-    argv: "{{ ai_ops_compose_cmd.split() + ['version', '--short'] }}"
+    argv: "{{ __ai_ops_compose_cmd.split() + ['version', '--short'] }}"
   register: __ai_ops_host_compose
   changed_when: false
   check_mode: false

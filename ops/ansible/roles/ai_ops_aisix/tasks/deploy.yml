@@ -77,7 +77,7 @@
     ai_ops_managed_file_activate: {service: aisix, dependencies: false}
   tags: [always]
 
-- name: Verify effective routes via Admin API (read-only, internal peer)
+- name: Probe Admin API (optional, read-only, internal peer)
   community.docker.docker_compose_v2_exec:
     service: aisix-status-relay
     argv:
@@ -93,9 +93,12 @@
   no_log: true  # response may embed provider model names; keep receipt sanitized
   tags: [verify]
 
-- name: Admin API check is optional until the pinned fixture proves it
+- name: Report optional Admin API command probe
   ansible.builtin.debug:
-    msg: "admin API read skipped/failed (rc={{ __ai_ops_aisix_models.rc | default('n/a') }}); profile pending fixture proof"
+    msg: >-
+      Optional Admin API command probe {{ 'succeeded' if __ai_ops_aisix_models.rc | default(1) == 0 else
+      ('unavailable' if __ai_ops_aisix_models.rc | default(1) == 127 else 'failed') }}
+      (rc={{ __ai_ops_aisix_models.rc | default('n/a') }}); effective routes/models remain unverified.
   when: not ansible_check_mode
   tags: [verify]
 

@@ -33,6 +33,18 @@ FAKE_COMPOSE = """#!/bin/sh
 if [ "$1 $2" = "version --short" ]; then echo "${FAKE_HOST_COMPOSE:-2.40.3+ds1-0ubuntu1}"; exit 0; fi
 echo "$@" >>"$(dirname "$0")/compose-calls"
 """
+FAKE_ENGINE = """#!/bin/sh
+name=${0##*/}
+echo "$name $*" >>"$FAKE_ENGINE_LOG"
+case "$name:$1:$2" in
+  docker:info:) [ "$FAKE_DOCKER" = 1 ] ;;
+  docker:compose:version) [ "$FAKE_DOCKER" = 1 ] || exit 1; echo 2.40.3 ;;
+  podman:info:) [ "$FAKE_PODMAN" = 1 ] ;;
+  podman:compose:version) [ "$FAKE_PODMAN_PLUGIN" = 1 ] || exit 1; echo 2.40.3 ;;
+  podman-compose:version:--short) echo 2.40.3 ;;
+  *) echo 'unexpected fixture runtime call' >&2; exit 98 ;;
+esac
+"""
 
 
 class Preflight(unittest.TestCase):
@@ -48,23 +60,109 @@ class Preflight(unittest.TestCase):
         self.renderer = Path(self.extra["ai_ops_compose_renderer_dir"]) / "docker-compose"
         self.play = self.root / "only-ai-ops.yml"
         self.play.write_text(yaml.safe_dump([{"name": "Preflight only", "hosts": "gateway", "gather_facts": False,
-                                              "roles": [{"role": "ai_ops"}]}]))
+                                              "roles": [{"role": "ai_ops"}], "tasks": [{"name": "Selected runtime",
+                                              "ansible.builtin.debug": {"msg": "runtime engine: {{ ai_ops_runtime_cli }}"}}]}]))
         self.inventory = self.root / "hosts.yml"
         self.inventory.write_text(yaml.safe_dump({"gateway": {"hosts": {"fixture": {"ansible_connection": "local"}}}}))
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_play(self, play, *args, env=None, **variables):
+    def run_play(self, play, *args, env=None, auto=False, **variables):
         values = dict(self.extra, ai_ops_deploy_root=str(self.root / "deploy"), ai_ops_config_dir=str(self.root / "private"),
-                      ai_ops_compose_cmd=str(self.compose), ai_ops_runtime="docker", **variables)
+                      ansible_python_interpreter=sys.executable)
+        if not auto:
+            values.update(ai_ops_compose_cmd=str(self.compose), ai_ops_runtime="docker")
+        values.update(variables)
         path = self.root / "vars.yml"
         path.write_text(yaml.safe_dump(values))
         full = dict(os.environ, **self.env_extra, AI_OPS_SHIM_COMPOSE=str(self.compose), ANSIBLE_NOCOLOR="1",
-                    ANSIBLE_LOCAL_TEMP=str(self.root / "ansible-tmp"), **(env or {}))
+                    ANSIBLE_LOCAL_TEMP=str(self.root / "ansible-tmp"), ANSIBLE_REMOTE_TEMP=str(self.root / "remote-tmp"),
+                    **(env or {}))
         result = subprocess.run(["ansible-playbook", "-i", str(self.inventory), str(play), "-e", "@" + str(path), *args],
                                 env=full, text=True, capture_output=True, timeout=180)
         return result.returncode, result.stdout + result.stderr
+
+    def engine_environment(self, docker=False, podman=False, plugin=False, standalone=False):
+        commands = self.root / "commands"
+        commands.mkdir(exist_ok=True)
+        # Do not append host PATH: absent providers must never find a real engine.
+        for name in ("ansible-playbook", "python3", "env", "printenv", "dirname", "uname", "mkdir", "rm", "chmod", "cat"):
+            link = commands / name
+            if not link.exists():
+                link.symlink_to(shutil.which(name))
+        engine = commands / "fixture-engine"
+        engine.write_text(FAKE_ENGINE)
+        engine.chmod(0o755)
+        for name in ("docker", "podman"):
+            link = commands / name
+            if not link.exists():
+                link.symlink_to(engine)
+        standalone_path = commands / "podman-compose"
+        standalone_path.unlink(missing_ok=True)
+        if standalone:
+            standalone_path.symlink_to(engine)
+        (self.root / "engine-calls").write_text("")
+        return {"PATH": str(commands), "FAKE_ENGINE_LOG": str(self.root / "engine-calls"),
+                "FAKE_DOCKER": str(int(docker)), "FAKE_PODMAN": str(int(podman)),
+                "FAKE_PODMAN_PLUGIN": str(int(plugin))}
+
+    def test_auto_provider_and_canonical_engine_in_check_mode(self):
+        for name, options, provider, runtime in (
+            ("docker", {"docker": True}, "docker compose", "docker"),
+            ("both", {"docker": True, "podman": True, "plugin": True}, "docker compose", "docker"),
+            ("podman-plugin", {"podman": True, "plugin": True}, "podman compose", "podman"),
+            ("podman-standalone", {"podman": True, "standalone": True}, "podman-compose", "podman"),
+        ):
+            with self.subTest(provider=name):
+                rc, text = self.run_play(self.play, "--check", auto=True, env=self.engine_environment(**options))
+                self.assertEqual(rc, 0, text)
+                self.assertIn("compose provider: " + provider, text)
+                self.assertIn('"msg": "runtime engine: ' + runtime + '"', text)
+                self.assertFalse((self.root / "deploy/.ai-ops-state").exists())
+                calls = (self.root / "engine-calls").read_text()
+                self.assertNotRegex(calls, r"\b(up|pull|restart|exec|build)\b")
+                if runtime == "docker":
+                    self.assertNotIn("podman", calls)
+        self.assertTrue(all(c["module"] == "docker_host_info" for c in fixture_env.shim_calls(self.root)))
+
+    def test_no_usable_runtime_names_prerequisite_without_mutation(self):
+        rc, text = self.run_play(self.play, "--check", auto=True, env=self.engine_environment())
+        self.assertNotEqual(rc, 0, text)
+        self.assertIn("no usable container runtime", text)
+        self.assertNotIn("No first item", text)
+        self.assertFalse((self.root / "deploy/.ai-ops-state").exists())
+        self.assertFalse(fixture_env.shim_calls(self.root))
+
+    def test_explicit_provider_and_runtime_do_not_probe_engines(self):
+        rc, text = self.run_play(self.play, "--check", env=self.engine_environment(),
+                                 ai_ops_compose_cmd=str(self.compose), ai_ops_runtime="docker")
+        self.assertEqual(rc, 0, text)
+        self.assertIn("compose provider: " + str(self.compose), text)
+        self.assertIn('"msg": "runtime engine: docker"', text)
+        self.assertEqual((self.root / "engine-calls").read_text(), "")
+        self.assertFalse((self.root / "deploy/.ai-ops-state").exists())
+
+    def test_runtime_override_takes_precedence_over_docker(self):
+        rc, text = self.run_play(self.play, "--check", auto=True, ai_ops_runtime="podman",
+                                 env=self.engine_environment(docker=True, podman=True, plugin=True))
+        self.assertEqual(rc, 0, text)
+        self.assertIn("compose provider: podman compose", text)
+        self.assertIn('"msg": "runtime engine: podman"', text)
+        self.assertNotIn("docker", (self.root / "engine-calls").read_text())
+        self.assertFalse((self.root / "deploy/.ai-ops-state").exists())
+
+    def test_empty_extra_vars_still_request_auto_detection(self):
+        rc, text = self.run_play(self.play, "--check", auto=True, env=self.engine_environment(docker=True),
+                                 ai_ops_compose_cmd="", ai_ops_runtime="")
+        self.assertEqual(rc, 0, text)
+        self.assertIn("compose provider: docker compose", text)
+
+    def test_whitespace_provider_names_missing_prerequisite(self):
+        rc, text = self.run_play(self.play, "--check", env=self.engine_environment(), ai_ops_compose_cmd="   ", ai_ops_runtime="")
+        self.assertNotEqual(rc, 0, text)
+        self.assertIn("Missing prerequisite: Compose provider", text)
+        self.assertNotIn("No first item", text)
 
     def test_only_ai_ops_passes_preflight(self):
         rc, text = self.run_play(self.play)
@@ -81,6 +179,7 @@ class Preflight(unittest.TestCase):
         handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(self.root / "release"))
         handler.log_message = lambda *a: None
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.addCleanup(server.server_close)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.shutdown)
         base = f"http://127.0.0.1:{server.server_port}"
@@ -124,7 +223,8 @@ class Preflight(unittest.TestCase):
         rc, text = self.run_play(playbook, "--check", "--tags", "verify", "-e", "component=model-catalog")
         self.assertEqual(rc, 0, text)
         for task in ("Validate the component", "ai_ops : Verify SSH connectivity", "ai_ops : Require host and renderer Compose",
-                     "ai_ops_managed_file : Drift gate for model-catalog/config.yaml"):
+                     "ai_ops_managed_file : Read remote current checksum of model-catalog/config.yaml",
+                     "ai_ops_managed_file : Record the comparison result"):
             self.assertIn(task, text)
         self.assertNotIn("Upload model-catalog/config.yaml", text)
 

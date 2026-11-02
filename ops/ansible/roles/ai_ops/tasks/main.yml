@@ -19,16 +19,24 @@
   check_mode: false
   when: ai_ops_compose_cmd == ""
 
-- name: Set compose command and runtime CLI (inventory override wins)
+- name: Resolve Compose provider command (inventory override wins)
   ansible.builtin.set_fact:
-    ai_ops_compose_cmd: "{{ ai_ops_compose_cmd if ai_ops_compose_cmd != '' else __ai_ops_compose_detect.stdout }}"
+    __ai_ops_compose_cmd: "{{ ai_ops_compose_cmd if ai_ops_compose_cmd != '' else __ai_ops_compose_detect.stdout }}"
+
+- name: Require a Compose provider command
+  ansible.builtin.assert:
+    that: __ai_ops_compose_cmd.split() | length > 0
+    fail_msg: "Missing prerequisite: Compose provider command is empty."
+
+- name: Set canonical runtime CLI (inventory override wins)
+  ansible.builtin.set_fact:
     ai_ops_runtime_cli: >-
-      {{ ai_ops_runtime if ai_ops_runtime != '' else ((ai_ops_compose_cmd if ai_ops_compose_cmd != '' else __ai_ops_compose_detect.stdout).split() |
-      first) }}
+      {{ ai_ops_runtime if ai_ops_runtime != '' else
+      (__ai_ops_compose_cmd.split() | first | regex_replace('^podman-compose$', 'podman')) }}
 
 - name: Show detected compose provider
   ansible.builtin.debug:
-    msg: "compose provider: {{ ai_ops_compose_cmd }}"
+    msg: "compose provider: {{ __ai_ops_compose_cmd }}"
 
 - name: Verify SSH connectivity (no fallback auth)
   ansible.builtin.ping:
@@ -58,7 +66,7 @@
 - name: Build the Compose argv shared by the kept command calls
   ansible.builtin.set_fact:
     ai_ops_compose_base_argv: >-
-      {{ ai_ops_compose_cmd.split() + ['-p', ai_ops_compose_project]
+      {{ __ai_ops_compose_cmd.split() + ['-p', ai_ops_compose_project]
          + (['-f'] | product(ai_ops_compose_files) | flatten)
          + (['--env-file'] | product(ai_ops_compose_env_files) | flatten) }}
 

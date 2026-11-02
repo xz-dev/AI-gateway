@@ -113,7 +113,7 @@
     # ai_ops_compose_argv[:3] is env -i PATH=<remote PATH>.
     __ai_ops_component_render_argv: >-
       {{ (['env', '-i', 'PATH=' + lookup('ansible.builtin.env', 'PATH'), ai_ops_compose_renderer_path]
-          if __ai_ops_component_operation == 'deploy' else ai_ops_compose_argv[:3] + ai_ops_compose_cmd.split())
+          if __ai_ops_component_operation == 'deploy' else ai_ops_compose_argv[:3] + __ai_ops_compose_cmd.split())
          + ['-p', ai_ops_compose_project,
             '-f', __ai_ops_component_source_root + '/compose.yaml',
             '-f', __ai_ops_component_source_root + '/compose.override.yaml',

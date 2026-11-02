@@ -99,3 +99,50 @@ with tempfile.TemporaryDirectory(prefix="aisix-config-drift-", dir="/var/tmp") a
     assert not (live / ".ai-ops-state").exists()
     assert not fixture_env.shim_calls(root)
 print("ansible_aisix_config_drift_read_only=passed")
+
+probe = next(t for t in tasks if t.get("register") == "__ai_ops_aisix_models")
+probe_report = next(t for t in tasks if "ansible.builtin.debug" in t and t.get("tags") == ["verify"])
+probe_receipt = next(t for t in tasks if "ansible.builtin.copy" in t)
+for rc, outcome in ((0, "succeeded"), (127, "unavailable"), (8, "failed")):
+    for check in (False, True):
+        with tempfile.TemporaryDirectory(prefix="aisix-admin-probe-", dir="/var/tmp") as temp:
+            root = Path(temp)
+            if not check:
+                (root / ".ai-ops-state").mkdir()
+            secret = "fixture-admin-probe-secret-must-not-appear"
+            compose = root / "fake-compose"
+            compose.write_text("#!/bin/sh\n[ \"$1 $2 $3\" = '-p ai-gateway exec' ] || exit 99\n"
+                               f"echo '{secret}'\necho '{secret}' >&2\nexit {rc}\n")
+            compose.chmod(0o755)
+            env_extra, _ = fixture_env.prepare(root)
+            fixture = [{"hosts": "localhost", "connection": "local", "gather_facts": False,
+                        "module_defaults": {"community.docker.docker_compose_v2_exec": {
+                            "project_src": str(root), "project_name": "ai-gateway"}},
+                        "vars": {"ai_ops_deploy_root": str(root),
+                                 "__ai_ops_aisix_orphans": {"stdout": '{"orphan_candidates": []}'}},
+                        "tasks": [probe, probe_report, probe_receipt]}]
+            play = root / "probe.yml"
+            play.write_text(yaml.safe_dump(fixture))
+            env = dict(os.environ, **env_extra, AI_OPS_SHIM_COMPOSE=str(compose), ANSIBLE_NOCOLOR="1",
+                       ANSIBLE_LOCAL_TEMP=str(root / "ansible-tmp"), ANSIBLE_REMOTE_TEMP=str(root / "remote-tmp"))
+            result = subprocess.run(["ansible-playbook", "-i", "localhost,", str(play), *(["--check"] if check else [])],
+                                    env=env, text=True, capture_output=True, timeout=120)
+            output = result.stdout + result.stderr
+            assert result.returncode == 0, (rc, check, output)
+            assert secret not in output, (rc, check, output)
+            calls = fixture_env.shim_calls(root)
+            receipts = list((root / ".ai-ops-state").glob("receipt-aisix-*.txt"))
+            if check:
+                assert not calls, calls
+                assert not (root / ".ai-ops-state").exists()
+            else:
+                assert [c["module"] for c in calls] == ["docker_compose_v2_exec"], calls
+                assert calls[0]["params"]["service"] == "aisix-status-relay", calls
+                assert len(receipts) == 1
+                assert secret not in receipts[0].read_text()
+                assert f"admin_api_checked={str(rc == 0).lower()}" in receipts[0].read_text().lower()
+                assert "Admin API command probe " + outcome in output, (rc, output)
+                if rc == 0:
+                    assert "skipped/failed" not in output, output
+                    assert "Verify effective routes" not in output, output
+print("ansible_aisix_optional_admin_probe_outcomes=passed")
