@@ -64,7 +64,7 @@ No registry pull or image substitution occurred. These imported references are *
 - AISIX status relay: `172.30.66.2:3001`, not a wildcard listener in AISIX's namespace.
 - Front APISIX: loopback plus `172.30.6.2`/`172.30.8.2:9080`; models APISIX: loopback plus `172.30.12.2`/`172.30.34.2`/`172.30.42.2:9080`.
 - Neither APISIX has a 9443 listener. Their auxiliary control listeners remain loopback-only.
-- Host 9083: exactly `127.0.0.1` and `100.94.238.35`; Docker PortBindings and live host sockets agree. No IPv4/IPv6 wildcard publication.
+- Host 9083: exactly `127.0.0.1` and `${TAILSCALE_IP}` (the reviewed Tailnet binding); Docker PortBindings and live host sockets agree. No IPv4/IPv6 wildcard publication.
 - Keeper shares the models APISIX namespace, with application/control sockets on loopback 8085/9091, no publication, UID 65534, read-only root, dropped capabilities and no-new-privileges.
 - The seven application namespace owners have no default route. The four new relay containers retain their configured non-root/read-only/capability restrictions.
 

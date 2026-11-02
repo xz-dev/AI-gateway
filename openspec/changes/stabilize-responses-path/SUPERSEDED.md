@@ -7,12 +7,15 @@ The files stay in place so existing evidence links remain usable.
 ## Replacement
 
 The deployed path is public APISIX → keepalive → pure cache keeper → stateless
-WS/SSE bridge → Sub2API HTTP/SSE → inner APISIX → AISIX or CPA.
+WS/SSE bridge → Sub2API HTTP/SSE → transparent apisix-models → AISIX → selected backend.
 
 - The keeper does not classify models or own provider credentials.
 - Sub2API account WebSocket mode is off; no inner `/rk` ingress is revived.
-- Routing is literal: any `/` in the model ID selects CPA; otherwise AISIX.
-  Catalog lookups and the old `routing_lkg` fallback no longer select a backend.
+- Current routing follows [model-routing.md](../../../docs/model-routing.md):
+  apisix-models does not inspect bodies; AISIX selects exact → most specific glob →
+  single `*` row to CPA. The former slash-based CPA/AISIX rule is historical,
+  retired by the [2026-10-29 deployment](../../../docs/records/aisix-first-routing-fallback-2026-10-29.md).
+  No slash/Lua inference selector, catalog lookup or `routing_lkg` fallback selects a backend.
 - The retired `deploy-responses-path`/inner keeper operations must stay rejected.
   New single-service Ansible profiles do not reinstate those operations.
 

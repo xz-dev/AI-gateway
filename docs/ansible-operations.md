@@ -497,10 +497,14 @@ remote `services/routing/model-catalog/catalog.lua`, mounted at `/app/catalog.lu
   use the same `--force-recreate` activation; the tracked
   `services/routing/model-catalog/config.yaml` is an image/build default — production desired
   state lives only in the gitignored private config dir.
-- **The post-deploy Admin API route check is optional** (`failed_when: false`):
-  the internal relay path currently returns 401, so effective-route verification
-  is pending a working credential path. Until then, verify via
-  `docker logs ai-gateway-aisix-1 | grep 'resources loaded'` and live traffic.
+- **The post-deploy Admin API command probe is optional** (`failed_when: false`):
+  its sanitized report distinguishes command success (`rc=0`), unavailable
+  (`rc=127`) and other failure. Neither command success nor the receipt's
+  `admin_api_checked` flag proves effective-route/model equivalence. Verify that
+  separately with authorized authenticated read-back; `resources loaded` logs
+  and live traffic alone do not establish equivalence. The [2026-10-30 removal
+  record](records/remove-axis-models-2026-10-30.md#tooling-deviations) preserves
+  an unavailable probe and the separate Admin comparison used for acceptance.
 
 ## Modules, check mode and recorded deviations
 

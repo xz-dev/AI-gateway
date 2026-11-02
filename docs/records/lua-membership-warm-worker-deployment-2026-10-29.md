@@ -2,7 +2,7 @@
 
 ## Result
 
-Production model-catalog now runs the resident membership worker. Initialization has its own 10 s bound, and the 2 s execution bound starts only after the ready handshake. Only the model-catalog container was recreated, through the image-only component path, at 06:08:26 UTC. All five catalog bodies were byte-identical before and after. In 87 minutes of observation, about 60 of them outside the routing windows, the service logged no `wall_time` and no `init_timeout` WARN. The several-hour observation in task 6.1 is still open. This record does not archive the change.
+The resident membership worker was deployed to production model-catalog on 2026-10-29. Initialization has its own 10 s bound, and the 2 s execution bound starts only after the ready handshake. Only the model-catalog container was recreated, through the image-only component path, at 06:08:26 UTC. All five catalog bodies were byte-identical before and after. The initial 87-minute observation, about 60 minutes outside the routing windows, logged no `wall_time` or `init_timeout` WARN. The [completed observation](#observation) reached 200 samples and 3 h 30 min at 09:38:14 UTC, with zero membership failures; the change is [archived with task 6.1 completed and its gate reinterpretations recorded](../../openspec/changes/archive/2026-10-29-lua-membership-warm-worker/tasks.md#6-verify-in-production). These dated results do not certify today's resources or profile. `catalog.lua` remains the membership rule; only the separate inference `routing_selector.lua` was [later retired](aisix-first-routing-fallback-2026-10-29.md).
 
 ## Identities
 
