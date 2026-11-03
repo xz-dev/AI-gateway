@@ -299,7 +299,7 @@ services:
         ipv4_address: 172.30.60.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api:0.2.16-pr7157-pr7217-pr3172-pr8191-ab6b00e@sha256:77f4715f0aa7f66dc1364b162ec4ffd6eab7874b0916d5be4e7a4c6b7b389950}
+    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api:0.2.19-pr7157-pr7217-pr8191-60dbe85@sha256:fcf582f2bb50491f46d6e2818ba699f14e2cf001b719592b9c444421cc870336}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
@@ -543,7 +543,7 @@ services:
   ai-sse-keepalive-proxy:
     build:
       context: ./services/middleware/ai-sse-keepalive-proxy
-    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ghcr.io/xz-dev/ai-sse-keepalive-proxy:1c489390927a986b7aacd3ebdfef3ea33f51d15d@sha256:bc5e360f98a9c71766bef26fbd67d88e93a2e93b372fcd9e5245788475d336f3}
+    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ghcr.io/xz-dev/ai-sse-keepalive-proxy:5ff3e338b1ed301ce72832b9e06893e9975dbd51@sha256:b12366714e08463765266ec60a1f402d045febd4955edcbef590ddffc2bf20ec}
     pull_policy: build
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
@@ -571,7 +571,6 @@ services:
       REQUIRE_NO_DEFAULT_ROUTE: "true"
       WS_PING_INTERVAL: ${AI_SSE_KEEPALIVE_PROXY_WS_PING_INTERVAL:-0s}
       WS_PING_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_PING_TIMEOUT:-5s}
-      WS_WRITE_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_WRITE_TIMEOUT:-120s}
       WS_HANDSHAKE_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_HANDSHAKE_TIMEOUT:-10s}
     healthcheck:
       test: [CMD, /ai-sse-keepalive-proxy, healthcheck]
@@ -662,7 +661,7 @@ services:
 
   # Stateless WS termination before Sub2API; spools are bounded, disposable disk files.
   responses-ws-sse-bridge:
-    image: ${RESPONSES_WS_SSE_BRIDGE_IMAGE:-ghcr.io/xz-dev/responses-ws-sse-bridge:83bb9819a5afbda0dbf0c6c7af998d92de82adae@sha256:9b5c28879f521bd52d13183a76fc7625271c317b07e571a5f5a945088c760fb6}
+    image: ${RESPONSES_WS_SSE_BRIDGE_IMAGE:-ghcr.io/xz-dev/responses-ws-sse-bridge:b482f7128b5f904c50a123889a22030aaa890d8a@sha256:c7c010be8e71f9ebc5365af315ce0b7323a1403593d9661d3c1ba0586ba40c35}
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
     restart: unless-stopped
@@ -942,7 +941,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a}
+    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/ai-gateway-aisix:1.8.0-pr1387-06e8075-r2@sha256:651b0787cf9d97df84b81e4d43def76343561b92553baa392fbb87430a9a3b70}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped
