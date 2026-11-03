@@ -543,7 +543,7 @@ services:
   ai-sse-keepalive-proxy:
     build:
       context: ./services/middleware/ai-sse-keepalive-proxy
-    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ghcr.io/xz-dev/ai-sse-keepalive-proxy:1c489390927a986b7aacd3ebdfef3ea33f51d15d@sha256:bc5e360f98a9c71766bef26fbd67d88e93a2e93b372fcd9e5245788475d336f3}
+    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ghcr.io/xz-dev/ai-sse-keepalive-proxy:5ff3e338b1ed301ce72832b9e06893e9975dbd51@sha256:b12366714e08463765266ec60a1f402d045febd4955edcbef590ddffc2bf20ec}
     pull_policy: build
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
@@ -571,7 +571,6 @@ services:
       REQUIRE_NO_DEFAULT_ROUTE: "true"
       WS_PING_INTERVAL: ${AI_SSE_KEEPALIVE_PROXY_WS_PING_INTERVAL:-0s}
       WS_PING_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_PING_TIMEOUT:-5s}
-      WS_WRITE_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_WRITE_TIMEOUT:-120s}
       WS_HANDSHAKE_TIMEOUT: ${AI_SSE_KEEPALIVE_PROXY_WS_HANDSHAKE_TIMEOUT:-10s}
     healthcheck:
       test: [CMD, /ai-sse-keepalive-proxy, healthcheck]
