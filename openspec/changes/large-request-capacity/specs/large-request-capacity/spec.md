@@ -47,7 +47,7 @@ A request that does not fit SHALL be refused immediately and explicitly, with no
 - 503 `capacity_busy` with `Retry-After` when live tickets hold the capacity;
 - otherwise 507 `insufficient_storage` or 503 `insufficient_memory`.
 
-Every hop that handles a ticketed request SHALL hold a lease on its ticket for its whole handler lifetime. A ticket SHALL be released only after keeper's request has ended and every lease is gone, without timers. A hop SHALL refuse a body of 64 MiB or more that carries no valid ticket.
+Every hop that handles a ticketed request SHALL hold a lease on its ticket for its whole handler lifetime, and SHALL take that lease before it spools any byte of the request. On WS, keeper SHALL write the ticket as the first member of the turn frame so the bridge can read it from a bounded prefix. A ticket SHALL be released only after keeper's request has ended and every lease is gone, without timers. A hop SHALL refuse a body of 64 MiB or more that carries no valid ticket when the received bytes cross 64 MiB, and a hop configured without the ledger SHALL refuse every such body.
 
 #### Scenario: Large request admitted when the host has room
 - **WHEN** one 256 MiB request arrives and the host has room for its footprint
@@ -76,6 +76,14 @@ Every hop that handles a ticketed request SHALL hold a lease on its ticket for i
 #### Scenario: Unauthenticated large request
 - **WHEN** an unauthenticated caller sends a 256 MiB body
 - **THEN** keeper returns 401 in the caller's API shape, creates no ticket and writes no spool
+
+#### Scenario: Bridge spool is covered by the lease from its first byte
+- **WHEN** a ticketed 256 MiB WS frame reaches the bridge, or a second ticketed turn is queued behind a turn that then fails
+- **THEN** the bridge holds the ticket's shared lease before its first spooled byte and until that spool is closed, and the error event and close frame are sent only after queued spools are freed
+
+#### Scenario: Missing ticket or missing ledger
+- **WHEN** a frame of 64 MiB or more arrives without a ticket in its prefix, or the hop has no ledger configured
+- **THEN** the hop refuses it with an explicit `capacity_ticket_missing` error when the received bytes cross 64 MiB, and spools no further bytes
 
 #### Scenario: Inner hop cannot alter the ledger
 - **WHEN** an inner hop tries to create or delete a ticket file

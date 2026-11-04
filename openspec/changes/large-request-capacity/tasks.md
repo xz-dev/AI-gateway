@@ -53,7 +53,7 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
   - the disk and memory formulas, including the on-disk keeper store headroom, the measured `k_disk` (7 N) and the `R_mem` terms `c_h` with measured `k_skel`, with AISIX and CPA doubled in full (review m9);
   - 503 `capacity_busy` with `Retry-After`, 507 `insufficient_storage` and 503 `insufficient_memory`, on HTTP and as WS error events;
   - admission for chunked bodies and fragmented messages at the cap, lowered to the real N;
-  - stripping of the inbound ticket header and member, and propagation of the ticket;
+  - stripping of the inbound ticket header and member, and propagation of the ticket; on WS, the ticket is written as the **first** member of the forwarded turn frame (bridge contract, D4);
   - leases, the exclusive-lock release waiter and the startup waiters; an unparsable ticket at startup is a loud startup error naming the file;
   - the live-ticket metric (count, and per ticket age, sizes and inode; no holder PIDs, review m1), with no expiry.
 
@@ -73,7 +73,12 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
   - set `MAX_MESSAGE_BYTES` and `MAX_BODY_BYTES` to 268,435,456;
   - apply the D3 spool rules (as in 1.2); the spool is closed at turn end, and its disk stays accounted by the ticket (`k_disk = 1`) for the whole turn. Closing it before the response status would release no credit earlier and could stall an upstream that answers before reading the whole body (M1 deviation, accepted 2026-11-04);
   - set the WebSocket library read limit above the cap, and count message bytes in our own code, including fragments and the inflated permessage-deflate size;
-  - hold the ticket lease (read-only ledger mount, blocking `LOCK_SH` on an `O_RDONLY | O_CLOEXEC` fd, `st_nlink > 0` check), strip the frame member and forward the header to Sub2API only.
+  - hold the ticket lease (read-only ledger mount, blocking `LOCK_SH` on an `O_RDONLY | O_CLOEXEC` fd, `st_nlink > 0` check), taken from the ticket that keeper writes as the frame's first member and held **before any spooled byte**; strip the frame member and forward the header to Sub2API only;
+  - refuse a ticketless frame at the 64 MiB crossing, and fail closed without a ledger;
+  - free queued spools before the close frame; keep reading the socket after a refusal so a client close still releases the turn;
+  - read every spool pass through the page-cache-dropping reader; keep separate disk and memory budgets; no cgroup headroom check on the bridge;
+  - deployment: the existing production spool volume is mode 1777 from the old image; recreate it or set it to 0700 in the window.
+  - measure the 256 MiB `memory.peak` on ext4 in CI (local acceptance ran on ZFS, which does not charge page cache to the cgroup).
 
   **Verify:**
   - a 256 MiB frame passes, with `memory.peak ≤ 256m − 32 MiB`;
