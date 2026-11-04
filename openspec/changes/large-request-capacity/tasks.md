@@ -42,7 +42,7 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
   Remove the item-count cap `maxHistoryItems = 8192` (`working.go:25`) and bound history by bytes and accounting only (design D5).
 
   **Verify:**
-  - anonymous memory stays flat at 256 MiB, and `memory.peak ≤ 384m − 32 MiB`;
+  - anonymous memory stays flat at 256 MiB, and `anon + file_dirty + file_writeback + kernel ≤ 384m − 32 MiB` with `oom = oom_kill = 0`, on a filesystem that charges page cache (keeper criterion, D3), with PSI and latency recorded;
   - each D3 rule has a test that fails first;
   - there are no timers, expiries, global request locks, or count or ID caps;
   - a text body with more than 8192 input items (for example 16 MiB of 16 KiB strings with 11,000 items) is accepted, not refused with the misleading 400;
