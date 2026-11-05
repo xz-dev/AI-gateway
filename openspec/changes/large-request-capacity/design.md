@@ -659,6 +659,9 @@ Rollout runs from the innermost hop outward, so that no outer hop admits bodies 
 - Provider 413s pass through unchanged at every hop. The exception is CPA's codex executor, which keeps `context_too_large` for context-length 413s (user decision 2026-11-05).
 - AISIX no longer re-wraps provider 413s or inner capacity errors on any route, including direct-provider routes (chat, `/v1/messages`, translated, Azure/Vertex/Bedrock, rerank, audio, images, videos); they come back with the provider's status, headers and body (leader decision 2026-11-05).
 - Known gap: on a codex size 413, CPA relays the provider's status and body but not its headers.
+- Error field `limit` is renamed `limit_bytes` in the bridge's and keeper's error events and bodies; keeper's own refusals now also carry `hop: keeper`.
+- Admin routes (`/api/v1/admin/*`) keep today's behaviour: no keeper L, opaque admin WS. They are reachable only from loopback and the tailnet operator relay, never from public ingress (leader decision 2026-11-05; re-checked after deploy, task 9.5).
+- Sub2API with legacy risk control enabled refuses a request carrying spooled media with 422 `spooled_media_moderation_unsupported` (off in production today). The prompt guard sees nonce-free placeholders in place of spooled media.
 - Inner capacity errors (`insufficient_memory`, `insufficient_storage`, `capacity_busy`, `capacity_ticket_*`) carry `code`, `hop` and `limit_bytes` where defined, and are not retried or failed over.
 - A single 16 MiB text request on a freshly restarted Sub2API can get 503 `insufficient_memory` until the container settles (leader decision 2026-11-05; profiling the startup anon spike is an M3 item).
 
