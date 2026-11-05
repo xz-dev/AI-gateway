@@ -417,7 +417,7 @@ This is an explicit exception to the rule in `docs/websocket-termination.md` tha
 - each CPA retry re-reads the spool, so no extra memory is used. It does re-upload the body within AISIX's 120 s (D8);
 - the CPA retry budget is unchanged;
 - Sub2API still fails over on that provider 502, because it is a provider 5xx. Each failover reuses the same ticket, and the inner spools of the previous attempt are already closed (D2). The overlap term in `R_mem` covers the AISIX and CPA handlers of the two attempts (D4).
-- A provider 413 is never failed over by Sub2API (D5 Sub2API). **CPA makes a provider 413 request-scoped too** (review m7): it does not rotate to another credential on a 413, so a 245 MB body is uploaded to the provider once, and the provider's 413 is relayed with its cause.
+- A provider 413 is never failed over by Sub2API (D5 Sub2API). **CPA makes a provider 413 request-scoped too** (review m7): it does not rotate to another credential on a 413, so a 245 MB body is uploaded to the provider once, and the provider's 413 is relayed with its cause. The codex executor keeps code `context_too_large` only for context-length signals (`context_length_exceeded` or a context-length message), so clients still compact; every other provider 413, such as a byte-size `request_too_large`, keeps the provider's own code and body (user decision 2026-11-05, full-chain smoke M2).
 
 CI mocks cover an H2 reset, an HTML 403 and a provider 413 on an oversized body. They require bounded attempts and an explicit error, and for the 413 exactly one Sub2API account attempt and exactly one CPA provider attempt.
 
