@@ -202,7 +202,7 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
 
 - [ ] 7.5 **M2 exit gate (frozen scope, 2026-11-05).** One production-RAM full-chain run on the approved images of all five forks, in production-like mode: 2 cores with the compose cpus quotas, production memory limits and GOMEMLIMIT, THP off per hop to emulate production `madvise`, and keeper reading literal `si_mem_available` (dirty pages count as available). The run adds the hops that earlier smokes skipped: Squid with its production config and limit, the firewall APISIX and the keepalive hops. It also adds one WS turn that falls back to HTTP Responses, and a compressed-body check at keeper and bridge (decoded bytes are charged). **Verify:**
   - 245 MB and 256 MiB are admitted and correct over HTTP and WS;
-  - turn 2 arriving 1–17 s and 60 s after a 256 MiB turn 1 is admitted;
+  - turn 2 arriving 1–17 s and 60 s after a 256 MiB turn 1 is admitted, repeated at least 5 times per case (HTTP seq5 and WS-245 continuation), with keeper logging the MemAvailable value it decided on; a turn 2 that lands while turn 1 is still releasing memory may get the retryable 503 `insufficient_memory`, and the count of such refusals and the client's retry outcome are recorded (T-si single sample 2026-11-05: all admitted, margin +17 MiB on WS turn 2);
   - no oom or `oom_kill` in any cgroup; PSI memory `full avg10` peak recorded with a proposed threshold;
   - no timer fires against the measured longest gap;
   - Squid peak memory and OOM count recorded;
