@@ -247,7 +247,9 @@ These rules apply to every spool: keeper, bridge, Sub2API, AISIX and CPA.
 
 ### D4. Host-wide admission gate for large requests
 
-**Scope.** Every request whose body, or keeper-expanded history, is at least 64 MiB (67,108,864 bytes) needs an admission **ticket**. Smaller requests carry no ticket; on covered paths they are still bounded by the inline-bytes limit (D2) and the per-hop memory charge (below).
+**Covered paths** are the Responses endpoints: `/v1/responses` and `/backend-api/codex/responses` (Codex CLI), over HTTP and WS (leader decision 2026-11-05, keeper review M3). Every other path is bounded at the first hop (keeper) by L with the same named 413 the downstream hop would send. A native non-Responses WS message above L gets the bridge's named `request_too_large` error event and a normal close. A route that legitimately needs bodies above L is not given a limit silently; it goes to the user.
+
+**Scope.** Every request on a covered path whose body, or keeper-expanded history, is at least 64 MiB (67,108,864 bytes) needs an admission **ticket**. Smaller requests carry no ticket; on covered paths they are still bounded by the inline-bytes limit (D2) and the per-hop memory charge (below).
 
 **Where admission happens.** Keeper admits. Every inference request passes keeper (Context), and keeper is the first hop that holds request bytes, because both nginx hops stop buffering request bodies (`proxy_request_buffering off`, D5). Keeper also knows the expanded history size before it sends anything. A sidecar would add a hop and a failure mode without seeing more than keeper does.
 

@@ -180,7 +180,7 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
   - splice output uses `encoding/json` escaping where the skeleton was marshalled;
   - the session hash and content seed are computed over the splice stream;
   - the forward path sends the splice reader;
-  - fallback endpoints (other APIs, `/responses/compact`, not converted) refuse above L (at most 16 MiB) with a named 413;
+  - fallback endpoints (other APIs, `/responses/compact`, `/v1beta/*`, `/antigravity/*`, not converted) refuse above L (at most 16 MiB) with a named 413 (leader decision 2026-11-05: 0 requests on `/v1beta` and `/antigravity` in 6 days of production logs);
   - the inline-bytes limit and the per-hop memory charge;
   - the ticket lease, with the header forwarded to apisix-models only and stripped on the Squid relay path.
 
