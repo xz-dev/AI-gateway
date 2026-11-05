@@ -562,7 +562,8 @@ The Sub2API compliance acknowledgment is posted automatically only in this throw
 
 | Rung | Bytes | Expectation after the change |
 |---|---|---|
-| text 16 MiB | 16,777,216 | passes, with every hop's `memory.peak ≤ mem_limit − 32 MiB` |
+| text 16 MiB | 16,777,216 | passes, with every hop's `memory.peak ≤ mem_limit − 32 MiB`, against settled containers (healthy + 30 s), stated in the rung |
+| text 16 MiB, fresh Sub2API | 16,777,216 | every outcome is 200 or an explicit 503 `insufficient_memory`; never an OOM, a bare close or an unnamed 5xx (leader decision 2026-11-05) |
 | text 32 MiB | 33,554,432 | 413 `request_too_large` naming the 16 MiB inline-bytes limit |
 | text just under the gate | 67,108,863 | 413 naming the 16 MiB inline-bytes limit |
 | text 64 MiB | 67,108,864 | ticket admitted, then 413 naming the 8 MiB ticketed limit |
@@ -648,6 +649,16 @@ Rollout runs from the innermost hop outward, so that no outer hop admits bodies 
    - no full-size stress test runs in production.
 
 **Rollback.** Turn off each component's switch, which keeps its fork image and falls back to the in-memory path, and restore the previous lock. A rollback also restores the previous caps and the nginx request buffering, because those caps are what keep the in-memory paths from being OOM-killed.
+
+## Visible to users and clients (M3 change notes)
+
+- A Responses body above the per-route ceiling or 256 MiB, or above the 16 MiB inline-bytes limit (8 MiB when ticketed), gets a named 413 instead of an OOM, a bare close or an empty reply.
+- `/backend-api/codex/responses` is a covered path, like `/v1/responses` (leader decision 2026-11-05).
+- Non-Responses routes (`/v1/chat/completions`, `/v1/messages`, `/responses/compact`, `/v1beta/*`, `/antigravity/*` and others) get the same named 413 above L = 16 MiB, now already at keeper.
+- A native non-Responses WS message above L gets a named `request_too_large` error event and a normal close.
+- Provider 413s pass through unchanged at every hop. The exception is CPA's codex executor, which keeps `context_too_large` for context-length 413s (user decision 2026-11-05).
+- Inner capacity errors (`insufficient_memory`, `insufficient_storage`, `capacity_busy`, `capacity_ticket_*`) carry `code`, `hop` and `limit_bytes` where defined, and are not retried or failed over.
+- A single 16 MiB text request on a freshly restarted Sub2API can get 503 `insufficient_memory` until the container settles (leader decision 2026-11-05; profiling the startup anon spike is an M3 item).
 
 ## Risks / Trade-offs
 
