@@ -657,6 +657,8 @@ Rollout runs from the innermost hop outward, so that no outer hop admits bodies 
 - Non-Responses routes (`/v1/chat/completions`, `/v1/messages`, `/responses/compact`, `/v1beta/*`, `/antigravity/*` and others) get the same named 413 above L = 16 MiB, now already at keeper.
 - A native non-Responses WS message above L gets a named `request_too_large` error event and a normal close.
 - Provider 413s pass through unchanged at every hop. The exception is CPA's codex executor, which keeps `context_too_large` for context-length 413s (user decision 2026-11-05).
+- AISIX no longer re-wraps provider 413s or inner capacity errors on any route, including direct-provider routes (chat, `/v1/messages`, translated, Azure/Vertex/Bedrock, rerank, audio, images, videos); they come back with the provider's status, headers and body (leader decision 2026-11-05).
+- Known gap: on a codex size 413, CPA relays the provider's status and body but not its headers.
 - Inner capacity errors (`insufficient_memory`, `insufficient_storage`, `capacity_busy`, `capacity_ticket_*`) carry `code`, `hop` and `limit_bytes` where defined, and are not retried or failed over.
 - A single 16 MiB text request on a freshly restarted Sub2API can get 503 `insufficient_memory` until the container settles (leader decision 2026-11-05; profiling the startup anon spike is an M3 item).
 
