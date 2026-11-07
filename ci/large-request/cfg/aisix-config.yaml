@@ -1,0 +1,18 @@
+# Local capacity chain only: loopback-style fake keys.
+proxy:
+  addr: 0.0.0.0:3000
+resources_file: /etc/aisix/resources.yaml
+admin:
+  addr: 127.0.0.1:3002
+  admin_keys:
+    - local-admin-capacity-test
+upstream:
+  stream_timeout_ms: 120000
+observability:
+  access_log: true
+body_spool:
+  threshold_bytes: 65536
+  dir: /var/lib/aisix-spool
+  ledger_dir: /run/capacity-ledger
+  ticket_upstream_hosts: [cli-proxy-api]
+  disk_reserve_bytes: 0
