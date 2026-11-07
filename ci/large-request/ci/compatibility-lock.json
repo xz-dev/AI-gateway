@@ -1,0 +1,121 @@
+{
+  "schema": "ai-gateway/compatibility-lock/v1",
+  "generated": "2026-11-07T10:19:59Z",
+  "source": {
+    "run_id": "20261107T101642Z-2819578",
+    "verdict": "pass",
+    "rungs": [
+      "http-image-1m",
+      "ws-image-1m",
+      "http-text-16m",
+      "ws-text-16m",
+      "http-image-64m",
+      "ws-image-64m",
+      "http-image-256m",
+      "ws-image-256m",
+      "http-small-16m",
+      "http-tiny-16m"
+    ],
+    "nightly": false,
+    "manifest_sha256": "4cf10ff73762c54892a9951092a7e15a51d0f4671b4b7289a90d3a9195fb7a58",
+    "summary_sha256": "8557255952a58899099c91a3a69103b4f99c8c41a32bdf195776e745ed213429",
+    "harness_git": "070954b9c0db31b3ae99c01a04ec4ce94e328261"
+  },
+  "images": {
+    "keeper": "ghcr.io/xz-dev/openai-api-cache-keeper@sha256:ef4dc093e218bed00b5deabff6951e7781f6ce5a57f0c34ee021844ed2d6798b",
+    "bridge": "ghcr.io/xz-dev/responses-ws-sse-bridge@sha256:dede337bbe10fc3c79f0c7a7e23d0bbf6f4adf28ba22610fbe0fdefa75ccd411",
+    "sub2api": "ghcr.io/xz-dev/sub2api@sha256:340273920f7f2abf3a6eb23fd1593fcc6206d60a4b113850ef43f31c8a232160",
+    "aisix": "ghcr.io/xz-dev/aisix@sha256:b9d01af4a8d9baa736767b3995ed76fb0c0450816daa40f84bf4b1c39271e9c6",
+    "cpa": "ghcr.io/xz-dev/cliproxyapi@sha256:4835aa6c189f2db5d4a2558e4533e9b7eb185ece17b20b4f3b10ea2134bf2b6a",
+    "postgres": "docker.io/library/postgres@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873",
+    "redis": "docker.io/library/redis@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0",
+    "mock_base": "docker.io/library/alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
+  },
+  "config_sha256": {
+    "prod:compose.yaml": "6385d3b8bf983a2bfed9b268089dfa3fe0b08c5f67850e4924dcdbc8775c582f",
+    "prod:firewall/config.yaml": "fc2f0c1cc4b833b628855767f426e8d1b33b75506e3240933f4731c2bf52fe82",
+    "prod:firewall/apisix.yaml": "564e63e84f8355ac390cbf8caf7e4c843d27bdc0b375626fef06cd0ddcf6c59e",
+    "prod:egress/policy.example.json": "96a1d36d946fd9d2b8a168d0f9446e503294297e8aa17e4ceb82ebabb349a0cc",
+    "prod:egress/unbound.conf": "2c397dcbb7fc6b434d9d3c1cf7ea1d4facb6ed1eeb3c79d9f5f65145b6629b6e",
+    "prod:egress/Dockerfile": "cc703242b0114d6c8498543f6eaa95414963fd5253c2b0001324a04ad1c3ec8c",
+    "prod:render-egress-policy.py": "c352e1d29421111c1fc3701c7c7bcf30d8ba84c4397de1b71cdb27aa04b17ebf",
+    "cfg/cpa-config.yaml": "b121be26d15830cffadefaf5bae5fef29aa74090aef68e19ea5a84031c34ae21",
+    "cfg/aisix-config.yaml": "ea7a7ee3b07f41c0ddd80fbaeb03da62ac65c6cf003cfc9ee81805f685684428",
+    "cfg/aisix-resources.yaml": "731791746e2e6838fc530598cdd5439a717dde7a3ff84dd7f5265347073434ad",
+    "harness:rungs.py": "2735bff8c31adae16cabd13736f03094945f7b0e9dc90d10d7e16f4e26452699",
+    "harness:hlib.py": "e09198247b47ec97412c4b34c4db136400f702e1ae54e01f4da4ec4c3af2f540",
+    "harness:s2a_setup.py": "e3dd52438f6eac5c92dd55b702de3093bdb4e8a63836b3bce6e4816b8c733216",
+    "harness:gen.py": "502aa62ba8fa080c28289efbe9d53b06bdc799f5f05a286632949056cca77b4d",
+    "harness:wsclient/main.go": "5e8b74890e65220d6917a438bd3e48f70286a0908c702f4d54ec459a45082a60",
+    "harness:mock/main.go": "2e2ffe590a3864ca361ff8f38aad1483ef9985769352b3dae8f1f93bf7dda89a",
+    "harness:ci/ladder.sh": "0e318203c4509ba7abe9cb4459175cf3080c2dd240d4cb63e9f38c104d406b4e",
+    "harness:ci/compose.yaml": "c98c31f32c4ce0130e0927df4789b78c69d8bb63753df44efc94bc4966d0d4bf",
+    "harness:ci/verdict.py": "894212cd4da094cf0734600bb3ab70d51dbb2a0e3bfa148a5c64df4b2c6e7d6a",
+    "harness:ci/lock_from_manifest.py": "e2d0967785fceda794938082e504ae3062a2da129275f1ee0051aa2c38270a1a",
+    "harness:gen_small.py": "2b06d0671771861e16102648f861b10f90f106f25cff9a18b3f7efc259762676",
+    "harness:gen_tiny.py": "0181282b4f8ac05b73f32bd195030df814f464d9bf684a53f96667591000e104",
+    "prod:firewall/lua/model_list_intersection.lua": "65aa2feb01ed1fe643e5bb238e22a533ac98b667551a897118071f5cbdb57a0c",
+    "prod:firewall/lua/model_list_intersection_test.lua": "f5778d28faaeefc665098ac8b98c3f21ad209ac5ee14be28ffea8bc461c31857"
+  },
+  "cap_bytes": 268435456,
+  "peaks_bytes": {
+    "keeper": 402653184,
+    "bridge": 22888448,
+    "sub2api": 95756288,
+    "aisix": 397860864,
+    "cpa": 311480320
+  },
+  "mem_limits_bytes": {
+    "keeper": 402653184,
+    "bridge": 268435456,
+    "sub2api": 335544320,
+    "aisix": 536870912,
+    "cpa": 805306368,
+    "pg": 419430400,
+    "redis": 83886080
+  },
+  "footprint": {
+    "basis": "declared",
+    "k_disk": {
+      "keeper": 2,
+      "bridge": 1,
+      "sub2api": 1,
+      "aisix": 1,
+      "cpa": 2
+    },
+    "k_mem": {
+      "keeper": 0,
+      "bridge": 0,
+      "sub2api": 0.1,
+      "aisix": 0.1,
+      "cpa": 0.1
+    },
+    "k_skel": {
+      "keeper": 0,
+      "bridge": 0,
+      "sub2api": 17,
+      "aisix": 5,
+      "cpa": 9
+    },
+    "s_ticket_bytes": 8388608,
+    "p_h_bytes": 16777216
+  },
+  "inline_limits_bytes": {
+    "sub2api": {
+      "untick": 16777216,
+      "ticketed": 8388608
+    },
+    "aisix": {
+      "untick": 16777216,
+      "ticketed": 8388608
+    },
+    "cpa": {
+      "untick": 16777216,
+      "ticketed": 8388608
+    }
+  },
+  "fallback_limits_bytes": {
+    "/v1/chat/completions": null,
+    "/responses/compact": null
+  }
+}

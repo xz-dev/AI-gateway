@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ai-gateway/compatibility-lock/v1",
+  "title": "AI gateway capacity compatibility lock (large-request-capacity task 8.2)",
+  "description": "Written by ci/lock_from_manifest.py from a green ladder run (manifest.json + summary.json). Production deploys only image digests that appear in a published lock. ci/ladder.sh reads 'images' to start the stack.",
+  "type": "object",
+  "required": ["schema", "images"],
+  "additionalProperties": false,
+  "$defs": {
+    "digestRef": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$",
+      "description": "name@sha256:<64 hex>; tags are not allowed"
+    },
+    "bytesByHop": {
+      "type": "object",
+      "propertyNames": {"enum": ["keeper", "bridge", "sub2api", "aisix", "cpa", "pg", "redis", "fw", "keepalive", "squid"]},
+      "additionalProperties": {"type": ["integer", "null"], "minimum": 0}
+    },
+    "factorByHop": {
+      "type": "object",
+      "propertyNames": {"enum": ["keeper", "bridge", "sub2api", "aisix", "cpa"]},
+      "additionalProperties": {"type": "number", "minimum": 0}
+    }
+  },
+  "properties": {
+    "schema": {"const": "ai-gateway/compatibility-lock/v1"},
+    "generated": {"type": "string", "format": "date-time"},
+    "source": {
+      "type": "object",
+      "description": "The run this lock was emitted from.",
+      "properties": {
+        "run_id": {"type": "string"},
+        "verdict": {"const": "pass"},
+        "rungs": {"type": "array", "items": {"type": "string"}},
+        "nightly": {"type": "boolean"},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "summary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "harness_git": {"type": ["string", "null"]}
+      }
+    },
+    "images": {
+      "type": "object",
+      "description": "Every image the ladder stack runs, by digest.",
+      "required": ["keeper", "bridge", "sub2api", "aisix", "cpa", "postgres", "redis", "mock_base"],
+      "additionalProperties": {"$ref": "#/$defs/digestRef"},
+      "properties": {
+        "keeper": {"$ref": "#/$defs/digestRef"},
+        "bridge": {"$ref": "#/$defs/digestRef"},
+        "sub2api": {"$ref": "#/$defs/digestRef"},
+        "aisix": {"$ref": "#/$defs/digestRef"},
+        "cpa": {"$ref": "#/$defs/digestRef"},
+        "postgres": {"$ref": "#/$defs/digestRef"},
+        "redis": {"$ref": "#/$defs/digestRef"},
+        "mock_base": {"$ref": "#/$defs/digestRef"}
+      }
+    },
+    "config_sha256": {
+      "type": "object",
+      "description": "sha256 of every config and harness file of the run (manifest file_sha256).",
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "cap_bytes": {"type": "integer", "description": "The request cap the run used (production 268435456)."},
+    "peaks_bytes": {"$ref": "#/$defs/bytesByHop", "description": "Highest cgroup memory.peak per hop over all rungs."},
+    "mem_limits_bytes": {"$ref": "#/$defs/bytesByHop"},
+    "footprint": {
+      "type": "object",
+      "description": "Factors of design D4 (R_disk = sum k_disk,h x N; c_h = k_mem,h x N + k_skel,h x S_ticket + P_h). 'declared' = the values keeper's gate uses; 'measured' = derived from this run's peaks.",
+      "required": ["basis", "k_disk", "k_mem", "k_skel"],
+      "properties": {
+        "basis": {"enum": ["declared", "measured"]},
+        "k_disk": {"$ref": "#/$defs/factorByHop"},
+        "k_mem": {"$ref": "#/$defs/factorByHop"},
+        "k_skel": {"$ref": "#/$defs/factorByHop"},
+        "s_ticket_bytes": {"type": "integer"},
+        "p_h_bytes": {"type": "integer"}
+      }
+    },
+    "inline_limits_bytes": {
+      "type": "object",
+      "description": "S_h per JSON-parsing hop (design D2): untick = without a ticket, ticketed = with a ticket.",
+      "additionalProperties": {
+        "type": "object", "required": ["untick", "ticketed"],
+        "properties": {"untick": {"type": "integer"}, "ticketed": {"type": "integer"}}
+      }
+    },
+    "fallback_limits_bytes": {
+      "type": "object",
+      "description": "L per fallback path (design D2, at most 16 MiB). null = not measured by this run.",
+      "additionalProperties": {"type": ["integer", "null"], "maximum": 16777216}
+    }
+  }
+}
