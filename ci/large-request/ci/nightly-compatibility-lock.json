@@ -1,0 +1,141 @@
+{
+  "schema": "ai-gateway/compatibility-lock/v1",
+  "generated": "2026-11-09T10:09:33Z",
+  "source": {
+    "run_id": "20261109T100328Z-2484208",
+    "verdict": "pass",
+    "rungs": [
+      "http-image-1m",
+      "ws-image-1m",
+      "http-text-16m",
+      "ws-text-16m",
+      "http-image-64m",
+      "ws-image-64m",
+      "http-image-256m",
+      "ws-image-256m",
+      "http-small-16m",
+      "http-tiny-16m",
+      "http-image-1g",
+      "ws-image-1g"
+    ],
+    "nightly": true,
+    "manifest_sha256": "707c1c671446b4089a558e428eac5d462e07ed42f567fd75181c9335b7ed5afb",
+    "summary_sha256": "3614f5fc3f987fe563872c3c06cf8035b1edb595c45d4a0c0b941a5ac992abc9",
+    "harness_git": "d85b97dca8fc4575c7e48d128cd92a5ffa98ecc2"
+  },
+  "images": {
+    "keeper": "ghcr.io/xz-dev/openai-api-cache-keeper@sha256:ef4dc093e218bed00b5deabff6951e7781f6ce5a57f0c34ee021844ed2d6798b",
+    "bridge": "ghcr.io/xz-dev/responses-ws-sse-bridge@sha256:dede337bbe10fc3c79f0c7a7e23d0bbf6f4adf28ba22610fbe0fdefa75ccd411",
+    "sub2api": "ghcr.io/xz-dev/sub2api@sha256:340273920f7f2abf3a6eb23fd1593fcc6206d60a4b113850ef43f31c8a232160",
+    "aisix": "ghcr.io/xz-dev/aisix@sha256:b9d01af4a8d9baa736767b3995ed76fb0c0450816daa40f84bf4b1c39271e9c6",
+    "cpa": "ghcr.io/xz-dev/cliproxyapi@sha256:4835aa6c189f2db5d4a2558e4533e9b7eb185ece17b20b4f3b10ea2134bf2b6a",
+    "postgres": "docker.io/library/postgres@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873",
+    "redis": "docker.io/library/redis@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0",
+    "mock_base": "docker.io/library/alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6",
+    "firewall": "docker.io/apache/apisix@sha256:9a7e45dc943fbf10ec916d1232bae4cda9302ae28a4696cfb83c2da01d261141",
+    "apisix-models": "docker.io/apache/apisix@sha256:9a7e45dc943fbf10ec916d1232bae4cda9302ae28a4696cfb83c2da01d261141",
+    "squid": "ghcr.io/xz-dev/ai-gateway-squid@sha256:d86b1e221cc6288a09897a12fcf55f9490142e6761933f98b511130ba19dc9e3"
+  },
+  "config_sha256": {
+    "prod:compose.yaml": "4e5cec57b11bc01e2ceb7c36ed174d98c192f57e67a563808d2ac299b5a71c6b",
+    "prod:firewall/config.yaml": "fc2f0c1cc4b833b628855767f426e8d1b33b75506e3240933f4731c2bf52fe82",
+    "prod:firewall/apisix.yaml": "564e63e84f8355ac390cbf8caf7e4c843d27bdc0b375626fef06cd0ddcf6c59e",
+    "prod:egress/policy.example.json": "96a1d36d946fd9d2b8a168d0f9446e503294297e8aa17e4ceb82ebabb349a0cc",
+    "prod:egress/unbound.conf": "2c397dcbb7fc6b434d9d3c1cf7ea1d4facb6ed1eeb3c79d9f5f65145b6629b6e",
+    "prod:egress/Dockerfile": "cc703242b0114d6c8498543f6eaa95414963fd5253c2b0001324a04ad1c3ec8c",
+    "prod:render-egress-policy.py": "c352e1d29421111c1fc3701c7c7bcf30d8ba84c4397de1b71cdb27aa04b17ebf",
+    "run:fw/config.yaml": "6b95c5e1ac4313f1a995b1590ac3bc555f49d71b0f53aba8715df4d40d59f244",
+    "run:fw/apisix.yaml": "5af92f5f0a3c25a920226f1a81dac1f9208f25168a65bc8ccb3b36b1e1cb5bce",
+    "run:apisix-models/config.yaml": "6c6db2943c8772fd65f92743f9441500f49470b586aaa26e4ff15efeea14df7b",
+    "run:apisix-models/apisix.yaml": "81d33e0021f2f9657e843ab191be83e6e4bac0d07c4fa83ff960f88a39533cad",
+    "run:cpa-config.yaml": "e1a761db3ae0ead68328198ef1ca283c1fd1e91ecb6b40b8ad0b281140824676",
+    "cfg/cpa-config.yaml": "5fe0f5e155921327f322359f84c97e78468132452d44927f34578cd24b98e519",
+    "cfg/aisix-config.yaml": "ea7a7ee3b07f41c0ddd80fbaeb03da62ac65c6cf003cfc9ee81805f685684428",
+    "cfg/aisix-resources.yaml": "731791746e2e6838fc530598cdd5439a717dde7a3ff84dd7f5265347073434ad",
+    "harness:rungs.py": "da3fc466c94552063338c048b640235bc9f0f02bb9f8baa33e9c73c5df0fdb16",
+    "harness:hlib.py": "e09198247b47ec97412c4b34c4db136400f702e1ae54e01f4da4ec4c3af2f540",
+    "harness:s2a_setup.py": "3a965e21d8ca678463e588c39745c0c83f8bd3d25c3b115f7783c0b82c2034a4",
+    "harness:gen.py": "502aa62ba8fa080c28289efbe9d53b06bdc799f5f05a286632949056cca77b4d",
+    "harness:wsclient/main.go": "5e8b74890e65220d6917a438bd3e48f70286a0908c702f4d54ec459a45082a60",
+    "harness:mock/main.go": "2e2ffe590a3864ca361ff8f38aad1483ef9985769352b3dae8f1f93bf7dda89a",
+    "harness:ci/ladder.sh": "e5eed68ad19706ea2b959be4d92cd27d24f1d1e0d6db26459299eec12dcbd60b",
+    "harness:ci/compose.yaml": "7251718cb71a8d8c0b1f4bbaef08cb2aad9ee9b77f794f45aa88533e07514140",
+    "harness:ci/compose.full-stack.yaml": "9c3a86875aad61b96823f12253812255eff8bcca4acf1ef31ae9c4309819bddc",
+    "harness:ci/verdict.py": "894212cd4da094cf0734600bb3ab70d51dbb2a0e3bfa148a5c64df4b2c6e7d6a",
+    "harness:ci/lock_from_manifest.py": "80f0b42ee26185ac023d2bfc6da9741a95d0da1bc144c88f915f920134f71364",
+    "harness:ci/render_hops.py": "1ce804904d7da3283c64868d751825b1306e09428f2e128c3a0095f1a0ee4396",
+    "harness:ci/test_render_hops.py": "484bd82489fe5e00165b5a9600d359c9a0ad76a9650d03d357b59f6d32750043",
+    "harness:cfg/squid.conf": "822098d1fe325eb5b98f908c37d61c93a3fcbd2cb6820be219e389a3194c0b90",
+    "harness:gen_small.py": "2b06d0671771861e16102648f861b10f90f106f25cff9a18b3f7efc259762676",
+    "harness:gen_tiny.py": "0181282b4f8ac05b73f32bd195030df814f464d9bf684a53f96667591000e104",
+    "prod:firewall/lua/model_list_intersection.lua": "65aa2feb01ed1fe643e5bb238e22a533ac98b667551a897118071f5cbdb57a0c",
+    "prod:firewall/lua/model_list_intersection_test.lua": "f5778d28faaeefc665098ac8b98c3f21ad209ac5ee14be28ffea8bc461c31857"
+  },
+  "cap_bytes": 1073741824,
+  "peaks_bytes": {
+    "keeper": 402657280,
+    "bridge": 22425600,
+    "sub2api": 69132288,
+    "aisix": 462327808,
+    "cpa": 460886016,
+    "firewall": 64942080,
+    "apisix-models": 71057408,
+    "squid": 25747456
+  },
+  "mem_limits_bytes": {
+    "keeper": 402653184,
+    "bridge": 268435456,
+    "sub2api": 335544320,
+    "aisix": 536870912,
+    "cpa": 805306368,
+    "firewall": 335544320,
+    "apisix-models": 134217728,
+    "squid": 201326592,
+    "pg": 419430400,
+    "redis": 83886080
+  },
+  "footprint": {
+    "basis": "declared",
+    "k_disk": {
+      "keeper": 2,
+      "bridge": 1,
+      "sub2api": 1,
+      "aisix": 1,
+      "cpa": 2
+    },
+    "k_mem": {
+      "keeper": 0,
+      "bridge": 0,
+      "sub2api": 0.1,
+      "aisix": 0.1,
+      "cpa": 0.1
+    },
+    "k_skel": {
+      "keeper": 0,
+      "bridge": 0,
+      "sub2api": 17,
+      "aisix": 5,
+      "cpa": 9
+    },
+    "s_ticket_bytes": 8388608,
+    "p_h_bytes": 16777216
+  },
+  "inline_limits_bytes": {
+    "sub2api": {
+      "untick": 16777216,
+      "ticketed": 8388608
+    },
+    "aisix": {
+      "untick": 16777216,
+      "ticketed": 8388608
+    },
+    "cpa": {
+      "untick": 16777216,
+      "ticketed": 8388608
+    }
+  },
+  "fallback_limits_bytes": {
+    "/v1/chat/completions": null,
+    "/responses/compact": null
+  }
+}

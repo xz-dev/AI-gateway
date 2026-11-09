@@ -1,0 +1,6 @@
+# Runtime artifacts: ladder.sh builds these locally and at each CI run.
+/bin/
+/bodies/
+/logs/
+/__pycache__/
+*.pyc

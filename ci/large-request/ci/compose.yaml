@@ -1,0 +1,177 @@
+# CI capacity ladder stack (OpenSpec large-request-capacity task 8.2 skeleton). Started by ci/ladder.sh, which
+# sets every variable below from ci/compatibility-lock.json and the run directory. Throwaway only: fake keys, a
+# mock provider. keeper -> bridge -> Sub2API -> AISIX -> CPA -> mock.
+# Production mem_limits with no swap (memswap_limit = mem_limit). Container names are ${PFX}-<hop>, as the harness
+# (hlib.py, rungs.py, manifest.py) expects. Paths inside the hop containers follow the production compose layout.
+# NIGHTLY=1 merges compose.full-stack.yaml to add firewall, apisix-models and Squid.
+name: ${PFX:?}
+
+x-noegress: &noegress
+  HTTP_PROXY: http://127.0.0.1:9
+  HTTPS_PROXY: http://127.0.0.1:9
+  http_proxy: http://127.0.0.1:9
+  https_proxy: http://127.0.0.1:9
+
+services:
+  mock:
+    image: ${MOCK_BASE_IMAGE:?}
+    container_name: ${PFX}-mock
+    networks: [chain]
+    command: ["/mock"]
+    environment: {REC_DIR: /rec, CTL_FILE: /rec/mode, MOCK_ADDR: ":18080"}
+    volumes:
+      - ${LRC_HOME:?}/bin/mock:/mock:ro
+      - ${RUN:?}/rec:/rec
+
+  pg:
+    image: ${POSTGRES_IMAGE:?}
+    container_name: ${PFX}-pg
+    networks: [chain]
+    environment: {POSTGRES_PASSWORD: localtest, POSTGRES_DB: sub2api}
+    cpus: 1.0
+    mem_limit: 400m
+    memswap_limit: 400m
+
+  redis:
+    image: ${REDIS_IMAGE:?}
+    container_name: ${PFX}-redis
+    networks: [chain]
+    command: ["redis-server", "--save", ""]
+    cpus: 0.5
+    mem_limit: 80m
+    memswap_limit: 80m
+
+  cpa:
+    image: ${CPA_IMAGE:?}
+    container_name: ${PFX}-cpa
+    networks: {chain: {aliases: [cli-proxy-api]}}
+    working_dir: /CLIProxyAPI
+    command: ["./CLIProxyAPI", "-config", "/CLIProxyAPI/conf/config.yaml"]
+    environment:
+      <<: *noegress
+      GOMEMLIMIT: ${CPA_GOMEMLIMIT:-512MiB}
+      NO_PROXY: mock,localhost,127.0.0.1
+    volumes:
+      - ${CPA_CONFIG:-${LRC_HOME}/cfg/cpa-config.yaml}:/CLIProxyAPI/conf/config.yaml:ro
+      - ${FS:?}/cpa-spool:/var/lib/cpa-spool
+      - ${FS}/ledger:/run/capacity-ledger:ro
+      - ${FS}/cpa-auth:/root/.cli-proxy-api
+      - ${FS}/cpa-logs:/CLIProxyAPI/logs
+    tmpfs: ["/tmp:rw,size=64m"]
+    cpus: 1.75
+    mem_limit: ${CPA_MEM:-768m}
+    memswap_limit: ${CPA_MEM:-768m}
+
+  aisix:
+    image: ${AISIX_IMAGE:?}
+    container_name: ${PFX}-aisix
+    networks: [chain]
+    user: "10001:10001"
+    group_add: ["65534"]
+    command: ["--config", "/etc/aisix/config.yaml"]
+    environment:
+      # CAP-INVENTORY task 8.2: proxy.request_body_limit_bytes via its env override, CAP_BYTES-driven.
+      AISIX_PROXY__REQUEST_BODY_LIMIT_BYTES: ${CAP_BYTES:-268435456}
+    volumes:
+      - ${LRC_HOME}/cfg/aisix-config.yaml:/etc/aisix/config.yaml:ro
+      - ${LRC_HOME}/cfg/aisix-resources.yaml:/etc/aisix/resources.yaml:ro
+      - ${FS}/aisix-spool:/var/lib/aisix-spool
+      - ${FS}/ledger:/run/capacity-ledger:ro
+    tmpfs: ["/tmp:rw,size=16m"]
+    cpus: 1.0
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  sub2api:
+    image: ${SUB2API_IMAGE:?}
+    container_name: ${PFX}-sub2api
+    networks: [chain]
+    user: "1000:1000"
+    group_add: ["65534"]
+    ports: ["127.0.0.1:18090:8080"]
+    environment:
+      <<: *noegress
+      AUTO_SETUP: "true"
+      ADMIN_EMAIL: admin@example.test
+      ADMIN_PASSWORD: LocalTest-12345
+      DATABASE_HOST: pg
+      DATABASE_PORT: "5432"
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: localtest
+      DATABASE_DBNAME: sub2api
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8080"
+      SERVER_MODE: release
+      JWT_SECRET: local-capacity-test-jwt-secret-0123456789abcdef
+      TOTP_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      RUN_MODE: standard
+      SECURITY_URL_ALLOWLIST_ENABLED: "false"
+      GOMEMLIMIT: 288MiB
+      TZ: UTC
+      GATEWAY_BODY_SPOOL_ENABLED: "true"
+      GATEWAY_BODY_SPOOL_DIR: /spool
+      GATEWAY_BODY_SPOOL_LEDGER_DIR: /run/capacity-ledger
+      GATEWAY_BODY_SPOOL_TICKET_FORWARD_HOSTS: aisix:3000
+      # CAP-INVENTORY: SERVER_MAX_REQUEST_BODY_SIZE / GATEWAY_MAX_BODY_SIZE, CAP_BYTES-driven.
+      SERVER_MAX_REQUEST_BODY_SIZE: ${CAP_BYTES:-268435456}
+      GATEWAY_MAX_BODY_SIZE: ${CAP_BYTES:-268435456}
+      NO_PROXY: aisix,pg,redis,localhost,127.0.0.1
+    volumes:
+      - ${FS}/s2a-data:/app/data
+      - ${FS}/sub2api-spool:/spool
+      - ${FS}/ledger:/run/capacity-ledger:ro
+    cpus: 1.5
+    mem_limit: 320m
+    memswap_limit: 320m
+
+  bridge:
+    image: ${BRIDGE_IMAGE:?}
+    container_name: ${PFX}-bridge
+    networks: [chain]
+    user: "65534:65534"
+    environment:
+      UPSTREAM_URL: http://sub2api:8080
+      LISTEN_ADDR: 0.0.0.0:8086
+      SPOOL_DIR: /spool
+      GOMEMLIMIT: 192MiB
+      CAPACITY_LEDGER_DIR: /run/capacity-ledger
+      # CAP-INVENTORY task 8.2: MAX_MESSAGE_BYTES, CAP_BYTES-driven (production default is 256 MiB).
+      MAX_MESSAGE_BYTES: ${CAP_BYTES:-268435456}
+    volumes:
+      - ${FS}/bridge-spool:/spool
+      - ${FS}/ledger:/run/capacity-ledger:ro
+    cpus: 0.5
+    mem_limit: 256m
+    memswap_limit: 256m
+
+  keeper:
+    image: ${KEEPER_IMAGE:?}
+    container_name: ${PFX}-keeper
+    networks: [chain]
+    user: "65534:65534"
+    ports: ["127.0.0.1:18085:8085"]
+    environment:
+      UPSTREAM_URL: http://bridge:8086
+      LISTEN_ADDR: 0.0.0.0:8085
+      STORE_DIR: /var/tmp/openai-api-cache-keeper
+      IGNORE_CLIENT_STORE_FALSE: "true"
+      GOMEMLIMIT: 256MiB
+      STORE_TTL: 10m
+      STORE_MAX_ENTRIES: "100"
+      STORE_MAX_BYTES: "0"
+      CAPACITY_LEDGER_DIR: /run/capacity-ledger
+      # the production cap (256 MiB) unless NIGHTLY=1 raises it on this throwaway stack only
+      MAX_REQUEST_BYTES: ${CAP_BYTES:-268435456}
+      STORE_PIN_MAX_BYTES: ${CAP_BYTES:-268435456}
+    volumes:
+      - ${FS}/keeper-store:/var/tmp/openai-api-cache-keeper
+      - ${FS}/ledger:/run/capacity-ledger
+    cpus: 0.5
+    mem_limit: 384m
+    memswap_limit: 384m
+
+
+networks:
+  chain: {}

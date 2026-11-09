@@ -1,0 +1,54 @@
+# Local capacity chain only: fake keys, mock provider.
+# Production behaviour, non-secret settings only (M2 exit gate): file logging on, debug off, usage
+# statistics on, codex stream bootstrap buffering on, codex key with websockets, no header passthrough,
+# a payload filter that drops prompt_cache_retention, optimize-multi-agent-v2 off.
+config-version: 8
+server:
+  host: 0.0.0.0
+  port: 8317
+  max-request-body-bytes: ${CAP_BYTES}
+  body-spool:
+    enabled: true
+    dir: /var/lib/cpa-spool
+    ledger-dir: /run/capacity-ledger
+    threshold-bytes: 65536
+access:
+  api-keys:
+    - cap-cpa-local-key
+routing:
+  strategy: fill-first
+  retry:
+    request-retry: 0
+requests:
+  passthrough-headers: false
+  payload:
+    filter:
+      - models:
+          - name: "*"
+            protocol: codex
+        params:
+          - prompt_cache_retention
+client:
+  codex:
+    optimize-multi-agent-v2: false
+upstream:
+  codex:
+    stream-bootstrap-buffering: true
+oauth:
+  auth-dir: /root/.cli-proxy-api
+observability:
+  logs:
+    debug: false
+    logging-to-file: true
+  usage:
+    usage-statistics-enabled: true
+api-keys:
+  codex:
+    - name: mock
+      base-url: "http://mock:18080"
+      keys:
+        - api-key: "mock-upstream"
+          websockets: true
+      models:
+        - name: gpt-5.1-codex
+          alias: gpt-5.1-codex

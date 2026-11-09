@@ -1,0 +1,86 @@
+name: large-request-ladder
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: "Also run the 1 GiB rungs (throwaway stack only)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 2 * * *"   # nightly: also exercises 1 GiB
+
+permissions:
+  contents: read
+
+jobs:
+  ladder:
+    name: ladder
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NIGHTLY: ${{ (github.event_name == 'schedule' || inputs.nightly) && '1' || '0' }}
+      RUN_ROOT: /var/tmp/ai-gateway-ladder/logs/ci
+      PFX: lrcchain8-ci
+      COMPOSE: podman-compose
+    defaults:
+      run:
+        working-directory: ci/large-request
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ci/large-request/wsclient/go.mod
+
+      - name: Install podman-compose and validation tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q && sudo apt-get install -yq podman acl
+          pipx install podman-compose
+          python3 -m pip install --user jsonschema PyYAML
+          python3 -m unittest discover -s ci -p 'test_*.py'
+          podman info --format '{{.Host.CgroupsVersion}} {{.Host.CgroupManager}} rootless={{.Host.Security.Rootless}}'
+          uptime
+
+      - name: Ladder (1/16/64/256 MiB)
+        if: env.NIGHTLY != '1'
+        run: ./ci/ladder.sh
+
+      - name: Ladder (nightly, adds 1 GiB)
+        if: env.NIGHTLY == '1'
+        continue-on-error: true   # retain exact capacity failures if the hosted runner cannot fit 1 GiB
+        run: ./ci/ladder.sh
+
+      - name: Candidate lock from the latest green run
+        if: success() && env.NIGHTLY != '1'
+        run: |
+          set -euo pipefail
+          run_dir=$(ls -d "$RUN_ROOT"/*/ | tail -1)
+          python3 ci/lock_from_manifest.py "$run_dir" ci/compatibility-lock.candidate.json
+          python3 -c "
+          import json, jsonschema
+          lock = json.load(open('ci/compatibility-lock.candidate.json'))
+          schema = json.load(open('ci/compatibility-lock.schema.json'))
+          jsonschema.validate(lock, schema)
+          print('schema OK')
+          "
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: large-request-ladder-${{ github.run_id }}
+          path: |
+            /var/tmp/ai-gateway-ladder/logs/ci/*/summary.json
+            /var/tmp/ai-gateway-ladder/logs/ci/*/junit.xml
+            /var/tmp/ai-gateway-ladder/logs/ci/*/results.jsonl
+            /var/tmp/ai-gateway-ladder/logs/ci/*/manifest.json
+            /var/tmp/ai-gateway-ladder/logs/ci/*/logs/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: success() && env.NIGHTLY != '1'
+        with:
+          name: compatibility-lock-candidate-${{ github.run_id }}
+          path: ci/large-request/ci/compatibility-lock.candidate.json

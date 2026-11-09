@@ -1,0 +1,66 @@
+# Nightly-only production-hop extension. The PR gate retains the original five-hop stack.
+services:
+  cpa:
+    environment:
+      HTTP_PROXY: http://squid:3128
+      HTTPS_PROXY: http://squid:3128
+      http_proxy: http://squid:3128
+      https_proxy: http://squid:3128
+      NO_PROXY: localhost,127.0.0.1
+    depends_on:
+      squid: {condition: service_started}
+  sub2api:
+    environment:
+      GATEWAY_BODY_SPOOL_TICKET_FORWARD_HOSTS: apisix-models:9080
+      NO_PROXY: aisix,apisix-models,pg,redis,localhost,127.0.0.1
+
+  # Production APISIX configs are rendered onto the CI network. Squid deliberately uses plain HTTP
+  # before the mock, not TLS bump; see docs/large-request-ladder.md for harness differences.
+  firewall:
+    image: ${APISIX_IMAGE:?}
+    container_name: ${PFX}-firewall
+    networks: [chain]
+    ports: ["127.0.0.1:${FW_PORT:-18080}:9080"]
+    entrypoint: [/bin/bash, -ec]
+    command: ["exec /docker-entrypoint.sh docker-start"]
+    environment: {APISIX_STAND_ALONE: "true"}
+    depends_on:
+      keeper: {condition: service_started}
+    volumes:
+      - ${RUN:?}/fw/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ${RUN}/fw/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+      - ${REPO_ROOT:?}/services/firewall/apisix/lua:/opt/apisix/custom:ro
+    cpus: 1.0
+    mem_limit: 320m
+    memswap_limit: 320m
+
+  apisix-models:
+    image: ${APISIX_IMAGE:?}
+    container_name: ${PFX}-apisix-models
+    networks: [chain]
+    entrypoint: [/bin/bash, -ec]
+    command: ["exec /docker-entrypoint.sh docker-start"]
+    environment: {APISIX_STAND_ALONE: "true"}
+    depends_on:
+      aisix: {condition: service_started}
+    volumes:
+      - ${RUN}/apisix-models/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ${RUN}/apisix-models/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+    cpus: 1.0
+    mem_limit: 128m
+    memswap_limit: 128m
+
+  squid:
+    image: ${SQUID_IMAGE:?}
+    container_name: ${PFX}-squid
+    networks: [chain]
+    entrypoint: [/usr/sbin/squid]
+    command: ["-NYC", "-f", "/etc/squid/generated/squid.conf"]
+    volumes:
+      - ${LRC_HOME}/cfg/squid.conf:/etc/squid/generated/squid.conf:ro
+    tmpfs: ["/tmp:rw,size=16m"]
+    cpus: 0.5
+    mem_limit: 192m
+    memswap_limit: 192m
+    depends_on:
+      mock: {condition: service_started}
