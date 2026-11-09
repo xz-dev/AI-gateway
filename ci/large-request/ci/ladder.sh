@@ -1,39 +1,52 @@
 #!/usr/bin/env bash
-# ci/ladder.sh: CI capacity ladder (OpenSpec large-request-capacity task 8.2 skeleton). Portable: no host paths, no
-# loop filesystem, no THP tool, rootless podman + a compose provider (podman compose / podman-compose).
-#   ci/ladder.sh [RUNG...]     default rungs: $DEFAULT_RUNGS below; NIGHTLY=1 adds the 1 GiB rungs
-# Images come from the lock (LOCK, default ci/compatibility-lock.json) as name@sha256 digests; placeholder (all-zero)
-# digests are refused. Rungs run with the existing harness (rungs.py, the mock, wsclient, gen*.py, manifest.py).
-# Output: $RUN/summary.json, $RUN/junit.xml, results.jsonl, manifest.json, logs/; exit 0 = every rung passed.
-# Environment (all optional):
-#   LOCK=path              lock file to read the images from
-#   NIGHTLY=1              add http-image-1g / ws-image-1g, raise the cap to 1 GiB on this stack only (CAP_BYTES);
-#                          refuses to start with < 12 GiB MemAvailable or < 12 GiB free disk (spec 8.2)
-#   LADDER_FS=dir          spool / ledger root, e.g. a size-limited ext4 mount (default: $RUN/fs, plain directory)
-#   LADDER_MAX_LOAD=N      do not start containers while the 1-min load is >= N
-#   PFX=name               container / project prefix (default lrcchain8-ci)
-#   RUN_ROOT=dir           where run directories go (default logs/ci in the harness root)
-#   COMPOSE="cmd"          compose command (default: podman compose)
-#   LADDER_SETTLE_S=N      idle seconds after the stack is healthy (default 10)
-set -u
+# Throwaway full-stack capacity ladder. Images are immutable digests from LOCK.
+# NIGHTLY=1 raises every request cap to 1 GiB; explicit RUNG arguments replace the default ladder.
+# RUN_ROOT and LADDER_FS must resolve below disk-backed /var/tmp (never tmpfs /tmp).
+# Container groups wait up to 30 minutes for >=4 GiB MemAvailable and load <=12.
+set -uo pipefail
 H=$(cd "$(dirname "$0")/.." && pwd)
 DEFAULT_RUNGS="http-image-1m ws-image-1m http-text-16m ws-text-16m http-image-64m ws-image-64m http-image-256m ws-image-256m http-small-16m http-tiny-16m"
-export LRC_HOME=$H PFX=${PFX:-lrcchain8-ci} EXTRA="" ENTRY_URL=http://127.0.0.1:18085
+REPO_ROOT=$(cd "$H/../.." && pwd)
+export LRC_HOME=$H REPO_ROOT PFX=${PFX:-lrcchain8-ci}
+export EXTRA="" ENTRY_URL=http://127.0.0.1:18085 S2A_UPSTREAM_URL=http://aisix:3000
 LOCK=${LOCK:-$H/ci/compatibility-lock.json}
-COMPOSE=${COMPOSE:-podman compose}
-RUNGS=("$@"); [ ${#RUNGS[@]} = 0 ] && read -ra RUNGS <<< "$DEFAULT_RUNGS"
+COMPOSE_FILES=(-f "$H/ci/compose.yaml")
+read -ra COMPOSE_CMD <<< "${COMPOSE:-podman compose}"
+RUNGS=("$@")
 export CAP_BYTES=268435456
 if [ "${NIGHTLY:-0}" = 1 ]; then
-  export CAP_BYTES=1073741824; RUNGS+=(http-image-1g ws-image-1g)
-  avail=$(awk '/^MemAvailable:/{print int($2/1048576)}' /proc/meminfo); disk=$(df -Pk "${RUN_ROOT:-$H}" | awk 'NR==2{print int($4/1048576)}')
-  [ "$avail" -ge 12 ] && [ "$disk" -ge 12 ] || { echo "NIGHTLY needs >= 12 GiB free memory and disk (have ${avail} / ${disk} GiB)"; exit 3; }
+  export CAP_BYTES=1073741824 EXTRA="firewall apisix-models squid"
+  export ENTRY_URL=http://127.0.0.1:${FW_PORT:-18080} S2A_UPSTREAM_URL=http://apisix-models:9080
+  LOCK=${NIGHTLY_LOCK:-$H/ci/nightly-compatibility-lock.json}
+  COMPOSE_FILES+=(-f "$H/ci/compose.full-stack.yaml")
+  DEFAULT_RUNGS+=" http-image-1g ws-image-1g"
 fi
-# images from the lock: name@sha256:<64 hex> only, no placeholders
+[ ${#RUNGS[@]} != 0 ] || read -ra RUNGS <<< "$DEFAULT_RUNGS"
+RUN=${RUN_ROOT:-/var/tmp/ai-gateway-ladder/logs/ci}/$(date -u +%Y%m%dT%H%M%SZ)-$$
+export RUN
+export FS=${LADDER_FS:-$RUN/fs} BODIES=$RUN/bodies CPA_CONFIG=$RUN/cpa-config.yaml
+mkdir -p "$RUN"/logs "$RUN"/rec "$FS" "$BODIES"
+for path in "$RUN" "$FS"; do
+  case $(realpath "$path") in /var/tmp/*) ;; *) echo "refusing non-/var/tmp path: $path"; exit 3;; esac
+  case $(findmnt -n -o FSTYPE --target "$path") in tmpfs|ramfs) echo "refusing RAM filesystem: $path"; exit 3;; esac
+done
+if [ "${NIGHTLY:-0}" = 1 ]; then
+  avail=$(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo)
+  disk=$(df -Pk "$FS" | awk 'NR==2{print $4}')
+  echo "nightly precheck: MemAvailable=${avail} MiB; ledger free=${disk} KiB"
+  [ "$avail" -ge 1216 ] && [ "$disk" -ge 8388608 ] || { echo "NIGHTLY needs >=1216 MiB MemAvailable and >=8 GiB ledger free"; exit 3; }
+fi
+# Reject tags and placeholder digests before any container is started.
 envs=$(python3 - "$LOCK" <<'EOF'
-import json, re, sys
+import json, os, re, sys
 imgs = json.load(open(sys.argv[1]))["images"]
 env = {"keeper": "KEEPER_IMAGE", "bridge": "BRIDGE_IMAGE", "sub2api": "SUB2API_IMAGE", "aisix": "AISIX_IMAGE",
-       "cpa": "CPA_IMAGE", "postgres": "POSTGRES_IMAGE", "redis": "REDIS_IMAGE", "mock_base": "MOCK_BASE_IMAGE"}
+       "cpa": "CPA_IMAGE", "postgres": "POSTGRES_IMAGE", "redis": "REDIS_IMAGE", "mock_base": "MOCK_BASE_IMAGE",
+       }
+if os.environ.get("NIGHTLY") == "1":
+    env.update(firewall="APISIX_IMAGE", squid="SQUID_IMAGE")
+if os.environ.get("NIGHTLY") == "1":
+    assert imgs.get("apisix-models") == imgs.get("firewall"), "APISIX hop digests must match"
 for k, v in env.items():
     ref = imgs.get(k, "")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}", ref) or ref.endswith("0" * 64):
@@ -42,67 +55,92 @@ for k, v in env.items():
 EOF
 ) || exit 2
 eval "$envs"
-export RUN=${RUN_ROOT:-$H/logs/ci}/$(date -u +%Y%m%dT%H%M%SZ)-$([ "${NIGHTLY:-0}" = 1 ] && echo nightly-)$$
-export FS=${LADDER_FS:-$RUN/fs}
-mkdir -p "$RUN"/logs "$RUN"/rec "$FS"
 P() { timeout -k 5 300 podman "$@"; }
-C() { timeout -k 5 600 $COMPOSE -f "$H"/ci/compose.yaml "$@"; }
-
+C() { timeout -k 5 600 "${COMPOSE_CMD[@]}" "${COMPOSE_FILES[@]}" "$@"; }
+resources() {
+  local deadline=$((SECONDS + 1800))
+  while :; do
+    free -m; uptime
+    if awk '/^MemAvailable:/{exit !($2 >= 4194304)}' /proc/meminfo &&
+       awk '{exit !($1 <= 12)}' /proc/loadavg; then return 0; fi
+    [ "$SECONDS" -lt "$deadline" ] || { echo "resource wait exceeded 30 min"; return 1; }
+    sleep 30
+  done
+}
 echo "ladder: run $RUN, lock $LOCK, rungs ${RUNGS[*]}, cap $CAP_BYTES"
 cp "$LOCK" "$RUN"/lock-used.json
-
-# harness tools from source (Go): the mock provider and the WS client
 for t in mock wsclient; do
   [ -x "$H/bin/$t" ] || (cd "$H/$t" && CGO_ENABLED=0 go build -trimpath -o "$H/bin/$t" .) || { echo "build $t failed"; exit 2; }
 done
-
-if [ -n "${LADDER_MAX_LOAD:-}" ] && ! awk -v m="$LADDER_MAX_LOAD" '{exit !($1 < m)}' /proc/loadavg; then
-  echo "load $(cut -d' ' -f1 /proc/loadavg) >= $LADDER_MAX_LOAD: not starting containers"; exit 4
-fi
-for v in KEEPER_IMAGE BRIDGE_IMAGE SUB2API_IMAGE AISIX_IMAGE CPA_IMAGE POSTGRES_IMAGE REDIS_IMAGE MOCK_BASE_IMAGE; do
+images=(KEEPER_IMAGE BRIDGE_IMAGE SUB2API_IMAGE AISIX_IMAGE CPA_IMAGE POSTGRES_IMAGE REDIS_IMAGE MOCK_BASE_IMAGE)
+[ "${NIGHTLY:-0}" != 1 ] || images+=(APISIX_IMAGE SQUID_IMAGE)
+for v in "${images[@]}"; do
   P image exists "${!v}" || P pull -q "${!v}" >/dev/null || { echo "pull ${!v} failed"; exit 2; }
 done
-
-# spool and ledger dirs, owned by each hop's user inside the rootless user namespace (as stack.sh fsprep)
 mkdir -p "$FS"/{ledger,keeper-store,bridge-spool,sub2api-spool,aisix-spool,cpa-spool,s2a-data,cpa-auth,cpa-logs}
 chmod 0750 "$FS"/ledger; chmod 0700 "$FS"/{keeper-store,bridge-spool,sub2api-spool,aisix-spool,cpa-spool}
 P unshare chown 65534:65534 "$FS"/ledger "$FS"/keeper-store "$FS"/bridge-spool
 P unshare chown 1000:1000 "$FS"/sub2api-spool "$FS"/s2a-data
 P unshare chown 10001:10001 "$FS"/aisix-spool
-# harness only: the host user (container uid 0) lists tickets for lease sampling
 P unshare setfacl -m u:0:rx "$FS"/ledger || echo "setfacl failed: ticket sampling will see no tickets"
 echo ok > "$RUN"/rec/mode; chmod 0777 "$RUN"/rec
-
+# shellcheck disable=SC2329 # Invoked by the EXIT trap.
 finish() {
-  for c in keeper bridge sub2api aisix cpa mock pg redis; do P logs "$PFX-$c" > "$RUN/logs/$c.log" 2>&1; done
+  for c in keeper bridge sub2api aisix cpa mock pg redis $EXTRA; do P logs "$PFX-$c" > "$RUN/logs/$c.log" 2>&1; done
   C down -t 2 > "$RUN"/logs/compose-down.log 2>&1
   P unshare rm -rf "$FS"/ledger "$FS"/keeper-store "$FS"/bridge-spool "$FS"/sub2api-spool "$FS"/aisix-spool \
     "$FS"/cpa-spool "$FS"/s2a-data "$FS"/cpa-auth "$FS"/cpa-logs 2>/dev/null
+  rm -f "$BODIES"/*
 }
 trap finish EXIT
-wait_http() {  # wait_http NAME URL SECS
+trap 'exit 130' INT TERM
+wait_http() {
   local i; for i in $(seq "$3"); do curl -fsS -o /dev/null --max-time 2 "$2" 2>/dev/null && return 0; sleep 1; done
   echo "$1 not healthy after $3 s"; P logs --tail 40 "$PFX-$1"; return 1
 }
-
+# Compose parses all bind mounts even for the first group; render initially with loopback DNS.
+python3 - "$REPO_ROOT" "$RUN" "$CAP_BYTES" <<'EOF'
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / "ci/large-request/ci"))
+from render_hops import render
+render(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]), "127.0.0.1")
+EOF
 C down -t 2 > /dev/null 2>&1
+resources || exit 4
 C up -d mock pg redis > "$RUN"/logs/compose-up.log 2>&1 || { tail -30 "$RUN"/logs/compose-up.log; exit 2; }
+if [ "${NIGHTLY:-0}" = 1 ]; then python3 "$H"/ci/render_hops.py || exit 2; fi
 for i in $(seq 60); do P exec "$PFX-pg" pg_isready -q -U postgres -d sub2api && break; sleep 1; done
-C up -d cpa aisix sub2api >> "$RUN"/logs/compose-up.log 2>&1 || { tail -30 "$RUN"/logs/compose-up.log; exit 2; }
+resources || exit 4
+middle=(cpa aisix sub2api)
+[ "${NIGHTLY:-0}" != 1 ] || middle+=(squid apisix-models)
+C up -d "${middle[@]}" >> "$RUN"/logs/compose-up.log 2>&1 || { tail -30 "$RUN"/logs/compose-up.log; exit 2; }
 wait_http sub2api http://127.0.0.1:18090/health 180 || exit 2
 python3 "$H"/s2a_setup.py > "$RUN"/s2a-setup.txt 2>&1 || { tail -20 "$RUN"/s2a-setup.txt; exit 2; }
-C up -d bridge keeper >> "$RUN"/logs/compose-up.log 2>&1 || { tail -30 "$RUN"/logs/compose-up.log; exit 2; }
+resources || exit 4
+front=(bridge keeper)
+[ "${NIGHTLY:-0}" != 1 ] || front+=(firewall)
+C up -d "${front[@]}" >> "$RUN"/logs/compose-up.log 2>&1 || { tail -30 "$RUN"/logs/compose-up.log; exit 2; }
 wait_http keeper http://127.0.0.1:18085/healthz 60 || exit 2
+if [ "${NIGHTLY:-0}" = 1 ]; then
+  # The production front-door health endpoint is a native 404, not a 200.
+  ready=0
+  for ((i=0; i<60; i++)); do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$ENTRY_URL/healthz")" != 404 ] || { ready=1; break; }
+    sleep 1
+  done
+  [ "$ready" = 1 ] || { echo "firewall not ready"; exit 2; }
+fi
 echo "healthy $(date -u +%FT%TZ); settling ${LADDER_SETTLE_S:-10} s"; sleep "${LADDER_SETTLE_S:-10}"
-
-python3 "$H"/manifest.py || echo "manifest failed"
-python3 "$H"/rungs.py "${RUNGS[@]}" | tee "$RUN"/rungs.out
-
-# restart counts (-1 = not running at the end), then the verdict
+python3 "$H"/manifest.py || exit 2
+for rung in "${RUNGS[@]}"; do
+  python3 "$H"/rungs.py "$rung" | tee -a "$RUN"/rungs.out || exit 2
+  rm -f "$BODIES"/*
+done
 python3 - "$RUN" > "$RUN"/restarts.json <<'EOF'
-import json, os, subprocess, sys
+import json, os, subprocess
 out = {}
-for c in ("keeper", "bridge", "sub2api", "aisix", "cpa", "mock", "pg", "redis"):
+for c in ["keeper", "bridge", "sub2api", "aisix", "cpa", "mock", "pg", "redis"] + os.environ["EXTRA"].split():
     r = subprocess.run(["timeout", "-k", "5", "60", "podman", "inspect", "-f", "{{.RestartCount}} {{.State.Status}}",
                         os.environ["PFX"] + "-" + c], capture_output=True, text=True)
     n, _, st = r.stdout.strip().partition(" ")

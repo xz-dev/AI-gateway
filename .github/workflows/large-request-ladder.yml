@@ -9,7 +9,7 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "17 2 * * *"   # nightly: adds the 1 GiB rungs, continue-on-error until the nightly stack lands
+    - cron: "17 2 * * *"   # nightly: also exercises 1 GiB
 
 permissions:
   contents: read
@@ -18,10 +18,10 @@ jobs:
   ladder:
     name: ladder
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     env:
       NIGHTLY: ${{ (github.event_name == 'schedule' || inputs.nightly) && '1' || '0' }}
-      RUN_ROOT: ${{ github.workspace }}/ci/large-request/logs/ci
+      RUN_ROOT: /var/tmp/ai-gateway-ladder/logs/ci
       PFX: lrcchain8-ci
       COMPOSE: podman-compose
     defaults:
@@ -34,12 +34,13 @@ jobs:
         with:
           go-version-file: ci/large-request/wsclient/go.mod
 
-      - name: Install podman-compose and jsonschema
+      - name: Install podman-compose and validation tools
         run: |
           set -euo pipefail
           sudo apt-get update -q && sudo apt-get install -yq podman acl
           pipx install podman-compose
-          python3 -m pip install --user jsonschema
+          python3 -m pip install --user jsonschema PyYAML
+          python3 -m unittest discover -s ci -p 'test_*.py'
           podman info --format '{{.Host.CgroupsVersion}} {{.Host.CgroupManager}} rootless={{.Host.Security.Rootless}}'
           uptime
 
@@ -49,7 +50,7 @@ jobs:
 
       - name: Ladder (nightly, adds 1 GiB)
         if: env.NIGHTLY == '1'
-        continue-on-error: true   # until M3 step 3 (the nightly stack) lands
+        continue-on-error: true   # retain exact capacity failures if the hosted runner cannot fit 1 GiB
         run: ./ci/ladder.sh
 
       - name: Candidate lock from the latest green run
@@ -71,11 +72,11 @@ jobs:
         with:
           name: large-request-ladder-${{ github.run_id }}
           path: |
-            ci/large-request/logs/ci/*/summary.json
-            ci/large-request/logs/ci/*/junit.xml
-            ci/large-request/logs/ci/*/results.jsonl
-            ci/large-request/logs/ci/*/manifest.json
-            ci/large-request/logs/ci/*/logs/
+            /var/tmp/ai-gateway-ladder/logs/ci/*/summary.json
+            /var/tmp/ai-gateway-ladder/logs/ci/*/junit.xml
+            /var/tmp/ai-gateway-ladder/logs/ci/*/results.jsonl
+            /var/tmp/ai-gateway-ladder/logs/ci/*/manifest.json
+            /var/tmp/ai-gateway-ladder/logs/ci/*/logs/
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4

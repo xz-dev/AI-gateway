@@ -5,7 +5,8 @@ import hlib
 from hlib import T, sh, load, HOPS, FS, PFX
 
 RUN = os.environ["RUN"]
-os.makedirs(T + "/bodies", exist_ok=True)
+BODIES = os.environ.get("BODIES", T + "/bodies")
+os.makedirs(BODIES, exist_ok=True)
 REC = RUN + "/rec"
 KEY = "sk-capacity-local-test-key-000000"
 # KEEPER = the client entry: keeper, or keepalive / firewall APISIX in full-chain mode (stack.sh ENTRY_URL).
@@ -18,7 +19,7 @@ GREP = re.compile(r"ticket|lease|capacity|spool|request_too_large|insufficient|4
 
 
 def body(shape, n, ws=False, api="responses"):
-    p = f"{T}/bodies/{shape}-{n}{'-ws' if ws else ''}{'-chat' if api == 'chat' else ''}.json"
+    p = f"{BODIES}/{shape}-{n}{'-ws' if ws else ''}{'-chat' if api == 'chat' else ''}.json"
     # Sub2API D10 corpora (copied from the Sub2API M2 acceptance kit): d10-utext (gen_utext.py), d10-small-items
     # (~90-byte items, gen_small.py), d10-tiny-msgs (~30-byte items, gen_tiny.py)
     gen = {"utext": "gen_utext.py", "small": "gen_small.py", "tiny": "gen_tiny.py"}.get(shape)
@@ -37,7 +38,7 @@ def body(shape, n, ws=False, api="responses"):
 
 
 def cont_body(n=32768):
-    p = f"{T}/bodies/cont-{n}.json"
+    p = f"{BODIES}/cont-{n}.json"
     head = '{"type":"response.create","model":"gpt-5.1-codex","stream":true,"store":false,"previous_response_id":"{{PREV}}","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"'
     tail = '"}]}]}'
     open(p, "w").write(head + "z" * (n - len(head) - len(tail)) + tail)
@@ -512,7 +513,7 @@ TINY = '{"model":"gpt-5.1-codex","stream":true,"store":false,"input":[{"type":"m
 
 def concurrency(name, tiny_n=100):
     """1 ticketed 256 MiB request; 1 s after its first byte, 100 tiny requests at once (one thread each)."""
-    tp = f"{T}/bodies/tiny.json"
+    tp = f"{BODIES}/tiny.json"
     open(tp, "w").write(TINY)
     bp, meta = body("image", 256 * MIB)
     tiny = []
@@ -587,7 +588,7 @@ def gate_ws245(name, offsets=(0, 30, 60)):
 # ---- rung sdk: OpenAI Python SDK-shaped Responses bodies (gen_sdk.py) -----------------------------------------------
 
 def sdk_cont_body(n=32768):
-    p = f"{T}/bodies/sdk-cont-{n}-ws.json"
+    p = f"{BODIES}/sdk-cont-{n}-ws.json"
     if not os.path.exists(p + ".meta"):
         args = [sys.executable, f"{T}/gen_sdk.py", str(n), p, "--ws", "--cont"]
         open(p + ".meta", "w").write(subprocess.run(args, check=True, capture_output=True, text=True).stdout)
@@ -1188,7 +1189,7 @@ def lim_chat(name, n=512 * KIB):
 
 def offlist_prompt_body(n):
     """A pi text body of n bytes with a top-level `prompt` template member (off the verified-raw list)."""
-    p = f"{T}/bodies/offlist-prompt-{n}.json"
+    p = f"{BODIES}/offlist-prompt-{n}.json"
     if not os.path.exists(p + ".meta"):
         ins = '"prompt":{"id":"pmpt_gate75final","version":"1"},'
         src, meta = body("text", n - len(ins))
@@ -1237,7 +1238,7 @@ def erec_lines():
 
 def emb_body(kind, n):
     """embeddings: an array of strings; rerank: one query and many documents. n bytes, plain JSON."""
-    p = f"{T}/bodies/delta-{kind}-{n}.json"
+    p = f"{BODIES}/delta-{kind}-{n}.json"
     if not os.path.exists(p):
         words = "the quick brown fox jumps over the lazy dog memory gateway capacity ".split()
         items, size, i = [], 0, 0

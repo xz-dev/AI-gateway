@@ -7,9 +7,9 @@ import glob, hashlib, json, os, platform, subprocess, time
 import hlib
 
 T, RUN, PFX = hlib.T, os.environ["RUN"], hlib.PFX
-PROD = os.environ.get("PROD_GW", "/var/tmp/ai-gateway-transparent-pipes-20261103/gateway")
+PROD = os.environ["REPO_ROOT"]
 FLAGS = ("PFX", "FULLCHAIN", "FW", "KA", "SQUID", "FW_BODY", "ENTRY_URL", "EXTRA", "CPU_MODE", "THP_OFF", "MEMINFO_MODE",
-         "MEMINFO_LOW_KB", "AVAIL_TARGET_MIB", "CPA_GOMEMLIMIT", "MOCK_PORT", "PROV_SUBNET", "GATE_RETRIES", "RAWDIR", "GUARD", "FW_PORT", "KA_PORT", "EMB", "AISIX_RES")
+         "CAP_BYTES", "NIGHTLY", "BODIES", "FS", "MEMINFO_LOW_KB", "AVAIL_TARGET_MIB", "CPA_GOMEMLIMIT", "MOCK_PORT", "PROV_SUBNET", "GATE_RETRIES", "RAWDIR", "GUARD", "FW_PORT", "KA_PORT", "EMB", "AISIX_RES")
 
 
 def sh(*a):
@@ -66,11 +66,13 @@ m = {"written": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "run": RUN,
               "go": sh("go", "version"), "podman": sh("podman", "--version"),
               "thp_enabled": rd("/sys/kernel/mm/transparent_hugepage/enabled"),
               "thp_defrag": rd("/sys/kernel/mm/transparent_hugepage/defrag"), "swaps": rd("/proc/swaps")},
-     "harness": {"git": sh("git", "-C", T, "rev-parse", "HEAD"),
-                 "dirty_files": sh("git", "-C", T, "status", "--porcelain", "--untracked-files=no").splitlines()},
+     "harness": {"git": sh("bash", "-c", 'test "$(git rev-parse --show-toplevel)" = "$1" && git rev-parse HEAD',
+                              "--", os.environ["REPO_ROOT"]),
+                 "dirty_files": sh("bash", "-c", 'test "$(git rev-parse --show-toplevel)" = "$1" && git status --porcelain --untracked-files=no',
+                                   "--", os.environ["REPO_ROOT"]).splitlines()},
      "binaries": {k: gobuild(v) for k, v in bins.items()},
      "aisix": {"path": T + "/bin/aisix", "sha256": sha(T + "/bin/aisix"),
-               "source_head": sh("git", "-C", T + "/src/aisix", "rev-parse", "HEAD")},
+               "source_head": None},
      "s2a_resources": os.environ.get("S2A_RES"),
      "aisix_resources": {"path": os.environ.get("AISIX_RES", T + "/cfg/aisix-resources.yaml"),
                          "sha256": sha(os.environ.get("AISIX_RES", T + "/cfg/aisix-resources.yaml"))},
@@ -84,13 +86,16 @@ files = {"prod:compose.yaml": PROD + "/compose.yaml",
          "prod:egress/Dockerfile": PROD + "/services/firewall/egress-proxy/Dockerfile",
          "prod:render-egress-policy.py": PROD + "/ops/scripts/render-egress-policy.py",
          "run:fw/config.yaml": RUN + "/fw/config.yaml", "run:fw/apisix.yaml": RUN + "/fw/apisix.yaml",
+         "run:apisix-models/config.yaml": RUN + "/apisix-models/config.yaml",
+         "run:apisix-models/apisix.yaml": RUN + "/apisix-models/apisix.yaml",
          "run:squid/policy.json": RUN + "/squid/policy.json", "run:squid/squid.conf": RUN + "/squid/generated/squid.conf",
          "run:squid/unbound.conf": RUN + "/squid/unbound.conf", "run:cpa-config.yaml": RUN + "/cpa-config.yaml",
          "cfg/cpa-config.yaml": T + "/cfg/cpa-config.yaml", "cfg/aisix-config.yaml": T + "/cfg/aisix-config.yaml",
          "cfg/aisix-resources.yaml": T + "/cfg/aisix-resources.yaml"}
 for f in ("stack.sh", "rungs.py", "hlib.py", "meminfo.sh", "milog.py", "fullchain.py", "s2a_setup.py", "gen.py",
-          "wsclient/main.go", "mock/main.go", "gate75.sh", "ci/ladder.sh", "ci/compose.yaml", "ci/verdict.py",
-          "ci/lock_from_manifest.py", "gen_small.py", "gen_tiny.py"):
+          "wsclient/main.go", "mock/main.go", "gate75.sh", "ci/ladder.sh", "ci/compose.yaml", "ci/compose.full-stack.yaml", "ci/verdict.py",
+          "ci/lock_from_manifest.py", "ci/render_hops.py", "ci/test_render_hops.py", "cfg/squid.conf",
+          "gen_small.py", "gen_tiny.py"):
     files["harness:" + f] = T + "/" + f
 for f in sorted(glob.glob(PROD + "/services/firewall/apisix/lua/*.lua")):
     files["prod:firewall/lua/" + os.path.basename(f)] = f

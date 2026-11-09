@@ -10,8 +10,9 @@ import hashlib, json, os, sys, time
 
 MIB = 1 << 20
 HOP_KEYS = {"keeper": "keeper", "bridge": "bridge", "sub2api": "sub2api", "aisix": "aisix", "cpa": "cpa",
-            "pg": "postgres", "redis": "redis", "mock": "mock_base"}
-COMPONENTS = ("keeper", "bridge", "sub2api", "aisix", "cpa")
+            "pg": "postgres", "redis": "redis", "mock": "mock_base",
+            "firewall": "firewall", "apisix-models": "apisix-models", "squid": "squid"}
+COMPONENTS = ("keeper", "bridge", "sub2api", "aisix", "cpa", "firewall", "apisix-models", "squid")
 BASE_IMAGES = ("docker.io/library/alpine", "docker.io/library/debian")
 # design D4 / keeper gate.go footprint(): the factors keeper's gate uses today (basis "declared")
 FOOTPRINT = {"basis": "declared",
@@ -45,6 +46,8 @@ def main():
     man = json.load(open(os.path.join(run, "manifest.json")))
     cons, images, errs = man.get("containers") or {}, {}, []
     for c, key in HOP_KEYS.items():
+        if c in ("firewall", "apisix-models", "squid") and not summary.get("nightly"):
+            continue
         x = cons.get(c)
         if not x:
             errs.append(f"{c}: not in the manifest"); continue

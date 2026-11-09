@@ -14,7 +14,7 @@
     },
     "bytesByHop": {
       "type": "object",
-      "propertyNames": {"enum": ["keeper", "bridge", "sub2api", "aisix", "cpa", "pg", "redis", "fw", "keepalive", "squid"]},
+      "propertyNames": {"enum": ["keeper", "bridge", "sub2api", "aisix", "cpa", "pg", "redis", "fw", "firewall", "apisix-models", "keepalive", "squid"]},
       "additionalProperties": {"type": ["integer", "null"], "minimum": 0}
     },
     "factorByHop": {

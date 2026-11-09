@@ -1,9 +1,9 @@
 # CI capacity ladder stack (OpenSpec large-request-capacity task 8.2 skeleton). Started by ci/ladder.sh, which
 # sets every variable below from ci/compatibility-lock.json and the run directory. Throwaway only: fake keys, a
-# mock provider, no egress. keeper -> bridge -> Sub2API -> AISIX -> CPA -> mock.
+# mock provider. keeper -> bridge -> Sub2API -> AISIX -> CPA -> mock.
 # Production mem_limits with no swap (memswap_limit = mem_limit). Container names are ${PFX}-<hop>, as the harness
 # (hlib.py, rungs.py, manifest.py) expects. Paths inside the hop containers follow the production compose layout.
-# Not here yet: firewall APISIX, keepalive, Squid TLS bump, the production-RAM parent cgroup (see ci/ladder.sh).
+# NIGHTLY=1 merges compose.full-stack.yaml to add firewall, apisix-models and Squid.
 name: ${PFX:?}
 
 x-noegress: &noegress
@@ -28,6 +28,7 @@ services:
     container_name: ${PFX}-pg
     networks: [chain]
     environment: {POSTGRES_PASSWORD: localtest, POSTGRES_DB: sub2api}
+    cpus: 1.0
     mem_limit: 400m
     memswap_limit: 400m
 
@@ -36,6 +37,7 @@ services:
     container_name: ${PFX}-redis
     networks: [chain]
     command: ["redis-server", "--save", ""]
+    cpus: 0.5
     mem_limit: 80m
     memswap_limit: 80m
 
@@ -50,12 +52,13 @@ services:
       GOMEMLIMIT: ${CPA_GOMEMLIMIT:-512MiB}
       NO_PROXY: mock,localhost,127.0.0.1
     volumes:
-      - ${LRC_HOME}/cfg/cpa-config.yaml:/CLIProxyAPI/conf/config.yaml:ro
+      - ${CPA_CONFIG:-${LRC_HOME}/cfg/cpa-config.yaml}:/CLIProxyAPI/conf/config.yaml:ro
       - ${FS:?}/cpa-spool:/var/lib/cpa-spool
       - ${FS}/ledger:/run/capacity-ledger:ro
       - ${FS}/cpa-auth:/root/.cli-proxy-api
       - ${FS}/cpa-logs:/CLIProxyAPI/logs
     tmpfs: ["/tmp:rw,size=64m"]
+    cpus: 1.75
     mem_limit: ${CPA_MEM:-768m}
     memswap_limit: ${CPA_MEM:-768m}
 
@@ -66,12 +69,16 @@ services:
     user: "10001:10001"
     group_add: ["65534"]
     command: ["--config", "/etc/aisix/config.yaml"]
+    environment:
+      # CAP-INVENTORY task 8.2: proxy.request_body_limit_bytes via its env override, CAP_BYTES-driven.
+      AISIX_PROXY__REQUEST_BODY_LIMIT_BYTES: ${CAP_BYTES:-268435456}
     volumes:
       - ${LRC_HOME}/cfg/aisix-config.yaml:/etc/aisix/config.yaml:ro
       - ${LRC_HOME}/cfg/aisix-resources.yaml:/etc/aisix/resources.yaml:ro
       - ${FS}/aisix-spool:/var/lib/aisix-spool
       - ${FS}/ledger:/run/capacity-ledger:ro
     tmpfs: ["/tmp:rw,size=16m"]
+    cpus: 1.0
     mem_limit: 512m
     memswap_limit: 512m
 
@@ -107,11 +114,15 @@ services:
       GATEWAY_BODY_SPOOL_DIR: /spool
       GATEWAY_BODY_SPOOL_LEDGER_DIR: /run/capacity-ledger
       GATEWAY_BODY_SPOOL_TICKET_FORWARD_HOSTS: aisix:3000
+      # CAP-INVENTORY: SERVER_MAX_REQUEST_BODY_SIZE / GATEWAY_MAX_BODY_SIZE, CAP_BYTES-driven.
+      SERVER_MAX_REQUEST_BODY_SIZE: ${CAP_BYTES:-268435456}
+      GATEWAY_MAX_BODY_SIZE: ${CAP_BYTES:-268435456}
       NO_PROXY: aisix,pg,redis,localhost,127.0.0.1
     volumes:
       - ${FS}/s2a-data:/app/data
       - ${FS}/sub2api-spool:/spool
       - ${FS}/ledger:/run/capacity-ledger:ro
+    cpus: 1.5
     mem_limit: 320m
     memswap_limit: 320m
 
@@ -126,9 +137,12 @@ services:
       SPOOL_DIR: /spool
       GOMEMLIMIT: 192MiB
       CAPACITY_LEDGER_DIR: /run/capacity-ledger
+      # CAP-INVENTORY task 8.2: MAX_MESSAGE_BYTES, CAP_BYTES-driven (production default is 256 MiB).
+      MAX_MESSAGE_BYTES: ${CAP_BYTES:-268435456}
     volumes:
       - ${FS}/bridge-spool:/spool
       - ${FS}/ledger:/run/capacity-ledger:ro
+    cpus: 0.5
     mem_limit: 256m
     memswap_limit: 256m
 
@@ -154,8 +168,10 @@ services:
     volumes:
       - ${FS}/keeper-store:/var/tmp/openai-api-cache-keeper
       - ${FS}/ledger:/run/capacity-ledger
+    cpus: 0.5
     mem_limit: 384m
     memswap_limit: 384m
+
 
 networks:
   chain: {}

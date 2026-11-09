@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Provision the throwaway local Sub2API: admin login, compliance acknowledgment (local only, loopback guard),
 one openai apikey account pointing at AISIX, one group, one API key. Fake credentials only (from k7/h/s2a.py)."""
-import json, sys, time, urllib.request, urllib.error
+import json, os, sys, time, urllib.request, urllib.error
 
 BASE = "http://127.0.0.1:18090"
 APIKEY = "sk-capacity-local-test-key-000000"
@@ -28,13 +28,18 @@ def main():
     req("POST", "/api/v1/admin/compliance/accept", {"phrase": "I have read, understood, and agree to the Sub2API "
         "Deployment and Operation Compliance Commitment", "language": "en"}, tok)
     g = req("POST", "/api/v1/admin/groups", {"name": "cap", "platform": "openai", "rate_multiplier": 1}, tok)["data"]
-    req("POST", "/api/v1/admin/accounts", {"name": "aisix", "platform": "openai", "type": "apikey", "concurrency": 10,
-        "credentials": {"api_key": "capacity-test-local-key", "base_url": "http://aisix:3000"},
+    account = req("POST", "/api/v1/admin/accounts", {"name": "aisix", "platform": "openai", "type": "apikey", "concurrency": 10,
+        "credentials": {"api_key": "capacity-test-local-key", "base_url": os.environ.get("S2A_UPSTREAM_URL", "http://aisix:3000")},
         # pre-run 2: the account's decisive flags match production (2026-11-04 production backup: type apikey,
         # openai_responses_mode force_responses), which is also Sub2API's raw-list measured account
         # (request_raw_list.go "Extra->ShouldUseResponsesAPI"). Without it every large request is off-list.
-        "extra": {"openai_responses_mode": "force_responses"},
-        "group_ids": [g["id"]]}, tok)
+        "extra": {"openai_responses_mode": "force_responses", "openai_passthrough": False,
+                  "openai_apikey_responses_websockets_v2_mode": "off"},
+        "group_ids": [g["id"]]}, tok)["data"]
+    saved = req("GET", f"/api/v1/admin/accounts/{account['id']}", tok=tok)["data"]
+    assert saved["credentials"]["base_url"] == os.environ.get("S2A_UPSTREAM_URL", "http://aisix:3000")
+    assert saved["extra"]["openai_apikey_responses_websockets_v2_mode"] == "off"
+    assert saved["extra"]["openai_passthrough"] is False
     req("POST", "/api/v1/keys", {"name": "cap", "group_id": g["id"], "custom_key": APIKEY}, tok)
     # standard run mode (production) bills the key's owner: give the local admin a fake balance
     user = login["data"].get("user") or req("GET", "/api/v1/auth/me", None, tok)["data"]
