@@ -10,7 +10,7 @@ Per row, as in the spec scenario "Ladder step passes":
     keeper is the documented D3 exception (REPORT2.md/REPORT3.md "D3 keeper exception"; hlib.py Mem.stat()
     keeper_criterion = anon + file_dirty + file_writeback + kernel): its memory.max is routinely reached by
     reclaimable bbolt-store page cache (inactive_file), so keeper is margin-checked on keeper_criterion, not
-    raw memory.peak;
+    raw memory.peak; AISIX uses the same working-set criterion under decision (a);
   - the ticket was released and no spool or ticket file remains;
   - no container restarted (RUN/restarts.json from ladder.sh).
 Not checked yet (needs the production-RAM parent cgroup): MemAvailable >= floor."""
@@ -60,7 +60,7 @@ def check(row, limits, restarts):
             fails.append(f"{h}: oom_kill {v['events_delta']['oom_kill']}")
         peak = v.get("peak_rung")
         label = "memory.peak"
-        if h == "keeper":   # D3 keeper exception: margin-check the working criterion, not raw page-cache peak
+        if h in ("keeper", "aisix"):   # Decision (a): reclaimable file cache is not capacity usage
             kc = (v.get("stat_max") or {}).get("keeper_criterion")
             if kc is not None:
                 peak, label = kc, "keeper_criterion (anon+file_dirty+file_writeback+kernel)"

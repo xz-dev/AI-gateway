@@ -17,6 +17,7 @@ It runs the same ladder plus both 1 GiB rungs. A rung passes when:
 - no hop's memory exceeded `memory.max − 32 MiB` (`ci/verdict.py`); keeper is the documented D3 exception — its
   `memory.max` is routinely reached by reclaimable `bbolt`-store page cache, so it is margin-checked on
   `anon + file_dirty + file_writeback + kernel` (`hlib.py`'s `keeper_criterion`), not raw `memory.peak`;
+  AISIX uses the same working-set criterion as keeper under decision (a): hosted 1 GiB evidence shows anon 26.3 MiB and reclaimable file cache 482.9 MiB.
   no container hit `oom_kill`;
 - the capacity ticket was released and no spool or ticket file remains;
 - no container restarted.
