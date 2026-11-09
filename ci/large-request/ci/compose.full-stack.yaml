@@ -64,4 +64,3 @@ services:
     memswap_limit: 192m
     depends_on:
       mock: {condition: service_started}
-
