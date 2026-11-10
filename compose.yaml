@@ -678,7 +678,12 @@ services:
     logging: *default-logging
     security_opt: [no-new-privileges:true]
     volumes:
-      - responses-ws-sse-bridge-spool:/spool
+      # Prepare once with ops/scripts/prepare-bridge-spool.sh before first up.
+      - type: volume
+        source: responses-ws-sse-bridge-spool
+        target: /spool
+        volume:
+          nocopy: true
     environment:
       UPSTREAM_URL: http://sub2api-ai-sse-relay:8080
       LISTEN_ADDR: 127.0.0.1:8086

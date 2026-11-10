@@ -333,6 +333,12 @@ for source, (owner, target) in CACHE_VOLUMES.items():
 if ((services.get("model-catalog") or {}).get("environment") or {}).get("CACHE_DIR") != "/var/cache/model-catalog":
     raise SystemExit("model-catalog CACHE_DIR must use its dedicated disk cache volume")
 
+bridge_spools = [v for v in services.get("responses-ws-sse-bridge", {}).get("volumes", [])
+                 if isinstance(v, dict) and v.get("target") == "/spool"]
+if (len(bridge_spools) != 1 or bridge_spools[0].get("type") != "volume"
+        or bridge_spools[0].get("source") != "responses-ws-sse-bridge-spool"
+        or bridge_spools[0].get("volume", {}).get("nocopy") is not True):
+    raise SystemExit("bridge spool requires its named volume with volume.nocopy=true")
 def service_networks(config):
     value = config.get("networks") or {}
     return set(value if isinstance(value, list) else value.keys())
@@ -753,6 +759,7 @@ if python3 ops/scripts/check-apisix-models-no-cpa.py "$break_rendered" "$rendere
   exit 1
 fi
 python3 ops/scripts/tests/test-standard-cache-topology.py
+ops/scripts/tests/test-bridge-spool.sh
 python3 ops/scripts/tests/test-component-deploy.py
 python3 ops/scripts/tests/test-keeper-observe.py
 python3 ops/scripts/tests/test-migrate-services-layout.py

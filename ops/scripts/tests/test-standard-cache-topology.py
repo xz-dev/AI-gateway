@@ -91,7 +91,7 @@ class StandardCacheTopology(unittest.TestCase):
 
     def test_bridge_is_stateless_private_and_bounded(self):
         bridge = section(self.compose, "  responses-ws-sse-bridge:\n")
-        for value in ("network_mode: service:ai-sse-keepalive-proxy-netns", "UPSTREAM_URL: http://sub2api-ai-sse-relay:8080", "LISTEN_ADDR: 127.0.0.1:8086", "SPOOL_DIR: /spool", "GOMEMLIMIT: 192MiB", 'user: "65534:65534"', "pids_limit: 64", "mem_limit: 256m", "memswap_limit: 256m", "cpus: 0.5", "read_only: true", "cap_drop: [ALL]", "no-new-privileges:true", "responses-ws-sse-bridge-spool:/spool"):
+        for value in ("network_mode: service:ai-sse-keepalive-proxy-netns", "UPSTREAM_URL: http://sub2api-ai-sse-relay:8080", "LISTEN_ADDR: 127.0.0.1:8086", "SPOOL_DIR: /spool", "GOMEMLIMIT: 192MiB", 'user: "65534:65534"', "pids_limit: 64", "mem_limit: 256m", "memswap_limit: 256m", "cpus: 0.5", "read_only: true", "cap_drop: [ALL]", "no-new-privileges:true", "source: responses-ws-sse-bridge-spool", "target: /spool", "nocopy: true"):
             self.assertIn(value, bridge)
         for value in ("tmpfs:", "    ports:", "    networks:", "STORE_DIR", "CPA_API_KEY"):
             self.assertNotIn(value, bridge)
@@ -171,7 +171,7 @@ class StandardCacheTopology(unittest.TestCase):
         cache = {
             "services": {
                 keeper: {"volumes": [keeper + "-cache:/var/tmp/" + keeper]},
-                bridge: {"volumes": [bridge + "-spool:/spool"]},
+                bridge: {"volumes": [{"type": "volume", "source": bridge + "-spool", "target": "/spool", "volume": {"nocopy": True}}]},
                 catalog: {"volumes": [catalog + "-cache:/var/cache/" + catalog], "environment": {"CACHE_DIR": "/var/cache/" + catalog}},
             },
             "volumes": {keeper + "-cache": {}, catalog + "-cache": {}, bridge + "-spool": {}},
@@ -191,6 +191,12 @@ class StandardCacheTopology(unittest.TestCase):
                 else:
                     del bad["volumes"][volume]
                 cases.append((name + ":" + owner, bad))
+        bad = copy.deepcopy(cache)
+        bad["services"][bridge]["volumes"][0]["volume"]["nocopy"] = False
+        cases.append(("bridge-copyup", bad))
+        bad = copy.deepcopy(cache)
+        bad["services"][bridge]["volumes"] = [bridge + "-spool:/spool"]
+        cases.append(("bridge-short-form", bad))
         bad = copy.deepcopy(cache)
         bad["services"][catalog]["environment"]["CACHE_DIR"] = "/tmp/cache"
         cases.append(("wrong-cache-dir", bad))
