@@ -26,6 +26,8 @@ not raw memory.peak alone; clean reclaimable file cache is excluded.
 Public image defaults now follow the final lock, but shared ledger/spool mounts,
 flags and mount-mode/same-device validation remain a **public-template blocker**.
 No private deployment infrastructure is copied here to complete task 9.1.
+The bridge-only fresh-start prerequisite now prepares an empty, unreferenced
+local volume with nocopy; it does not complete ledger/inner-spool enablement.
 
 Milestones (design: Implementation milestones):
 - **Milestone 0** (section 0) proves the red baseline first.

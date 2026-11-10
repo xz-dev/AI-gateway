@@ -165,3 +165,48 @@ digest-support negative controls failed as intended and were restored. AISIX
 publisher actionlint passed; `git diff --check` and added-diff/new-artifact
 privacy pattern review passed (not a guarantee against every possible secret).
 No image publishing, fork write or production operation occurred.
+
+## Bridge fresh-start prerequisite follow-up — 2026-11-10
+
+The earlier 0755 fresh-volume startup failure above is preserved as the red
+observation. Parent approved only its narrow public-template compatibility fix:
+`prepare-bridge-spool.sh` prepares an empty, unreferenced local named volume
+to UID/GID 65534 and 0700 before first `up`; the bridge mount uses long-form
+`volume.nocopy=true`. Quick start and offline init's printed next steps require
+this explicit runtime prerequisite. There is no new persistent service, network,
+application image or capacity infrastructure.
+
+Podman 6.1.4 auto-initializes owner/mode at named-volume mount time even with
+nocopy when `NeedsChown` remains true. Therefore new Podman volumes receive
+explicit UID/GID metadata, while the preparation container uses the exact
+locally inspected bind (no relabel/ownership mount options). This lets its
+empty/disk/identity checks precede every explicit write. Legacy Podman
+auto-init metadata is refused, not rewritten. Remote/plugin/option-bearing
+volumes and symlinked/unreadable local paths are unsupported and fail closed.
+Preparation is an exclusive first-install step, not race-free against unrelated
+concurrent engine commands.
+
+The local acceptance test uses unique owned fixtures and network-none containers:
+preparation gives 65534:65534:0700; the final locked `dede337b…` bridge passes
+healthchecks on start and restart with the same volume. Running and stopped
+references are refused without change. A hidden legacy sentinel and its root
+directory retain their exact inode, owner, mode and file hash on refusal.
+All test-owned containers/volumes are removed. No production was accessed.
+The available local `docker` command is Podman compatibility, not Docker Engine;
+native Docker execution is untested locally, with its Compose form covered
+by static validation and the existing hosted template CI gate. No daemon or
+package was installed to expand runtime coverage.
+
+This resolves the bridge fresh-start blocker **when the prerequisite succeeds**.
+The public template still does not reproduce full production capacity: shared
+ledger/inner-hop spools, flags and mount-mode/same-device validation remain
+pending, as do the three production capacity checks. The old failed attempt
+and its resource/admission findings are not reclassified as passes.
+
+Follow-up local gates: all 14 topology tests, the fresh/start/restart/reference/
+legacy-sentinel acceptance test, shell syntax, ShellCheck, AISIX publisher
+actionlint and strict OpenSpec 22/22 passed. The full tracked-template validator
+passed within 170 seconds, including the bridge regression. Removing the
+empty-volume guard made the nonempty-volume acceptance example fail as intended;
+the original helper was restored. Added-line privacy review/diff checks passed.
+The original 14-file snapshot, branch, HEAD and full status remain unchanged.

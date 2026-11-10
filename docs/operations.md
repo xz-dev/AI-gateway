@@ -78,3 +78,24 @@ window; changing an image alone is not that migration. Keeper defaults to its
 published immutable image. Development builds must use an explicit separate
 local tag, never the published digest. Do not rerun the legacy AISIX publisher
 against an existing immutable version.
+
+### Empty bridge spool prerequisite
+
+Before a fresh `up`, run `./ops/scripts/prepare-bridge-spool.sh [env-file]`
+(default `.env`) with the same project/override selection as Compose. Do not
+run Compose or another runtime writer concurrently. The helper creates only
+the rendered local named volume and prepares an **empty, unreferenced** spool
+to UID/GID 65534, mode 0700; the application mount disables copy-up. It uses
+the locked Alpine image, no network, no persistent init service, and an exact
+engine-inspected bind for preparation to avoid Podman's pre-entrypoint
+volume-owner changes. Root is confined to this short-lived helper. It checks
+local path identity, disk filesystem, references and emptiness before changes.
+The deterministic helper name serializes helper invocations, not arbitrary
+external engine operations.
+
+Stopped containers also count as references. Nonempty/hidden entries, unsafe
+paths/permissions, plugin/remote/option-bearing volumes and legacy Podman
+auto-initialization metadata cause refusal. Nothing is deleted or recursively
+chowned. Existing deployed spool/cache ownership and all user data remain
+manual-window work. This bridge-only prerequisite does not implement the open
+shared-ledger/inner-spool capacity feature. `init.sh` itself remains offline.
