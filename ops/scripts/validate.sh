@@ -403,8 +403,11 @@ for service, config in services.items():
         continue
     if "@" in image:
         image, digest = image.rsplit("@", 1)
-        if not digest.startswith("sha256:") or len(digest.removeprefix("sha256:")) != 64:
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             raise SystemExit(f"image digest must be a complete sha256 pin: {service}")
+        # A complete content digest is immutable without a redundant version tag.
+        if ":" not in image.rsplit("/", 1)[-1]:
+            continue
     image_name = image.rsplit("/", 1)[-1]
     if ":" not in image_name:
         raise SystemExit(f"image is missing an explicit version tag: {service}")

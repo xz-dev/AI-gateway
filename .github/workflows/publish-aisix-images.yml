@@ -1,3 +1,5 @@
+# Historical PR1387 AISIX build line; runtime now follows compatibility-lock.json.
+# Existing immutable versions must never be rebuilt/overwritten. AISIX status remains independent.
 name: Publish AISIX images
 
 on:
@@ -99,7 +101,7 @@ jobs:
           docker run -d --name aisix-pr1387-smoke --network none --mount "type=bind,src=$RUNNER_TEMP/aisix-smoke/config.yaml,dst=/etc/aisix/config.yaml,readonly" --mount "type=bind,src=$RUNNER_TEMP/aisix-smoke/resources.yaml,dst=/etc/aisix/resources.yaml,readonly" "$IMAGE"
           trap 'docker logs aisix-pr1387-smoke; docker rm -f aisix-pr1387-smoke' EXIT
           pid="$(docker inspect --format '{{.State.Pid}}' aisix-pr1387-smoke)"
-          for attempt in $(seq 1 60); do
+          for _attempt in $(seq 1 60); do
             if sudo nsenter -t "$pid" -n curl -fsS http://127.0.0.1:3000/livez; then exit 0; fi
             sleep 1
           done

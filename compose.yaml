@@ -131,7 +131,7 @@ services:
         ipv4_address: 172.30.63.2
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-docker.io/eceasy/cli-proxy-api:v8.0.45@sha256:ce9583e43fb56e632a279b79e6203bbdedc34f09900a60fc0ced0e3f255bc63c}
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cliproxyapi@sha256:4835aa6c189f2db5d4a2558e4533e9b7eb185ece17b20b4f3b10ea2134bf2b6a}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -299,7 +299,7 @@ services:
         ipv4_address: 172.30.60.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api:0.2.16-pr7157-pr7217-pr3172-pr8191-ab6b00e@sha256:77f4715f0aa7f66dc1364b162ec4ffd6eab7874b0916d5be4e7a4c6b7b389950}
+    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api@sha256:56557012dc75e96feb22e26fdb36fce057ab1e660cba8f907bf4b3d85472472a}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
@@ -662,7 +662,7 @@ services:
 
   # Stateless WS termination before Sub2API; spools are bounded, disposable disk files.
   responses-ws-sse-bridge:
-    image: ${RESPONSES_WS_SSE_BRIDGE_IMAGE:-ghcr.io/xz-dev/responses-ws-sse-bridge:83bb9819a5afbda0dbf0c6c7af998d92de82adae@sha256:9b5c28879f521bd52d13183a76fc7625271c317b07e571a5f5a945088c760fb6}
+    image: ${RESPONSES_WS_SSE_BRIDGE_IMAGE:-ghcr.io/xz-dev/responses-ws-sse-bridge@sha256:dede337bbe10fc3c79f0c7a7e23d0bbf6f4adf28ba22610fbe0fdefa75ccd411}
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
     restart: unless-stopped
@@ -694,10 +694,8 @@ services:
 
   # Shared cache owner before the bridge; it does not select CPA/AISIX models.
   openai-api-cache-keeper:
-    build:
-      context: ./services/middleware/openai-api-cache-keeper
-    image: ${OPENAI_API_CACHE_KEEPER_IMAGE:-ghcr.io/xz-dev/openai-api-cache-keeper:b49ad9ac6c1eb65b1785d66ecb7249413d4c82bf@sha256:eb21638bdfc65ea09c119baf62337bb8f7f7b421890eeb1e63c1815c60030872}
-    pull_policy: build
+    # Published runtime pin; local submodule builds are development-only.
+    image: ${OPENAI_API_CACHE_KEEPER_IMAGE:-ghcr.io/xz-dev/openai-api-cache-keeper@sha256:ef4dc093e218bed00b5deabff6951e7781f6ce5a57f0c34ee021844ed2d6798b}
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
     restart: unless-stopped
@@ -942,7 +940,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/api7/aisix:1.8.0-rc.1@sha256:ebcd2bbba9b7a3cc7cfb1318e4d3ba64cf9f93cbf2b19b8486ead6093da1ba5a}
+    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/aisix@sha256:b9d01af4a8d9baa736767b3995ed76fb0c0450816daa40f84bf4b1c39271e9c6}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped

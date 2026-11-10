@@ -1,4 +1,6 @@
 # syntax=docker/dockerfile:1.7
+# Legacy PR1387 source build, not the current deployed capacity-fork image.
+# Runtime defaults follow ci/large-request/ci/compatibility-lock.json.
 FROM docker.io/library/rust:1.93-trixie AS builder
 ARG AISIX_SOURCE_REV=06e8075266119380844aa4e9fcb9fb80468715eb
 RUN apt-get update \
