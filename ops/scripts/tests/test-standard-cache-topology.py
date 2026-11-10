@@ -91,7 +91,7 @@ class StandardCacheTopology(unittest.TestCase):
 
     def test_bridge_is_stateless_private_and_bounded(self):
         bridge = section(self.compose, "  responses-ws-sse-bridge:\n")
-        for value in ("network_mode: service:ai-sse-keepalive-proxy-netns", "UPSTREAM_URL: http://sub2api-ai-sse-relay:8080", "LISTEN_ADDR: 127.0.0.1:8086", "SPOOL_DIR: /spool", "GOMEMLIMIT: 192MiB", 'user: "65534:65534"', "pids_limit: 64", "mem_limit: 256m", "memswap_limit: 256m", "cpus: 0.5", "read_only: true", "cap_drop: [ALL]", "no-new-privileges:true", "responses-ws-sse-bridge-spool:/spool"):
+        for value in ("network_mode: service:ai-sse-keepalive-proxy-netns", "UPSTREAM_URL: http://sub2api-ai-sse-relay:8080", "LISTEN_ADDR: 127.0.0.1:8086", "SPOOL_DIR: /spool", "GOMEMLIMIT: 192MiB", 'user: "65534:65534"', "pids_limit: 64", "mem_limit: 256m", "memswap_limit: 256m", "cpus: 0.5", "read_only: true", "cap_drop: [ALL]", "no-new-privileges:true", "source: responses-ws-sse-bridge-spool", "target: /spool", "nocopy: true"):
             self.assertIn(value, bridge)
         for value in ("tmpfs:", "    ports:", "    networks:", "STORE_DIR", "CPA_API_KEY"):
             self.assertNotIn(value, bridge)
@@ -99,7 +99,7 @@ class StandardCacheTopology(unittest.TestCase):
         listen = re.search(r"LISTEN_ADDR: 127\.0\.0\.1:(\d+)", bridge).group(1)
         self.assertRegex(bridge, r"\n      PORT: \"?" + listen + r"\"?\n")
         reference = re.search(r"image: \$\{RESPONSES_WS_SSE_BRIDGE_IMAGE:-([^}]+)\}", bridge).group(1)
-        self.assertRegex(reference, r"^ghcr\.io/xz-dev/responses-ws-sse-bridge:[0-9a-f]{40}@sha256:[0-9a-f]{64}$")
+        self.assertRegex(reference, r"^ghcr\.io/xz-dev/responses-ws-sse-bridge@sha256:[0-9a-f]{64}$")
         self.assertIn(f"RESPONSES_WS_SSE_BRIDGE_IMAGE={reference}\n", (ROOT / ".env.example").read_text())
 
     def test_generic_component_prepares_image_before_no_pull_recreate(self):
@@ -112,11 +112,10 @@ class StandardCacheTopology(unittest.TestCase):
         self.assertIn("ai_ops_component_profiles[ai_ops_component_name].get('pull', true)", prepare)
         self.assertIn("'--no-deps', '--no-build', '--pull', 'never'", recreate)
 
-    def test_published_images_match_gitlinks_and_environment(self):
+    def test_keepalive_image_matches_gitlink_and_environment(self):
         env = (ROOT / ".env.example").read_text()
         modules = (ROOT / ".gitmodules").read_text()
         for name, key in (
-            ("openai-api-cache-keeper", "OPENAI_API_CACHE_KEEPER_IMAGE"),
             ("ai-sse-keepalive-proxy", "AI_SSE_KEEPALIVE_PROXY_IMAGE"),
         ):
             revision = subprocess.check_output(["git", "-C", str(ROOT / "services/middleware" / name), "rev-parse", "HEAD"], text=True).strip()
@@ -133,6 +132,35 @@ class StandardCacheTopology(unittest.TestCase):
         self.assertIn("AI_SSE_KEEPALIVE_PROXY_IMAGE=ai-gateway-ai-sse-keepalive-proxy:validate \\\nOPENAI_API_CACHE_KEEPER_IMAGE=ai-gateway-openai-api-cache-keeper:validate \\\nBUILDAH_FORMAT=docker", script)
         self.assertEqual(script.count("python3 ops/scripts/tests/test-standard-cache-topology.py\n"), 1)
 
+    def test_capacity_runtime_defaults_consume_published_lock(self):
+        images = json.loads((ROOT / "ci/large-request/ci/compatibility-lock.json").read_text())["images"]
+        env = (ROOT / ".env.example").read_text()
+        for service, key, locked in (
+            ("openai-api-cache-keeper", "OPENAI_API_CACHE_KEEPER_IMAGE", "keeper"),
+            ("responses-ws-sse-bridge", "RESPONSES_WS_SSE_BRIDGE_IMAGE", "bridge"),
+            ("sub2api", "SUB2API_IMAGE", "sub2api"),
+            ("aisix", "AISIX_IMAGE", "aisix"),
+            ("cli-proxy-api", "CLI_PROXY_IMAGE", "cpa"),
+        ):
+            with self.subTest(service=service):
+                block = section(self.compose, f"  {service}:\n")
+                reference = re.search(r"image: \$\{" + key + r":-([^}]+)\}", block).group(1)
+                self.assertEqual(reference, images[locked])
+                self.assertIn(f"{key}={reference}\n", env)
+        keeper = section(self.compose, "  openai-api-cache-keeper:\n")
+        self.assertNotIn("    build:", keeper)
+        self.assertNotIn("pull_policy: build", keeper)
+
+    def test_image_validation_accepts_immutable_digest_not_malformed_pins(self):
+        script = (ROOT / "ops/scripts/validate.sh").read_text()
+        marker = 'for service, config in services.items():\n    if config.get("privileged") is True:'
+        program = marker + script.split(marker, 1)[1].split("# Validate merged private bindings:", 1)[0]
+        for reference in ("ghcr.io/example/image@sha256:" + "a" * 64, "example:1.2.3"):
+            exec(program, {"services": {"fixture": {"image": reference}}, "re": re})
+        for reference in ("example", "example:latest", "example@sha256:" + "g" * 64, "example@sha256:abc"):
+            with self.subTest(reference=reference), self.assertRaises(SystemExit):
+                exec(program, {"services": {"fixture": {"image": reference}}, "re": re})
+
     def test_disposable_volumes_have_exact_owners_targets_and_cache_dir(self):
         script = (ROOT / "ops/scripts/validate.sh").read_text()
         program = script.split('services = compose.get("services") or {}\n', 1)[1].split("def service_networks", 1)[0]
@@ -143,7 +171,7 @@ class StandardCacheTopology(unittest.TestCase):
         cache = {
             "services": {
                 keeper: {"volumes": [keeper + "-cache:/var/tmp/" + keeper]},
-                bridge: {"volumes": [bridge + "-spool:/spool"]},
+                bridge: {"volumes": [{"type": "volume", "source": bridge + "-spool", "target": "/spool", "volume": {"nocopy": True}}]},
                 catalog: {"volumes": [catalog + "-cache:/var/cache/" + catalog], "environment": {"CACHE_DIR": "/var/cache/" + catalog}},
             },
             "volumes": {keeper + "-cache": {}, catalog + "-cache": {}, bridge + "-spool": {}},
@@ -163,6 +191,12 @@ class StandardCacheTopology(unittest.TestCase):
                 else:
                     del bad["volumes"][volume]
                 cases.append((name + ":" + owner, bad))
+        bad = copy.deepcopy(cache)
+        bad["services"][bridge]["volumes"][0]["volume"]["nocopy"] = False
+        cases.append(("bridge-copyup", bad))
+        bad = copy.deepcopy(cache)
+        bad["services"][bridge]["volumes"] = [bridge + "-spool:/spool"]
+        cases.append(("bridge-short-form", bad))
         bad = copy.deepcopy(cache)
         bad["services"][catalog]["environment"]["CACHE_DIR"] = "/tmp/cache"
         cases.append(("wrong-cache-dir", bad))

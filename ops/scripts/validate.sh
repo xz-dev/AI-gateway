@@ -333,6 +333,12 @@ for source, (owner, target) in CACHE_VOLUMES.items():
 if ((services.get("model-catalog") or {}).get("environment") or {}).get("CACHE_DIR") != "/var/cache/model-catalog":
     raise SystemExit("model-catalog CACHE_DIR must use its dedicated disk cache volume")
 
+bridge_spools = [v for v in services.get("responses-ws-sse-bridge", {}).get("volumes", [])
+                 if isinstance(v, dict) and v.get("target") == "/spool"]
+if (len(bridge_spools) != 1 or bridge_spools[0].get("type") != "volume"
+        or bridge_spools[0].get("source") != "responses-ws-sse-bridge-spool"
+        or bridge_spools[0].get("volume", {}).get("nocopy") is not True):
+    raise SystemExit("bridge spool requires its named volume with volume.nocopy=true")
 def service_networks(config):
     value = config.get("networks") or {}
     return set(value if isinstance(value, list) else value.keys())
@@ -403,8 +409,11 @@ for service, config in services.items():
         continue
     if "@" in image:
         image, digest = image.rsplit("@", 1)
-        if not digest.startswith("sha256:") or len(digest.removeprefix("sha256:")) != 64:
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             raise SystemExit(f"image digest must be a complete sha256 pin: {service}")
+        # A complete content digest is immutable without a redundant version tag.
+        if ":" not in image.rsplit("/", 1)[-1]:
+            continue
     image_name = image.rsplit("/", 1)[-1]
     if ":" not in image_name:
         raise SystemExit(f"image is missing an explicit version tag: {service}")

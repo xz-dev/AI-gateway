@@ -60,6 +60,9 @@ jobs:
         env:
           AI_GATEWAY_TUN_TEST_MODE: ci-privileged
         run: ./ops/scripts/validate.sh .env.example
+      - name: Verify isolated bridge spool on local Docker
+        # Only this owned-fixture regression needs access to Docker's root-owned volume paths.
+        run: sudo -n env AI_GATEWAY_RUNTIME=docker ./ops/scripts/tests/test-bridge-spool.sh
       - name: Render generic provider-sidecar scaffold
         run: ./ops/scripts/tests/test-provider-sidecar-compose-candidate.sh
   ansible:

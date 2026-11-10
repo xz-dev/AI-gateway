@@ -105,5 +105,6 @@ Next:
   5. Add only required domains, methods, and paths to data/egress-proxy/policy.json.
   6. Keep AISIX Admin on 172.30.68.2:3002; publish only the status page with AISIX_STATUS_BIND_ADDRESS/AISIX_STATUS_PORT.
   7. Run ./ops/scripts/init-egress-proxy.sh && ./ops/scripts/validate.sh.
-  8. Source ops/scripts/container-runtime.sh, pull images with "${AI_GATEWAY_COMPOSE[@]}", then run "${AI_GATEWAY_COMPOSE[@]}" up -d --build.
+  8. Source ops/scripts/container-runtime.sh and pull the published images with "${AI_GATEWAY_COMPOSE[@]}".
+  9. Before first up, run ./ops/scripts/prepare-bridge-spool.sh for the empty, unreferenced bridge volume; then run "${AI_GATEWAY_COMPOSE[@]}" up -d --build. Existing volumes need the documented manual migration window.
 EOF

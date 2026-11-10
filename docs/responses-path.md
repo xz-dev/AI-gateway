@@ -43,3 +43,26 @@ Keeper uses standard Responses paths only; no `/rk` alias, prefix stripping or p
 - **Operator.** Reusable Compose defines a loopback-only `:8087` entrance to the same keepalive namespace, bypassing APISIX filters but not authentication. A specific Tailscale binding needs an explicit ACL. The urgent production cutover deferred this new entrance to avoid recreating namespaces; that is not two-entrance acceptance.
 
 Pin keeper, bridge and keepalive GHCR images by commit and digest. Production uses explicit registry pulls and `--no-build --pull never`, not an old host submodule build. The 2026-10-23 front-bridge rollback restores account WS modes before reverting keeper; its private CAS/backup/readback receipt is `/var/tmp/ws-front-deploy-20261023/REPORT.md`. Do not apply a pre-bridge deployment snapshot without reconciling the new service and volume. Snapshot the entire old Compose, private override/environment, both APISIX configurations and old image identities before switching. Stop the old inner keeper; never run two history owners on the request path or share their volumes. Removing a component also removes its WebSocket handling and path aliases: migrate Sub2API account `base_url` and WebSocket mode in the same rollout ([checklist](model-routing.md#checklist-before-pushing-or-deploying)). Preserve unrelated production service settings. The legacy Ansible `deploy-response-keeper`, `deploy-responses-path` and `restart-response-keeper` tags, and the retired scoped `deploy-standard-cache-path`, `restart-openai-api-cache-keeper` and `rollback-standard-cache-path` tags, fail during preflight. Keeper and bridge use guarded single-service `deploy`/`rollback` profiles with a fresh approved plan digest; see [Keeper and ws-sse bridge rollout](ansible-operations.md#guarded-component-rollout). These profiles do not switch topology or Sub2API account modes.
+
+## Capacity deployment — 2026-11-09
+
+The operationally accepted capacity-fork deployment uses a 256 MiB production
+cap on both client input and keeper-expanded history. 1 GiB is nightly-only.
+A known provider ceiling can be lower (first-party Anthropic 128,000,000 B;
+Bedrock 20,000,000; Google-managed 30,000,000; other partners 32,000,000);
+unknown ceilings are not discovered by oversized paid calls. Provider refusals
+remain distinct from gateway capacity errors. Inline Responses limits are
+16 MiB unticketed / 8 MiB ticketed; conversion and fallback paths also have
+per-class, resource-dependent limits, not a universal promise of 16 MiB.
+
+Keeper authenticates before host-wide admission at 64 MiB, reserves overlapping
+disk/memory footprints in a shared ledger, and refuses immediately when space
+is insufficient. Inner hops lease the ticket read-only; keeper alone writes
+the ledger. Anonymous disk spools hold media while in flight; they are not
+request backups. AISIX's upload-inclusive 120000 ms stream timeout is unchanged;
+a cap does not guarantee a WAN upload finishes in that window. See
+[locations, accounting, cleanup and residual checks](records/maintenance-capacity-closeout-2026-11-09.md)
+and the [locked-lease runbook](operations.md#capacity-ledger-and-spool-safety).
+245 MB admission remains best effort; realistic 8 MiB production success and
+corrected production overcap behavior are not verified. Public image defaults
+alone do not enable this deployment's spool/ledger configuration.
