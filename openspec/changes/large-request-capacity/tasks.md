@@ -278,10 +278,13 @@ No unchecked compound task is promoted merely because code/images exist.
 
   Record the results in `docs/records/`.
 - [x] 9.3 Update `docs/responses-path.md`, `docs/websocket-termination.md` and `docs/architecture.md` with the cap, the per-route ceilings, the admission gate, the spool and ledger locations, the time budget and the on-disk data note. Add the leaked-lease runbook to `docs/operations.md`: read the live-ticket metric, match the ticket's inode in the host's `lslocks` or `/proc/locks` (PIDs inside keeper read as 0 across namespaces), map the PID to its container, restart only that hop, and never delete a ticket file while a lock is held. Record in `docs/websocket-termination.md` the explicit exception that allows the Sub2API spool and passthrough patches.
-- [ ] 9.4 Run `openspec validate --all --strict` and `ops/scripts/validate.sh`.
+- [x] 9.4 Run `openspec validate --all --strict` and `ops/scripts/validate.sh`.
 - [ ] 9.5 After the M3 deploy, re-run the read-only exposure check (leader decision 2026-11-05): the front APISIX allowlist has no `/api*` or `/*` route, cloudflared has a single ingress to the front, and no container binds `0.0.0.0` or a public address. The admin exception (no keeper L on `/api/v1/admin/*`, opaque admin WS) holds only while admin is reachable from loopback and the tailnet operator relay, never from public ingress.
 
 Task 9.3 evidence: focused capacity sections in the four named operational
 documents, including lease inode/host-lock recovery, on-disk data, ceilings,
 timeouts and the Sub2API patch exception; see the final deployment record.
 All other unchecked compound tasks retain their unverified examples.
+
+Task 9.4 evidence: the final deployment record's integration-check appendix
+records both local validation commands; this is not full-stack startup proof.

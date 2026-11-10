@@ -154,3 +154,14 @@ was invented to hide this. Separate approval is required for ownership/nocopy
 initialization and the shared ledger before a fresh deployment; existing
 production mounts were already verified and are unaffected. Throwaway smoke
 containers/volumes were removed. This is not full-stack startup acceptance.
+
+Integration checks: `openspec validate --all --strict` passed 22/22;
+`ops/scripts/validate.sh .env.example` reached
+`runtime=docker compose=valid firewall=valid one_way_edges=valid private_paths=untracked`
+within its 170-second bound, with no private override present. This scaffold
+validator does not start the final bridge with its default volume: the runtime
+blocker above remains. All 14 topology/pin tests passed; stale-pin and removed
+digest-support negative controls failed as intended and were restored. AISIX
+publisher actionlint passed; `git diff --check` and added-diff/new-artifact
+privacy pattern review passed (not a guarantee against every possible secret).
+No image publishing, fork write or production operation occurred.
