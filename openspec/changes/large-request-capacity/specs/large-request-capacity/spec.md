@@ -1,3 +1,7 @@
+> Open change: requirements below are intended acceptance, not certification
+> of full production capacity. See the [2026-11-09 disposition](../../../../../docs/records/maintenance-capacity-closeout-2026-11-09.md);
+> residual size checks and public-template enablement remain pending.
+
 ## ADDED Requirements
 
 ### Requirement: One end-to-end request cap lowered by provider ceilings

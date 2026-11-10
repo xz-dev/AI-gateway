@@ -1,3 +1,32 @@
+## Reconciliation status — 2026-11-09
+
+The [final deployment and cleanup record](../../../docs/records/maintenance-capacity-closeout-2026-11-09.md)
+is current-state authority. PR21/PR22 are merged/deployed and operationally
+accepted; full capacity acceptance is **not complete**. 245 MB admission is
+best effort (latest samples admitted/refused/refused), realistic 8 MiB production
+success is unobserved, and corrected overcap production behavior is unretested.
+Keep this change open; do not sync unfinished requirements to main specs/archive.
+
+Published Sub2API source `02918ea957f0` is v0.2.19-based, with native-path
+`k_skel=8` (not the earlier 6/17 projections) and per-class allocation charges:
+Responses 114, fallback 107, other-platform Responses 143, Chat 260, Messages
+159, count_tokens 156, Gemini 147, web_search/embeddings/rerank 65, unmeasured
+260. The lock still declares historical `k_skel=17`; its factors are not newly
+measured production results. Do not rewrite lock provenance to conceal this.
+Production Sub2API is 512 MiB memory / 320 MiB actual swap / CPU 1.5;
+the PR ladder is 320 MiB/no swap. Production cap remains 256 MiB; 1 GiB is
+nightly/throwaway only. CPU parity and TLS-bump-path deviations remain explicit
+in the final record. Historical M0 measurements and proposed acceptance below
+are retained as history/goals, not fresh runtime claims.
+
+The host MemAvailable gate's anonymous+kernel charge does not double-count
+available dirty/writeback pages. CI separately measures the conservative
+working set `anon + file_dirty + file_writeback + kernel` for keeper/AISIX,
+not raw memory.peak alone; clean reclaimable file cache is excluded.
+Public image defaults now follow the final lock, but shared ledger/spool mounts,
+flags and mount-mode/same-device validation remain a **public-template blocker**.
+No private deployment infrastructure is copied here to complete task 9.1.
+
 Milestones (design: Implementation milestones):
 - **Milestone 0** (section 0) proves the red baseline first.
 - **Milestone 1** (sections 1–3) is the work on the hops we own.
@@ -15,7 +44,7 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
   - `harness.py` (cgroup `memory.peak`, `memory.stat` anon and file pages, and the time at each hop).
 
   Copy only these files, never `logs/` or transcripts, and keep only loopback addresses and fake keys. **Verify:** `check-tracked-inventory.py` passes, a grep finds no private address, hostname or key, and the generator asserts that the 245 MB, 256 MiB and 1 GiB image-heavy rungs carry less than 8 MiB inline.
-- [ ] 0.2 Reconcile the tracked CPA pin with production: `compose.yaml` and `.env.example` move from the official `v8.0.45` to the deployed `v8.0.51-pr7134-1a196bd` digest. **Verify:** `validate.sh .env.example` passes, and the tracked pin equals the running image.
+- [ ] 0.2 Reconcile the tracked CPA pin with production using the final published lock (`4835aa6c189f…`); the earlier `v8.0.51-pr7134-1a196bd` target is superseded. **Verify:** `validate.sh .env.example` passes, and the tracked pin equals the running image.
 - [ ] 0.3 Add a compose capacity project for the full chain with production `mem_limit`s, no swap, Squid in front of the mock, and spool and ledger volumes on a size-limited loop-mounted ext4 filesystem. Run it under a parent cgroup whose `memory.max` is the production RAM, and add the CI-only meminfo source (design D10); the production validator rejects that variable. Post the Sub2API compliance acknowledgment automatically in this project only. **Verify:** a validator fails if the acknowledgment appears in production compose, Ansible or private-config templates.
 - [x] 0.0 Local Milestone 0 measurement of today's unpatched hops (memory and disk multiples, overlap, upload time), with a fresh container per request and the mock upstream only. Result: design Context "Milestone 0 measurement"; runner `run-m0.sh`.
 - [ ] 0.4 Promote the Milestone 0 runner `run-m0.sh` (with its `gen_m0.py`, `hops.py`, `m0.py`, `overlap.py`, `upload.py` and `summarize.py`, no `logs/` or `raw/`) into `ops/scripts/capacity/` as the red-baseline deliverable, and extend it into the ladder runner with the exact image-heavy and text-heavy rungs and the pass criteria of design D10. **Verify:** on today's production pins, record the red baseline before any patch, with the entry point of each expectation (design D10):
@@ -204,7 +233,7 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
 - [ ] 7.5 **M2 exit gate (frozen scope, 2026-11-05).** One production-RAM full-chain run on the approved images of all five forks, in production-like mode: 2 cores with the compose cpus quotas, production memory limits and GOMEMLIMIT, THP off per hop to emulate production `madvise`, and keeper reading literal `si_mem_available` (dirty pages count as available). The run adds the hops that earlier smokes skipped: Squid with its production config and limit, the firewall APISIX and the keepalive hops. It also adds one WS turn that falls back to HTTP Responses, and a compressed-body check: keeper refuses a gzip body on a covered path with its existing 400, and behind keeper Sub2API charges decoded bytes (200 below L, named 413 above). The firewall runs with the D5 body settings (256m, request buffering off), because production's 16m limit refuses every rung above 16 MiB. **Verify:**
   - 245 MB and 256 MiB are admitted and correct over HTTP and WS;
   - turn 2 arriving 1–17 s and 60 s after a 256 MiB turn 1 is admitted, repeated at least 5 times per case (HTTP seq5 and WS-245 continuation), with keeper logging the MemAvailable value it decided on; a turn 2 that lands while turn 1 is still releasing memory may get the retryable 503 `insufficient_memory`, and the count of such refusals and the client's retry outcome are recorded (T-si single sample 2026-11-05: all admitted, margin +17 MiB on WS turn 2);
-  - concurrent inline passthrough at Sub2API (k_skel 6 admits about 2–3 bodies of 16 MiB in 320m): send that many concurrent 16 MiB text and utext bodies plus a few tiny requests, with the guard in blocking mode; each gets 200 or a named 503, and Sub2API's `memory.events` max and `oom_kill` stay 0;
+  - concurrent inline passthrough at Sub2API (current native-path k_skel 8; compute concurrency from the actual resource budget, not the old factor-6 projection): send bounded concurrent 16 MiB text and utext bodies plus a few tiny requests, with the guard in blocking mode; each gets 200 or a named 503, and Sub2API's `memory.events` max and `oom_kill` stay 0;
   - no oom or `oom_kill` in any cgroup; PSI memory `full avg10` peak recorded with a proposed threshold;
   - no timer fires against the measured longest gap;
   - Squid peak memory and OOM count recorded;
@@ -227,6 +256,11 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
 
 ## 9. Deployment and docs — milestone 3
 
+Operational rollout has completed under PR21/PR22, but 9.1 remains blocked for
+the public template and 9.2 remains incomplete for its size-check examples.
+No unchecked compound task is promoted merely because code/images exist.
+
+
 - [ ] 9.1 Ansible and compose:
   - spool volumes for every spooling hop, and the shared `capacity-ledger` volume with its group, mounted read-write in keeper only and read-only in bridge, Sub2API, AISIX and CPA;
   - a validator for the ledger mount modes, the same-device check for the ledger and spool volumes, and the absence of the CI-only meminfo variable;
@@ -243,6 +277,11 @@ Milestones 0–2 end in local and CI acceptance only. No artifact deploys to pro
   - the namespace topology is unchanged.
 
   Record the results in `docs/records/`.
-- [ ] 9.3 Update `docs/responses-path.md`, `docs/websocket-termination.md` and `docs/architecture.md` with the cap, the per-route ceilings, the admission gate, the spool and ledger locations, the time budget and the on-disk data note. Add the leaked-lease runbook to `docs/operations.md`: read the live-ticket metric, match the ticket's inode in the host's `lslocks` or `/proc/locks` (PIDs inside keeper read as 0 across namespaces), map the PID to its container, restart only that hop, and never delete a ticket file while a lock is held. Record in `docs/websocket-termination.md` the explicit exception that allows the Sub2API spool and passthrough patches.
+- [x] 9.3 Update `docs/responses-path.md`, `docs/websocket-termination.md` and `docs/architecture.md` with the cap, the per-route ceilings, the admission gate, the spool and ledger locations, the time budget and the on-disk data note. Add the leaked-lease runbook to `docs/operations.md`: read the live-ticket metric, match the ticket's inode in the host's `lslocks` or `/proc/locks` (PIDs inside keeper read as 0 across namespaces), map the PID to its container, restart only that hop, and never delete a ticket file while a lock is held. Record in `docs/websocket-termination.md` the explicit exception that allows the Sub2API spool and passthrough patches.
 - [ ] 9.4 Run `openspec validate --all --strict` and `ops/scripts/validate.sh`.
 - [ ] 9.5 After the M3 deploy, re-run the read-only exposure check (leader decision 2026-11-05): the front APISIX allowlist has no `/api*` or `/*` route, cloudflared has a single ingress to the front, and no container binds `0.0.0.0` or a public address. The admin exception (no keeper L on `/api/v1/admin/*`, opaque admin WS) holds only while admin is reachable from loopback and the tailnet operator relay, never from public ingress.
+
+Task 9.3 evidence: focused capacity sections in the four named operational
+documents, including lease inode/host-lock recovery, on-disk data, ceilings,
+timeouts and the Sub2API patch exception; see the final deployment record.
+All other unchecked compound tasks retain their unverified examples.

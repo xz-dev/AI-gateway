@@ -68,3 +68,11 @@ Restore `/var/tmp/ai-prune-axis-20261030/resources-pre.yaml` to the ignored cont
 `gpt-6.1-sol` and `gpt-5.6-luna` now each have one configured target. Their removed Axis fallbacks were already unavailable under the previously recorded CPA wildcard exclusion; this operation does not create another working fallback. Removed direct IDs no longer have AISIX declarations; no gateway-wide prohibition on CPA passthrough is claimed.
 
 No paid generation, SSE/WS continuity probe, CPA account edit or Sub2API entitlement cleanup was performed. No temporary caller key was created. Public authenticated endpoint behavior was not separately probed; exact list verification used the internal catalog seam.
+
+## Supersession — 2026-11-09
+
+This is a historical receipt, not the final deployed image or current admission
+guarantee. Preserve its failed/stopped attempts and original evidence limits.
+The [final deployment, cleanup and three residual capacity checks](maintenance-capacity-closeout-2026-11-09.md)
+supersede its current-state/pending-deployment statements. No earlier unverified
+rollout task is completed retroactively by this reconciliation.

@@ -70,3 +70,18 @@ The repository groups components by role under [`services/`](../services/README.
 - `apisix-models` routes only `/v1/models` to `model-catalog` (through `apisix-models-catalog-relay`).
 - The front door's second listener, port `9083`, is published only on `127.0.0.1` and the Tailscale address. It forwards `/models-table` and `/models-table/refresh` to `model-catalog` over the two-member `front-model-table` network. The public listener (`9080`) never matches these paths.
 - `model-catalog` reads CPA (Management API, `api-call`) and AISIX (membership) through the one-way `catalog-cpa-relay` and `catalog-aisix-relay`. It has no Internet egress.
+
+## Capacity state and trust boundaries
+
+The [2026-11-09 deployment](records/maintenance-capacity-closeout-2026-11-09.md)
+adds disk-backed anonymous body spools to parsing hops and a shared capacity
+ledger, writable only by keeper and read-only to inner hop lease holders.
+It does not add a routing bypass, a new authentication authority or direct
+provider access. Spool storage contains in-flight request data; the keeper
+cache remains a separate persistent sensitive store. Paths and safe lease
+recovery are in [Operations](operations.md#capacity-ledger-and-spool-safety).
+The production cap is 256 MiB with lower route/inline limits and best-effort
+admission; the 1 GiB nightly target is not production policy. See
+[Responses path](responses-path.md#capacity-deployment--2026-11-09) for ceilings
+and timeout. The public template follows the release image lock but does not
+yet reproduce production's spool/ledger mounts, validators or feature flags.

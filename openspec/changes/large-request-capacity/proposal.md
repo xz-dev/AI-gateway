@@ -1,3 +1,32 @@
+## Reconciliation status — 2026-11-09
+
+The [final deployment and cleanup record](../../../docs/records/maintenance-capacity-closeout-2026-11-09.md)
+is current-state authority. PR21/PR22 are merged/deployed and operationally
+accepted; full capacity acceptance is **not complete**. 245 MB admission is
+best effort (latest samples admitted/refused/refused), realistic 8 MiB production
+success is unobserved, and corrected overcap production behavior is unretested.
+Keep this change open; do not sync unfinished requirements to main specs/archive.
+
+Published Sub2API source `02918ea957f0` is v0.2.19-based, with native-path
+`k_skel=8` (not the earlier 6/17 projections) and per-class allocation charges:
+Responses 114, fallback 107, other-platform Responses 143, Chat 260, Messages
+159, count_tokens 156, Gemini 147, web_search/embeddings/rerank 65, unmeasured
+260. The lock still declares historical `k_skel=17`; its factors are not newly
+measured production results. Do not rewrite lock provenance to conceal this.
+Production Sub2API is 512 MiB memory / 320 MiB actual swap / CPU 1.5;
+the PR ladder is 320 MiB/no swap. Production cap remains 256 MiB; 1 GiB is
+nightly/throwaway only. CPU parity and TLS-bump-path deviations remain explicit
+in the final record. Historical M0 measurements and proposed acceptance below
+are retained as history/goals, not fresh runtime claims.
+
+The host MemAvailable gate's anonymous+kernel charge does not double-count
+available dirty/writeback pages. CI separately measures the conservative
+working set `anon + file_dirty + file_writeback + kernel` for keeper/AISIX,
+not raw memory.peak alone; clean reclaimable file cache is excluded.
+Public image defaults now follow the final lock, but shared ledger/spool mounts,
+flags and mount-mode/same-device validation remain a **public-template blocker**.
+No private deployment infrastructure is copied here to complete task 9.1.
+
 ## Why
 
 On 2026-11-04 a Pi session failed with `Connection error.`. The client used WebSocket continuation correctly and sent a 1.55 MB delta. Keeper expanded the stored history into one WS frame of about 17.9 MB. Bridge b482 rejects frames larger than `MAX_MESSAGE_BYTES` (default 16 MiB), so it closed the connection with code 1009. Keeper logged 502 and sent the client only a bare close frame. The client got no error event.
@@ -33,7 +62,7 @@ Body composition was measured on the user's heaviest real sessions:
 
 - **One end-to-end cap of 256 MiB.** It applies to the client body and to keeper-expanded history, and it replaces every per-hop cap. A larger body gets an explicit 413 or a protocol error event at the first hop that sees it.
 - **Per-route provider ceilings.** A route whose known ceiling is below 256 MiB rejects a larger body with a 413 that names the ceiling. Routes with unknown ceilings keep the 256 MiB cap. They are not probed with oversized requests, and the provider's own 413 or error is relayed explicitly.
-- **Host-wide admission gate for bodies of 64 MiB or more.** Keeper first authenticates the caller, then admits each large request against real free disk (minus the 1 GiB reserve and the keeper store headroom) and real MemAvailable (minus 200 MiB and a 32 MiB margin). It reserves the request's measured footprint across all hops in one shared ledger that only keeper can write; the inner hops mount it read-only. A request that does not fit gets an immediate 503 `capacity_busy` (with `Retry-After`), 507 or 503, with no queue. Every hop holds a lease on the ticket, and the reservation is released only after every spool is closed. On today's host one 256 MiB request fits on disk and memory at a time. Smaller bodies carry no ticket.
+- **Host-wide admission gate for bodies of 64 MiB or more.** Keeper first authenticates the caller, then admits each large request against real free disk (minus the 1 GiB reserve and the keeper store headroom) and real MemAvailable (minus 200 MiB and a 32 MiB margin). It reserves the request's measured footprint across all hops in one shared ledger that only keeper can write; the inner hops mount it read-only. A request that does not fit gets an immediate 503 `capacity_busy` (with `Retry-After`), 507 or 503, with no queue. Every hop holds a lease on the ticket, and the reservation is released only after every spool is closed. The initial fit projection is historical; final admission is best effort and not always granted. Smaller bodies carry no ticket.
 - **Inline-bytes limit and per-hop memory charge for every request.** The bytes left inline after media externalization are limited to 16 MiB per request (8 MiB for ticketed requests); above that, the hop returns a 413 that names the limit. Each JSON-parsing hop also charges every request against its own cgroup headroom and refuses with 503 `insufficient_memory` instead of being OOM-killed. Text-heavy bodies above 16 MiB are therefore refused by name, not carried into an OOM.
 - **Configuration hops.** Set firewall APISIX and apisix-models to `client_max_body_size 256m` with `proxy_request_buffering off`, so they stream and keep no temp copy. Set bridge `MAX_MESSAGE_BYTES` and `MAX_BODY_BYTES` to 256 MiB. The bridge already spools.
 - **Keeper spool redesign.** The base is the parked P15 tree (manifest `03fd6345…`), which folds in the P-series in-memory fixes. This change:
@@ -77,11 +106,11 @@ Body composition was measured on the user's heaviest real sessions:
 - **Config:** `services/firewall/apisix/config.yaml`, `services/routing/apisix-models/config.yaml`, `compose.yaml`, `.env.example` (caps, request buffering, spool and ledger volumes, image pins), and the Ansible roles that render them.
 - **Our code:** keeper (P15 base, admission gate) and bridge (limits, ticket, error event).
 - **Third-party forks:**
-  - Sub2API (`ab6b00e` base; spool and inner-error passthrough);
+  - Sub2API (v0.2.19-based `02918ea957f0`; spool, per-class accounting and inner-error passthrough);
   - CPA (`v8.0.51` + PR #7134 base);
   - AISIX (the repository's `1.8.0-pr1387` build line).
 
   Each has a patch branch, an upstream PR and a fork image.
-- **Disk and memory:** a ticketed request reserves about 7× its size of disk across the hops (about 1.75 GiB at 256 MiB, from measured and target factors) on top of the 1 GiB reserve and the keeper store headroom, and about 600 MiB of memory against 669 MiB available today. On today's host, one such request fits at a time.
+- **Disk and memory:** a ticketed request reserves about 7× its size of disk across the hops (about 1.75 GiB at 256 MiB, from measured and target factors) on top of the 1 GiB reserve and the keeper store headroom, and about 600 MiB of memory against 669 MiB available today. This was the initial projection, not a final admission guarantee.
 - **CI:** a new capacity workflow and release artifact next to `.github/workflows/validate.yml`. The nightly runner needs at least 12 GiB free.
 - **Unchanged:** AISIX `upstream.stream_timeout_ms: 120000`, Squid egress, ingress authentication, the namespace topology, account/pool/OAuth state, per-WebSocket ordering, session affinity, and Cloudflare edge limits (out of scope).

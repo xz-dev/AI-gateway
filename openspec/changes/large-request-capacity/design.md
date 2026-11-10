@@ -1,3 +1,32 @@
+## Reconciliation status — 2026-11-09
+
+The [final deployment and cleanup record](../../../docs/records/maintenance-capacity-closeout-2026-11-09.md)
+is current-state authority. PR21/PR22 are merged/deployed and operationally
+accepted; full capacity acceptance is **not complete**. 245 MB admission is
+best effort (latest samples admitted/refused/refused), realistic 8 MiB production
+success is unobserved, and corrected overcap production behavior is unretested.
+Keep this change open; do not sync unfinished requirements to main specs/archive.
+
+Published Sub2API source `02918ea957f0` is v0.2.19-based, with native-path
+`k_skel=8` (not the earlier 6/17 projections) and per-class allocation charges:
+Responses 114, fallback 107, other-platform Responses 143, Chat 260, Messages
+159, count_tokens 156, Gemini 147, web_search/embeddings/rerank 65, unmeasured
+260. The lock still declares historical `k_skel=17`; its factors are not newly
+measured production results. Do not rewrite lock provenance to conceal this.
+Production Sub2API is 512 MiB memory / 320 MiB actual swap / CPU 1.5;
+the PR ladder is 320 MiB/no swap. Production cap remains 256 MiB; 1 GiB is
+nightly/throwaway only. CPU parity and TLS-bump-path deviations remain explicit
+in the final record. Historical M0 measurements and proposed acceptance below
+are retained as history/goals, not fresh runtime claims.
+
+The host MemAvailable gate's anonymous+kernel charge does not double-count
+available dirty/writeback pages. CI separately measures the conservative
+working set `anon + file_dirty + file_writeback + kernel` for keeper/AISIX,
+not raw memory.peak alone; clean reclaimable file cache is excluded.
+Public image defaults now follow the final lock, but shared ledger/spool mounts,
+flags and mount-mode/same-device validation remain a **public-template blocker**.
+No private deployment infrastructure is copied here to complete task 9.1.
+
 ## Context
 
 The Responses chain is: client → Cloudflare → firewall APISIX → ai-sse-keepalive → keeper → bridge → Sub2API (HTTP/SSE) → apisix-models → AISIX → CPA → Squid → provider. Every inference request after the firewall passes through ai-sse-keepalive and keeper. The restricted Operator entrance joins at keepalive, so it also passes keeper.
@@ -10,7 +39,7 @@ The Responses chain is: client → Cloudflare → firewall APISIX → ai-sse-kee
 - The keeper store sits on the same disk, with a 1 GiB live-payload cap (`STORE_MAX_BYTES=1073741824`).
 - Disk is **best effort** (user decision 2026-11-04): no disk expansion and no guaranteed concurrency.
 
-### Evidence: capacity audit (2026-11-04)
+### Historical evidence: capacity audit (2026-11-04)
 
 Each hop was run locally against a mock upstream, and its cgroup `memory.peak` was read. Measurements used a 6g limit unless a real limit is shown. "Production limit" is the compose `mem_limit` plus its swap allowance.
 
@@ -652,7 +681,7 @@ Rollout runs from the innermost hop outward, so that no outer hop admits bodies 
 
 **Rollback.** Turn off each component's switch, which keeps its fork image and falls back to the in-memory path, and restore the previous lock. A rollback also restores the previous caps and the nginx request buffering, because those caps are what keep the in-memory paths from being OOM-killed.
 
-## Visible to users and clients (M3 change notes)
+## Historical M3 change notes (2026-11-05; current corrections above)
 
 - A Responses body above the per-route ceiling or 256 MiB, or above the 16 MiB inline-bytes limit (8 MiB when ticketed), gets a named 413 instead of an OOM, a bare close or an empty reply.
 - `/backend-api/codex/responses` is a covered path, like `/v1/responses` (leader decision 2026-11-05).
@@ -665,7 +694,7 @@ Rollout runs from the innermost hop outward, so that no outer hop admits bodies 
 - Sub2API adds 422 `spooled_body_unsupported` (a builder that cannot splice spooled blobs, after one attempt) and 422 `spooled_media_moderation_unsupported` (legacy risk control with blobs present).
 - Sub2API's fallback L is the largest body that fits on an idle hop (11.19 MiB at 320m). Non-Responses routes (`/v1/chat/completions`, `/v1/messages` and the rest) therefore refuse bodies of 11.19–16 MiB with Sub2API's named 413, where today the 16m firewall passes them. Production read-only (7 days to 2026-11-05, Sub2API `body_bytes`): the largest non-Responses body was 0.53 MiB, so no observed client loses capability (leader acceptance condition).
 - A compressed (Content-Encoding) body on a keeper-covered path (`/v1/responses`, `/responses`, `/backend-api/codex/responses`) is refused by keeper with 400 `invalid request JSON`, because keeper parses the request JSON without decoding Content-Encoding. This is production behaviour today (keeper b49ad9a `working.go:284`) and M2 keeps it unchanged (leader decision 2026-11-05, option 1; the 7.5 harness confirmed it at 8 MiB and 17 MiB decoded). It also means every Responses request that succeeded in production was uncompressed, including the 52 requests of 11.19–16 MiB seen in 7 days, so no compressed covered request above L exists today. Behind keeper, Sub2API charges decoded bytes and refuses above its L with a named 413 (`limit_bytes` 11735040). Keeper decoding Content-Encoding at the first hop is on the later list.
-- Sub2API charges per path (parent decision 2026-11-05, option B). Ingest charges `k_skel` up front, sized on the Responses-native passthrough path that production uses (account `openai_responses_mode=force_responses`). When scheduling picks a converting account (Responses→Chat Completions, CC-shape or native Anthropic), Sub2API tops the charge up by `(k_conv − k_skel)` × inline bytes before any conversion allocation. The top-up holds until the base charge is released. Above `S_conv` the request gets 413 `request_too_large` with `limit_bytes` = `S_conv`; if the budget is short it gets 503 `insufficient_memory` with the bytes needed. Neither refusal fails over to another account. `k_conv` sizes only `S_conv` and is not bound by the 15.1 `k_skel` limit. Production saw 1 `/v1/chat` request and 32k+ `/v1/responses` requests in 7 days. Reworking the conversion is on the later list. Every full-body decode in Sub2API's OpenAI Forward goes through one charge point (`ensureReqBody`) and takes the `k_conv` top-up. Common passthrough rewrites are done on raw JSON instead: compaction trigger, duplicate root key, `parallel_tool_calls`, `json_schema`, the image tool. These stay at `k_skel` and S. The Codex OAuth transform counts as a converter. At 320m, `k_conv` = 65 (Claude→Gemini end to end, 54×) gives `S_conv` ≈ 3.67 MiB. Visible effect: if the upstream rejects replayed encrypted reasoning (400 `invalid_encrypted_content`) and the request is above `S_conv`, Sub2API's stripped retry is refused with a named 413 and is not retried. Production logged 0 such events in 7 days.
+- Sub2API charges per path (parent decision 2026-11-05, option B). Ingest charges `k_skel` up front, sized on the Responses-native passthrough path that production uses (account `openai_responses_mode=force_responses`). When scheduling picks a converting account (Responses→Chat Completions, CC-shape or native Anthropic), Sub2API tops the charge up by `(k_conv − k_skel)` × inline bytes before any conversion allocation. The top-up holds until the base charge is released. Above `S_conv` the request gets 413 `request_too_large` with `limit_bytes` = `S_conv`; if the budget is short it gets 503 `insufficient_memory` with the bytes needed. Neither refusal fails over to another account. `k_conv` sizes only `S_conv` and is not bound by the 15.1 `k_skel` limit. Production saw 1 `/v1/chat` request and 32k+ `/v1/responses` requests in 7 days. Reworking the conversion is on the later list. Every full-body decode in Sub2API's OpenAI Forward goes through one charge point (`ensureReqBody`) and takes the `k_conv` top-up. Common passthrough rewrites are done on raw JSON instead: compaction trigger, duplicate root key, `parallel_tool_calls`, `json_schema`, the image tool. These stay at `k_skel` and S. The Codex OAuth transform counts as a converter. The early 320m single-`k_conv=65` projection is superseded by the per-class table above; do not apply its ≈3.67 MiB projection to the final 512 MiB deployment. Visible effect: if the upstream rejects replayed encrypted reasoning (400 `invalid_encrypted_content`) and the request is above `S_conv`, Sub2API's stripped retry is refused with a named 413 and is not retried. Production logged 0 such events in 7 days.
 - Every hop charges and applies L to decoded bytes when a request carries Content-Encoding; compressed size never counts toward admission (Sub2API re-review a4a7d843).
 - Keeper adds named errors: `upgrade_not_bounded` (400, any non-GET request with an Upgrade header on a covered path), `client_frame_unparseable` (400 error event, socket stays open), `upstream_output_index_too_large` (502), `upstream_extension_not_offered` and `upstream_response_malformed`; an inner WS 1009 is reported with `hop: "upstream"`. Keeper bounds the close-frame write after a native-tunnel refusal with a 5 s write deadline; this is a per-write I/O deadline, not an autonomous expiry (keeper re-review 2a0fd159).
 - Admin routes (`/api/v1/admin/*`) keep today's behaviour: no keeper L, opaque admin WS. They are reachable only from loopback and the tailnet operator relay, never from public ingress (leader decision 2026-11-05; re-checked after deploy, task 9.5).

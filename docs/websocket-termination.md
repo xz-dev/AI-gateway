@@ -129,3 +129,21 @@ At that recovery checkpoint the completion-log image `fe746f7` was still **not d
 - Set Sub2API accounts to `passthrough` or `ctx_pool` for this chain.
 - Remove `IGNORE_CLIENT_STORE_FALSE=true`. Codex sends `store:false` on every turn.
 - Let the bridge store state or retry. The keeper is the only history owner.
+
+## Capacity patch exception — 2026-11-09
+
+The front WS→HTTP decision stands. A narrow approved exception allows the
+v0.2.19-based Sub2API body-spool, per-path allocation accounting and inner
+capacity-error passthrough patches, including the final converted-Chat named
+error fix. It does **not** authorize replacing the front bridge with Sub2API
+WS modes or moving keeper behind Sub2API. Account WS modes remain off.
+The earlier ban above concerns reimplementing our WS/cache architecture in
+Sub2API, not this explicitly reviewed capacity exception.
+
+Production limits, spool/ledger data, per-route ceilings and the unchanged
+120 s AISIX upload-inclusive budget are summarized in
+[Responses path](responses-path.md#capacity-deployment--2026-11-09). The
+[final deployment receipt](records/maintenance-capacity-closeout-2026-11-09.md)
+supersedes initial image/resource observations, without erasing their failure
+history. Operational PASS is not complete capacity acceptance; the open
+OpenSpec change retains unverified examples and the public-template blocker.
