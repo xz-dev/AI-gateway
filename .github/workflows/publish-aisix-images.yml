@@ -63,7 +63,7 @@ jobs:
               *) printf '%s\n' "$lookup_error" >&2; exit "$lookup_status" ;;
             esac
           fi
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: ./services/routing/${{ matrix.component }}
           push: true
