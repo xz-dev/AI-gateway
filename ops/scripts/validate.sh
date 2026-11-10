@@ -759,7 +759,6 @@ if python3 ops/scripts/check-apisix-models-no-cpa.py "$break_rendered" "$rendere
   exit 1
 fi
 python3 ops/scripts/tests/test-standard-cache-topology.py
-ops/scripts/tests/test-bridge-spool.sh
 python3 ops/scripts/tests/test-component-deploy.py
 python3 ops/scripts/tests/test-keeper-observe.py
 python3 ops/scripts/tests/test-migrate-services-layout.py

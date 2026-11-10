@@ -49,6 +49,14 @@ cd "$HOME/AI-gateway"
 
    Running or stopped references, any entry (including hidden legacy files), symlinked/unreadable engine paths, remote engines and unsupported volume drivers fail closed. The helper neither deletes files nor migrates old volumes. On Podman it creates new volumes with explicit owner metadata; older volumes still marked for automatic owner initialization require a reviewed manual window. Existing nonempty volumes require separate inspection/backup/migration, not this prerequisite. The helper must run on the engine host with safe path-metadata access (rootless Podman uses its existing user namespace); inability to establish that access is a refusal, not permission to change a private deployment.
 
+   For local **rootful Docker**, a Docker-group user can access the daemon but still lack permission to inspect `/var/lib/docker/volumes`. As the normal rootful operator, invoke the prerequisite explicitly with host-path access:
+
+   ```bash
+   sudo -n env AI_GATEWAY_RUNTIME=docker ./ops/scripts/prepare-bridge-spool.sh .env
+   ```
+
+   For a custom project/override, also pass the same `COMPOSE_PROJECT_NAME` and `AI_GATEWAY_COMPOSE_OVERRIDE` values explicitly through `sudo env`; do not rely on sudo preserving them. If noninteractive authorization is unavailable, stop and obtain the required operator access—do not weaken checks or change Docker's data-root permissions. The helper never elevates itself. **Rootless Podman stays unprivileged**; do not use sudo and accidentally select a different engine/store.
+
    This fixes fresh bridge spool compatibility only. It does **not** enable the complete production capacity ledger, inner-hop spools, flags or resource overrides; see the [open capacity limitations](records/maintenance-capacity-closeout-2026-11-09.md).
 
    Do not rely on `--wait`: rootless Podman installations without automatic healthcheck scheduling (for example OpenRC) may leave health at `starting`. `./ops/scripts/validate.sh` performs explicit runtime probes instead of relying on engine health timers.

@@ -210,3 +210,19 @@ passed within 170 seconds, including the bridge regression. Removing the
 empty-volume guard made the nonempty-volume acceptance example fail as intended;
 the original helper was restored. Added-line privacy review/diff checks passed.
 The original 14-file snapshot, branch, HEAD and full status remain unchanged.
+
+### Hosted Docker execution permission follow-up
+
+The first hosted template run refused correctly: its Docker-group user could
+reach the daemon but could not inspect Docker's root-owned volume path. No
+helper safety check was weakened. The isolated bridge regression now runs as
+a separate CI step using `sudo -n env AI_GATEWAY_RUNTIME=docker`; the validator,
+installation, builds and publishing remain unprivileged. Lack of authorized
+noninteractive sudo is a failure, never a prompt or fallback.
+
+Rootful local Docker operators need the same explicit engine-host path access
+when invoking the first-install prerequisite; rootless Podman stays unprivileged.
+The helper does not auto-elevate and offline configuration init is unchanged.
+The actual hosted Docker start/restart/refusal/sentinel result is retained in
+PR23's template job and review evidence, without treating it as full capacity
+acceptance or authorizing production operations.
