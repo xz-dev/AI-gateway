@@ -5,10 +5,10 @@
 
 ## 2. Publish and activate
 
-- [ ] 2.1 Build the candidate image in fork CI (`ci-responses-sse-data-only-event-image`, `SOURCE_SHA=24af18c6`, handler tests). Record the GHCR digest, and verify the image labels and source revision with a read-only manifest/config inspection.
-- [ ] 2.2 In private-config, set `CLI_PROXY_IMAGE` to `ghcr.io/xz-dev/cli-proxy-api:<tag>@sha256:<digest>` and make the `cli-proxy-api` profile pull-enabled. Prove an image-only guarded preview for `component=cli-proxy-api` with no environment, resource or config delta. The operator approved going live (2026-11-15); confirm that no other component rollout is running.
-- [ ] 2.3 Apply CPA only. Verify the running image and executable identity, unchanged environment and resources (1g/2g, `GOMEMLIMIT=700MiB`), health, zero restarts and OOMs, and the protected neighbours.
-- [ ] 2.4 Send one real `xl/claude-opus-5-5` request through CPA that produces a large tool call longer than 36 s, and verify that `response.completed` arrives. Confirm that Sub2API logs no new `missing terminal event` for Pi traffic afterwards. Write a change record with rollback instructions, adopt the private pin, and pass `openspec validate --all --strict`.
+- [x] 2.1 Build the candidate image in fork CI (`ci-responses-sse-data-only-event-image`, `SOURCE_SHA=24af18c6`, handler tests). Record the GHCR digest, and verify the image labels and source revision with a read-only manifest/config inspection.
+- [x] 2.2 In private-config, set `CLI_PROXY_IMAGE` to `ghcr.io/xz-dev/cli-proxy-api:<tag>@sha256:<digest>` and make the `cli-proxy-api` profile pull-enabled. Prove an image-only guarded preview for `component=cli-proxy-api` with no environment, resource or config delta. The operator approved going live (2026-11-15); confirm that no other component rollout is running.
+- [x] 2.3 Apply CPA only. Verify the running image and executable identity, unchanged environment and resources (1g/2g, `GOMEMLIMIT=700MiB`), health, zero restarts and OOMs, and the protected neighbours.
+- [x] 2.4 Send one real `xl/claude-opus-5-5` request through CPA that produces a large tool call longer than 36 s, and verify that `response.completed` arrives. Confirm that Sub2API logs no new `missing terminal event` for Pi traffic afterwards. Write a change record with rollback instructions, adopt the private pin, and pass `openspec validate --all --strict`.
 
 ## 3. Upstream
 
