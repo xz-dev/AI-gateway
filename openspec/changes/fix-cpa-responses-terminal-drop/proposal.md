@@ -11,8 +11,8 @@ Read-only diagnosis and a local replay on 2026-11-15 found the cause in CPA itse
 ## What Changes
 
 - Fix CPA's Responses SSE framer: an `event:` line closes a pending, complete, typed data-only event before starting the next event. Untyped data keeps waiting for its `event:` field, as before. The fix is fork commit `24af18c6` on branch `fix/responses-sse-data-only-event`, based on deployed `45a74cc343`, and includes a regression test.
-- Build a fixed CPA image on the deployed runtime base, replacing only the server binary, and roll out only the CPA component through the guarded component rollout.
-- Report the bug upstream with an issue and PR on `router-for-me/CLIProxyAPI` `dev`. That PR is separate from this deployment, and the operator reviews it before submission.
+- Build an immutable CPA image from `24af18c6` in fork CI, publish it to GHCR pinned by digest, and roll out only the CPA component through the guarded component rollout. This replaces the private preload-only exception for CPA with a normal pull-enabled profile.
+- Report the bug upstream: issue router-for-me/CLIProxyAPI#7579 and PR #7580 against `dev`, submitted after operator review. They are separate from this deployment.
 
 Out of scope: CPA config, routing, accounts, upstream credentials, Sub2API, AISIX and resource limits; the `fix-responses-neutral-keepalive` change, which is owned by another session.
 
