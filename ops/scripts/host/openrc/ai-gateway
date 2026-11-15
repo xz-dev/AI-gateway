@@ -1,0 +1,65 @@
+#!/sbin/openrc-run
+# AI Gateway Compose stack (OpenRC port of the former systemd ai-gateway.service).
+
+description="AI Gateway Compose stack"
+: ${AI_GATEWAY_DIR:=/root/AI-gateway}
+: ${AI_GATEWAY_START_ATTEMPTS:=3}
+
+depend() {
+	# Ordering only: package-update restarts of docker/tailscale must not
+	# cascade into a Compose stop of the whole stack.
+	after docker tailscale net
+}
+
+_env() {
+	sed -n "s/^$1=//p" "$AI_GATEWAY_DIR/.env" | tail -n 1
+}
+
+start_pre() {
+	local i
+	for i in $(seq 1 60); do
+		docker info >/dev/null 2>&1 && break
+		sleep 1
+	done
+	docker info >/dev/null 2>&1 || { eerror "docker is not ready"; return 1; }
+
+	iptables -t nat -C POSTROUTING -s 100.64.0.0/10 -d 172.30.0.0/16 -j MASQUERADE 2>/dev/null \
+		|| iptables -t nat -I POSTROUTING -s 100.64.0.0/10 -d 172.30.0.0/16 -j MASQUERADE
+
+	local ip
+	ip=$(_env TAILSCALE_IP)
+	[ -n "$ip" ] || { eerror "TAILSCALE_IP missing in .env"; return 1; }
+	for i in $(seq 1 60); do
+		ip -4 addr show dev tailscale0 2>/dev/null | grep -q "inet $ip/32" && return 0
+		sleep 1
+	done
+	eerror "tailscale0 does not carry $ip"
+	return 1
+}
+
+start() {
+	ebegin "Starting AI Gateway stack"
+	local n=1
+	while :; do
+		(cd "$AI_GATEWAY_DIR" && timeout 180 docker compose up -d --no-build) && break
+		[ "$n" -ge "$AI_GATEWAY_START_ATTEMPTS" ] && { eend 1; return 1; }
+		n=$((n + 1))
+		ewarn "compose up failed; retry $n/$AI_GATEWAY_START_ATTEMPTS in 20s"
+		sleep 20
+	done
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping AI Gateway stack"
+	(cd "$AI_GATEWAY_DIR" && timeout 120 docker compose stop --timeout 45)
+	eend $?
+}
+
+reload() {
+	ebegin "Reconciling AI Gateway stack"
+	(cd "$AI_GATEWAY_DIR" && timeout 180 docker compose up -d --no-build)
+	eend $?
+}
+
+extra_started_commands="reload"

@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# In an LXC the cgroup-namespace root is a non-root host cgroup, so it may not
+# hold processes while delegating controllers. Move them into a leaf, then
+# enable controllers so nested Docker can apply memory/cpu/pids limits.
+# The leaf is named init.scope because lxcfs prunes that suffix from PID 1's
+# cgroup; /proc/meminfo then keeps reporting the whole container.
+
+description="Delegate cgroup v2 controllers to nested containers"
+
+depend() {
+	before docker containerd
+}
+
+start() {
+	ebegin "Delegating cgroup v2 controllers"
+	local root=/sys/fs/cgroup leaf=/sys/fs/cgroup/init.scope p c rc=0
+	mkdir -p "$leaf"
+	while read -r p; do
+		echo "$p" > "$leaf/cgroup.procs" 2>/dev/null || true
+	done < "$root/cgroup.procs"
+	for c in $(cat "$root/cgroup.controllers"); do
+		echo "+$c" > "$root/cgroup.subtree_control" 2>/dev/null || true
+	done
+	for c in cpu memory pids; do
+		grep -qw "$c" "$root/cgroup.subtree_control" || { eerror "controller $c not delegated"; rc=1; }
+	done
+	eend $rc
+}

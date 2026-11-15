@@ -1,0 +1,11 @@
+/var/log/ai-gateway-recovery.log {
+    su root root
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0600 root root
+}

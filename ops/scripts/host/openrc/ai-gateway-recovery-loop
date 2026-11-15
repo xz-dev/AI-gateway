@@ -1,0 +1,8 @@
+#!/bin/sh
+# One bounded recovery cycle every 30s after the previous one ends.
+export PYTHONDONTWRITEBYTECODE=1
+sleep "${AI_GATEWAY_RECOVERY_BOOT_DELAY:-120}"
+while :; do
+	nice -n 10 timeout 120 /usr/bin/python3 /root/AI-gateway/ops/scripts/host/gateway-recovery.py --apply
+	sleep 30
+done

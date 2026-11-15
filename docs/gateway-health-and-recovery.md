@@ -38,6 +38,8 @@ Each cycle also reports `startup_unit` from a bounded, read-only `systemctl show
 
 This does not prove that every upstream preparation/write stall also blocks the catalog. It does not identify CPA's memory-growth root cause. A successful systemd invocation means the guard ran; inspect individual `checks[].ok` and `action`, not only the unit result.
 
+OpenRC hosts (for example an Alpine LXC) use `ops/scripts/host/openrc/` instead of the systemd units. `ai-gateway` runs the same Compose start/stop and orders after Docker and Tailscale without depending on them, so package-update restarts do not stop the stack. `ai-gateway-recovery` is a supervised loop with the same 120-second boot delay, 120-second cycle bound, 30-second interval, and 64 MiB / 10% CPU cgroup ceilings. It writes to `/var/log/ai-gateway-recovery.log`. There, `startup_unit` reports `unknown`, because no systemd exists. In an unprivileged LXC, enable `cgroup-delegate` at boot. Without it, nested Docker gets no memory, CPU, or pids controllers, and services with `pids_limit` fail to start.
+
 ### Public APISIX probe and keyless catalog noise
 
 The public APISIX has no `/healthz` upstream route: its native unmatched-route

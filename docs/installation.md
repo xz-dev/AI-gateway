@@ -6,6 +6,8 @@ Step-by-step first installation and the Cloudflare Tunnel setup.
 
 Requirements: Linux with `/dev/net/tun`, either Docker Engine with Compose v2.33.1+ or rootless Podman with a Compose provider, OpenSSL, and a remotely managed Cloudflare Tunnel. Scripts automatically select a running Docker or Podman engine; no `docker` compatibility shim is required. The same Compose uses only container-local shared namespaces, temporary route-setup capabilities, virtual DNS, and the TUN device; it never changes host firewall or routing state.
 
+In an unprivileged Proxmox LXC, enable `nesting` and `keyctl`, and pass `/dev/net/tun`. Delegate cgroup controllers at boot: see [OpenRC hosts](gateway-health-and-recovery.md). Remote Ansible management requires the host Compose to match the pinned renderer, `ai_ops_compose_renderer_version`. If the distribution ships another version, install the pinned plugin under `/usr/local/lib/docker/cli-plugins/`. Another Compose version can compute different configuration hashes, so the first `up` after the change may recreate every container. This happened between 5.6.1 and 2.40.3.
+
 ```bash
 git clone --recurse-submodules https://github.com/xz-dev/AI-gateway.git "$HOME/AI-gateway"
 cd "$HOME/AI-gateway"

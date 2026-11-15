@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# Bounded AI Gateway application recovery: OpenRC port of the former systemd
+# ai-gateway-recovery.timer (OnBootSec=120, OnUnitInactiveSec=30, 120s cycle bound).
+
+description="Bounded AI Gateway application recovery loop"
+supervisor=supervise-daemon
+command=/usr/local/sbin/ai-gateway-recovery-loop
+output_log=/var/log/ai-gateway-recovery.log
+error_log=/var/log/ai-gateway-recovery.log
+umask=077
+# Same ceilings as the systemd unit (MemoryMax=64M, CPUQuota=10%); needs cgroup-delegate.
+rc_cgroup_settings="
+memory.max 67108864
+cpu.max 10000 100000
+"
+
+depend() {
+	need docker
+	after ai-gateway
+}
