@@ -39,6 +39,18 @@ When the `xl` upstream sends no data for about 30 s, it emits one data-only SSE 
 
 As planned, the recreate interrupted in-flight CPA streams. Around 13:57:08 UTC, key 27 (`gpt-6.1-sol`, Sub2API account 10 → CPA `codex`) logged one `unexpected EOF` at 186.6 s, ten `502 (failover)` at 127–157 s and fourteen `no available OpenAI accounts` while CPA restarted. The operator's long-context test was running at the time and saw these as timeouts. They are deployment casualties, not a context-size limit: in the same 10 h, key 27 completed request bodies up to about 660 KB.
 
+## Upstream response and refinement (2026-11-16)
+
+Upstream closed issue #7579 as NOT_PLANNED, reasoning that the provider's data-only `codex.client.keepalive` frame is non-standard and the provider should send `: keep-alive` comments instead. The operator kept PR #7580 open as a robustness change. A Codex review on the PR correctly pointed out that the first fix also split a typed payload from its own following `event:` field (data-before-event order). Fork commit `f38c87df0b537ff2c6bea03a8ba50876b0de5f78` now splits only when the `event:` name differs from the pending payload `type`. The new test `TestResponsesSSEFramerKeepsTypedDataBeforeMatchingEvent` fails on `24af18c6` and passes now, handler tests pass, and the recorded real stream still completes.
+
+Known limit, a `shortcut:` of this patch: CPA forwards no blank-line delimiters to the framer, so the framer still guesses event boundaries. A typed data-only event followed by an `event:` of the **same** type would be merged into one frame. The `xl` keepalive (`codex.client.keepalive` followed by `response.*`) cannot hit this case.
+
+Rollout of the refinement: CI run 43842394682 published `ghcr.io/xz-dev/cli-proxy-api:ci-f38c87df-responses-sse-data-only-event@sha256:56f5a1a0e9fe5a249a9a8c00f222319f3d89ccd6b8a997751f55846a98e97769` (revision label `f38c87df`). The preview showed an image-only change with no environment changes, digest verified and 47 protected containers; the approval digest was `5b5711a9…`. The operator chose to restart immediately: 14 established connections, about 110 requests per 10 min. Apply ran 09:58:02–09:59:49 UTC with 152 ok / 9 changed / 0 failed. CPA was recreated at 09:59:32 UTC. The snapshot is `.ai-ops-state/front-cli-proxy-api-ritmy7ch`. Afterwards: healthy, restart count 0, no OOM, `GOMEMLIMIT=700MiB`. The large-tool-call request returned `response.completed` after 56.0 s. In private config, `.env` keeps the `24af18c6` image as a commented rollback line.
+
+## Unexplained exit on the first CI image
+
+The `ci-24af18c6` container exited once by itself at 2026-11-15T17:44:02Z with exit code 0, no OOM, no graceful-shutdown log, no stderr output and no `os.Exit(0)` in fork source. Docker restarted it within 0.3 s. Dependencies and the recovery loop were not involved. The operator chose to observe. If it happens again, check the CI build route (Dockerfile/CGO/debian runtime, compared with the earlier binary-swap image) and the two `.so` plugins. Details are in Hindsight; the 2026-11-16 recreate removed the docker-inspect state.
+
 ## Rollback
 
-Run a fresh `playbooks/rollback.yml -e component=cli-proxy-api --check --diff` and approve its own digest. The previous image (`ci-45a74cc343-no-memory-admission`, manifest `sha256:b187c5e3…`) is still present on the host. A rollback restores the terminal-drop bug and requires restoring the preload-only profile line in private config.
+Run a fresh `playbooks/rollback.yml -e component=cli-proxy-api --check --diff` and approve its own digest. It restores the previous snapshot, which is the `ci-24af18c6` image. The original offline image (`ci-45a74cc343-no-memory-admission`, manifest `sha256:b187c5e3…`) is still present on the host. Restoring it brings back the terminal-drop bug and requires restoring the preload-only profile line in private config.

@@ -13,4 +13,9 @@
 ## 3. Upstream
 
 - [x] 3.1 After operator review, open issue #7579 and PR #7580 (`upstream/fix-responses-sse-data-only-event`, based on `dev`) on `router-for-me/CLIProxyAPI`.
-- [ ] 3.2 Track the upstream merge so a later fork rebase can drop the local commit.
+- [ ] 3.2 Upstream closed #7579 as NOT_PLANNED (the provider's frame is non-standard). The operator kept PR #7580 open with the refinement and a reply. Until upstream merges an equivalent change, or the `xl` provider switches to SSE comment keepalives, the fork carries the patch; drop it on a later rebase only after one of those happens.
+
+## 4. Review refinement (2026-11-16)
+
+- [x] 4.1 Address the valid PR review finding: a typed payload followed by its own `event:` field (data-before-event order) must stay one frame. Fork commit `f38c87df` splits only when the `event:` name differs from the pending payload `type`. `TestResponsesSSEFramerKeepsTypedDataBeforeMatchingEvent` fails on `24af18c6` and passes now; handler tests and vet pass; the real-stream replay still delivers `response.completed`. Ported to the PR as `4173ec24`.
+- [x] 4.2 Build `ci-f38c87df-responses-sse-data-only-event@sha256:56f5a1a0…` in fork CI. Apply it CPA-only through a fresh guarded preview, with operator approval to restart immediately. Verify the image, health, environment and a large-tool-call request again.

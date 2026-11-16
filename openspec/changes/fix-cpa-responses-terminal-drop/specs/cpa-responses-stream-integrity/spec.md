@@ -16,9 +16,14 @@ CPA SHALL deliver the upstream `response.completed` (or other terminal) event to
 
 ### Requirement: Existing Responses framing behaviour is unchanged
 
-CPA SHALL keep untyped data that is followed by its `event:` field as one event. It SHALL keep recovering fragmented JSON frames, delivering in-stream error and failure events, and framing images streams exactly as before.
+CPA SHALL keep untyped data, and typed data whose `type` matches the following `event:` field, as one event. It SHALL keep recovering fragmented JSON frames, delivering in-stream error and failure events, and framing images streams exactly as before.
 
 #### Scenario: Untyped data before its event field
 
 - **WHEN** the upstream sends `data: {"response":{...}}` followed by `event: response.completed`
 - **THEN** CPA emits them as one `response.completed` event
+
+#### Scenario: Typed data before its own event field
+
+- **WHEN** the upstream sends `data: {"type":"response.output_text.delta",...}` followed by `event: response.output_text.delta`
+- **THEN** CPA emits them as one `response.output_text.delta` event, and the following events keep their own names
