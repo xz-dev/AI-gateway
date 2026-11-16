@@ -543,7 +543,7 @@ services:
   ai-sse-keepalive-proxy:
     build:
       context: ./services/middleware/ai-sse-keepalive-proxy
-    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ghcr.io/xz-dev/ai-sse-keepalive-proxy:1c489390927a986b7aacd3ebdfef3ea33f51d15d@sha256:bc5e360f98a9c71766bef26fbd67d88e93a2e93b372fcd9e5245788475d336f3}
+    image: ${AI_SSE_KEEPALIVE_PROXY_IMAGE:-ghcr.io/xz-dev/ai-sse-keepalive-proxy:09fb8deb7b0f1aa79978ec845ac12e77b828e6fe@sha256:6d3daaf1c23f15595b83c5c67c59985ced207bbfb6f8a49b65a741f47b0949fa}
     pull_policy: build
     user: "65534:65534"
     network_mode: service:ai-sse-keepalive-proxy-netns
