@@ -1,0 +1,49 @@
+---
+# Read-only; runs in check mode too. Without delegated cpu/memory controllers the
+# service's rc_cgroup_settings (64 MiB, 10% CPU) would not apply.
+- name: Read delegated cgroup v2 controllers
+  ansible.builtin.slurp:
+    src: "{{ ai_ops_recovery_cgroup_root }}/cgroup.subtree_control"
+  register: __ai_ops_recovery_subtree
+  tags: [always]
+
+- name: Require delegated cpu and memory controllers
+  ansible.builtin.assert:
+    that:
+      - "'cpu' in __ai_ops_recovery_controllers"
+      - "'memory' in __ai_ops_recovery_controllers"
+    fail_msg: >-
+      {{ ai_ops_recovery_cgroup_root }}/cgroup.subtree_control has {{ __ai_ops_recovery_controllers | join(' ') }};
+      cpu and memory must be delegated (in an LXC, start cgroup-delegate).
+  vars:
+    __ai_ops_recovery_controllers: "{{ (__ai_ops_recovery_subtree.content | b64decode).split() }}"
+  tags: [always]
+
+- name: Resolve whether the OpenRC host is an LXC guest
+  ansible.builtin.set_fact:
+    __ai_ops_recovery_is_lxc: >-
+      {{ ai_ops_recovery_lxc if ai_ops_recovery_lxc is defined
+         else (ansible_facts['virtualization_type'] | default('') == 'lxc'
+               and ansible_facts['virtualization_role'] | default('') == 'guest') }}
+  tags: [always]
+
+- name: Show the OpenRC host classification
+  ansible.builtin.debug:
+    msg: "OpenRC recovery host: lxc={{ __ai_ops_recovery_is_lxc | bool }} (cgroup-delegate at boot is required when true)"
+  tags: [always]
+
+- name: Read the OpenRC boot runlevel
+  ansible.builtin.command:
+    argv: [rc-update, show, boot]
+  register: __ai_ops_recovery_boot
+  changed_when: false
+  check_mode: false
+  when: __ai_ops_recovery_is_lxc | bool
+  tags: [always]
+
+- name: Require cgroup-delegate at boot on LXC guests
+  ansible.builtin.assert:
+    that: __ai_ops_recovery_boot.stdout is regex('(?m)^\s*cgroup-delegate\s*\|')
+    fail_msg: "Enable cgroup-delegate in the boot runlevel, or the cgroup ceilings disappear after a reboot."
+  when: __ai_ops_recovery_is_lxc | bool
+  tags: [always]

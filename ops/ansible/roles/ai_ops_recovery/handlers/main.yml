@@ -7,3 +7,8 @@
   ansible.builtin.systemd_service:
     name: ai-gateway-recovery.timer
     state: restarted
+
+- name: Restart OpenRC recovery service
+  ansible.builtin.command:
+    argv: [rc-service, ai-gateway-recovery, restart]
+  changed_when: true

@@ -1,0 +1,33 @@
+---
+# systemd hosts: service + 30-second timer.
+- name: Install recovery service and timer
+  ansible.builtin.copy:
+    content: "{{ lookup('file', ai_ops_scripts_dir + '/host/' + item) | replace('/root/AI-gateway', ai_ops_deploy_root) }}\n"
+    dest: "{{ ai_ops_recovery_unit_dir }}/{{ item }}"
+    mode: '0644'
+    backup: true
+  loop: [ai-gateway-recovery.service, ai-gateway-recovery.timer]
+  notify: [Reload systemd units, Restart recovery timer]
+  tags: [upload]
+
+- name: Apply unit changes before verifying them
+  ansible.builtin.meta: flush_handlers
+  tags: [always]
+
+- name: Validate recovery units
+  ansible.builtin.command:
+    argv:
+      - systemd-analyze
+      - verify
+      - "{{ ai_ops_recovery_unit_dir }}/ai-gateway-recovery.service"
+      - "{{ ai_ops_recovery_unit_dir }}/ai-gateway-recovery.timer"
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [verify]
+
+- name: Enable bounded recovery timer
+  ansible.builtin.systemd_service:
+    name: ai-gateway-recovery.timer
+    enabled: true
+    state: started
+  tags: [activate]

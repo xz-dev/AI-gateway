@@ -1,11 +1,36 @@
 ---
 argument_specs:
   main:
-    short_description: Install the bounded host recovery guard (service + 30-second timer).
+    short_description: Install the bounded host recovery guard (30-second cycle) on systemd or OpenRC hosts.
     description:
-      - Copies gateway_health.py and gateway-recovery.py, verifies the application probes,
-        installs the units and enables the timer. Check mode shows the file diffs only.
+      - Copies gateway_health.py and gateway-recovery.py and verifies the application probes.
+      - On systemd hosts it installs the service and timer units and enables the timer.
+      - On OpenRC hosts it installs the supervised recovery loop, its init script and logrotate file,
+        enables the service in the default runlevel and verifies the 64 MiB / 10% CPU cgroup ceilings.
+      - Check mode shows the file diffs only.
     options:
+      ai_ops_recovery_init:
+        type: str
+        choices: [auto, systemd, openrc]
+        default: auto
+        description: Service manager of the host; auto uses the gathered service_mgr fact.
+      ai_ops_recovery_lxc:
+        type: bool
+        description:
+          - Treat an OpenRC host as an LXC guest, which requires cgroup-delegate in the boot runlevel.
+          - Detected from the virtualization facts when unset.
       ai_ops_recovery_unit_dir:
         type: str
         description: Directory of the systemd units on the host.
+      ai_ops_recovery_openrc_dir:
+        type: str
+        description: Directory of OpenRC init scripts on the host.
+      ai_ops_recovery_sbin_dir:
+        type: str
+        description: Directory of the OpenRC recovery loop executable.
+      ai_ops_recovery_logrotate_dir:
+        type: str
+        description: Directory of logrotate configuration on the host.
+      ai_ops_recovery_cgroup_root:
+        type: str
+        description: cgroup v2 root on the host.

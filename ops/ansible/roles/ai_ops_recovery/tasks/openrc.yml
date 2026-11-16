@@ -1,0 +1,85 @@
+---
+# OpenRC hosts: supervised loop with the same boot delay, cycle bound, interval and ceilings
+# as the systemd timer. No backup copies: OpenRC treats every file in the init directory as a
+# service and logrotate reads every file in its directory.
+- name: Install the OpenRC recovery init script and loop
+  ansible.builtin.copy:
+    content: "{{ lookup('file', ai_ops_scripts_dir + '/host/openrc/' + item.name) | replace('/root/AI-gateway', ai_ops_deploy_root) }}\n"
+    dest: "{{ item.dir }}/{{ item.name }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: ai-gateway-recovery, dir: "{{ ai_ops_recovery_openrc_dir }}", mode: '0755'}
+    - {name: ai-gateway-recovery-loop, dir: "{{ ai_ops_recovery_sbin_dir }}", mode: '0700'}
+  loop_control:
+    label: "{{ item.dir }}/{{ item.name }}"
+  notify: [Restart OpenRC recovery service]
+  tags: [upload]
+
+- name: Install the recovery log rotation
+  ansible.builtin.copy:
+    content: "{{ lookup('file', ai_ops_scripts_dir + '/host/openrc/ai-gateway-recovery.logrotate') }}\n"
+    dest: "{{ ai_ops_recovery_logrotate_dir }}/ai-gateway-recovery"
+    mode: '0644'
+  tags: [upload]
+
+- name: Validate the OpenRC recovery scripts
+  ansible.builtin.command:
+    argv: [sh, -n, "{{ item }}"]
+  loop:
+    - "{{ ai_ops_recovery_openrc_dir }}/ai-gateway-recovery"
+    - "{{ ai_ops_recovery_sbin_dir }}/ai-gateway-recovery-loop"
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [verify]
+
+- name: Read the OpenRC default runlevel
+  ansible.builtin.command:
+    argv: [rc-update, show, default]
+  register: __ai_ops_recovery_default
+  changed_when: false
+  check_mode: false
+  tags: [activate]
+
+- name: Enable the recovery service in the default runlevel
+  ansible.builtin.command:
+    argv: [rc-update, add, ai-gateway-recovery, default]
+  changed_when: true
+  when: __ai_ops_recovery_default.stdout is not regex('(?m)^\s*ai-gateway-recovery\s*\|')
+  tags: [activate]
+
+- name: Apply a changed script before checking the service
+  ansible.builtin.meta: flush_handlers
+  tags: [always]
+
+- name: Read the recovery service state
+  ansible.builtin.command:
+    argv: [rc-service, ai-gateway-recovery, status]
+  register: __ai_ops_recovery_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [activate]
+
+- name: Start the recovery service
+  ansible.builtin.command:
+    argv: [rc-service, ai-gateway-recovery, start]
+  changed_when: true
+  when: "'started' not in __ai_ops_recovery_status.stdout"
+  tags: [activate]
+
+- name: Read the recovery service cgroup ceilings
+  ansible.builtin.slurp:
+    src: "{{ ai_ops_recovery_cgroup_root }}/openrc.ai-gateway-recovery/{{ item }}"
+  loop: [memory.max, cpu.max]
+  register: __ai_ops_recovery_ceilings
+  when: not ansible_check_mode
+  tags: [verify]
+
+- name: Verify the 64 MiB / 10% CPU ceilings
+  ansible.builtin.assert:
+    that:
+      - (__ai_ops_recovery_ceilings.results[0].content | b64decode | trim) == '67108864'
+      - (__ai_ops_recovery_ceilings.results[1].content | b64decode | trim) == '10000 100000'
+    fail_msg: "openrc.ai-gateway-recovery does not enforce memory.max=67108864 and cpu.max='10000 100000'."
+  when: not ansible_check_mode
+  tags: [verify]

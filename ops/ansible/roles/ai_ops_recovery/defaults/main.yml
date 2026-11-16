@@ -1,3 +1,10 @@
 ---
-# Directory of the recovery service and timer units on the host.
+# Service manager of the host: auto (detected), systemd or openrc.
+ai_ops_recovery_init: auto
+# Directory of the recovery service and timer units on systemd hosts.
 ai_ops_recovery_unit_dir: /etc/systemd/system
+# OpenRC hosts: init script, loop, logrotate and cgroup v2 root locations.
+ai_ops_recovery_openrc_dir: /etc/init.d
+ai_ops_recovery_sbin_dir: /usr/local/sbin
+ai_ops_recovery_logrotate_dir: /etc/logrotate.d
+ai_ops_recovery_cgroup_root: /sys/fs/cgroup

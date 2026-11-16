@@ -7,7 +7,10 @@
 - a tampered binary, a host Compose version that differs from the pin, and a remote
   Python without requests each stop preflight with the named cause;
 - --tags verify still runs argument validation and preflight;
-- recovery.yml --check writes no unit and copies no script.
+- recovery.yml --check writes no unit and copies no script;
+- on OpenRC, recovery.yml --check writes no file and never enables, starts or restarts the
+  service; missing cgroup delegation, or cgroup-delegate absent from an LXC's boot runlevel,
+  stops it before any write.
 """
 import functools
 import hashlib
@@ -239,13 +242,62 @@ class Preflight(unittest.TestCase):
                              "ActiveState=inactive\\nUnitFileState=disabled\\n' ;; *is-enabled*) echo disabled; exit 1 ;; esac\n")
         systemctl.chmod(0o755)
         rc, text = self.run_play(ROOT / "ops/ansible/playbooks/recovery.yml", "--check", "--diff",
-                                 env={"PATH": f"{bin_dir}:{os.environ['PATH']}"}, ai_ops_recovery_unit_dir=str(units))
+                                 env={"PATH": f"{bin_dir}:{os.environ['PATH']}"}, ai_ops_recovery_unit_dir=str(units),
+                                 ai_ops_recovery_init="systemd")
         self.assertEqual(rc, 0, text)
         self.assertEqual(list(units.iterdir()), [])
         self.assertFalse((self.root / "deploy/ops/scripts/host").exists())
         self.assertIn("ai-gateway-recovery.timer", text)
         calls = (bin_dir / "systemctl-calls").read_text()
         self.assertNotRegex(calls, r"daemon-reload|\b(start|restart|enable)\b")
+
+    def openrc_play(self, controllers="cpu memory pids", boot="cgroup-delegate | boot"):
+        bin_dir, cgroup = self.root / "bin", self.root / "cgroup"
+        dirs = {name: self.root / name for name in ("initd", "sbin", "logrotate")}
+        for path in (bin_dir, cgroup, *dirs.values()):
+            path.mkdir()
+        (cgroup / "cgroup.subtree_control").write_text(controllers + "\n")
+        # Read-only OpenRC stand-ins: every call is logged; only queries answer.
+        for name in ("rc-update", "rc-service"):
+            tool = bin_dir / name
+            tool.write_text(f"#!/bin/sh\necho \"{name} $*\" >>\"$(dirname \"$0\")/openrc-calls\"\n"
+                            f"case \"$*\" in 'show boot') echo ' {boot}' ;; 'show default') echo ' docker | default' ;;\n"
+                            "  *status) echo ' * status: stopped'; exit 3 ;; esac\n")
+            tool.chmod(0o755)
+        rc, text = self.run_play(ROOT / "ops/ansible/playbooks/recovery.yml", "--check", "--diff",
+                                 env={"PATH": f"{bin_dir}:{os.environ['PATH']}"}, ai_ops_recovery_init="openrc",
+                                 ai_ops_recovery_lxc=True, ai_ops_recovery_cgroup_root=str(cgroup),
+                                 ai_ops_recovery_openrc_dir=str(dirs["initd"]), ai_ops_recovery_sbin_dir=str(dirs["sbin"]),
+                                 ai_ops_recovery_logrotate_dir=str(dirs["logrotate"]))
+        calls = (bin_dir / "openrc-calls").read_text() if (bin_dir / "openrc-calls").exists() else ""
+        return rc, text, dirs, calls
+
+    def assert_nothing_written(self, dirs, calls):
+        for path in dirs.values():
+            self.assertEqual(list(path.iterdir()), [], path)
+        self.assertFalse((self.root / "deploy/ops/scripts/host").exists())
+        self.assertNotRegex(calls, r"\b(add|start|restart|del|delete|stop)\b")
+
+    def test_recovery_check_on_openrc_writes_nothing(self):
+        rc, text, dirs, calls = self.openrc_play()
+        self.assertEqual(rc, 0, text)
+        self.assert_nothing_written(dirs, calls)
+        self.assertIn("OpenRC supervised loop", text)
+        for item in ("ai-gateway-recovery-loop", "/logrotate/ai-gateway-recovery"):
+            self.assertIn(item, text)
+        self.assertIn("rc-update show boot", calls)
+
+    def test_recovery_on_openrc_requires_delegated_controllers(self):
+        rc, text, dirs, calls = self.openrc_play(controllers="pids")
+        self.assertNotEqual(rc, 0, text)
+        self.assertIn("cpu and memory must be delegated", text)
+        self.assert_nothing_written(dirs, calls)
+
+    def test_recovery_on_openrc_lxc_requires_cgroup_delegate_at_boot(self):
+        rc, text, dirs, calls = self.openrc_play(boot="hwclock | boot")
+        self.assertNotEqual(rc, 0, text)
+        self.assertIn("Enable cgroup-delegate in the boot runlevel", text)
+        self.assert_nothing_written(dirs, calls)
 
 
 if __name__ == "__main__":

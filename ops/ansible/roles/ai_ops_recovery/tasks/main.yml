@@ -5,11 +5,35 @@
     fail_msg: "Recovery uses Docker ownership labels and host network-namespace probes."
   tags: [always]
 
+- name: Gather the service manager and virtualization facts
+  ansible.builtin.setup:
+    gather_subset: ['!all', '!min', service_mgr, virtual]
+  when: ai_ops_recovery_init == 'auto' or (ai_ops_recovery_init == 'openrc' and ai_ops_recovery_lxc is not defined)
+  tags: [always]
+
+- name: Resolve the recovery init system
+  ansible.builtin.set_fact:
+    __ai_ops_recovery_init: >-
+      {{ ansible_facts['service_mgr'] | default('unknown') if ai_ops_recovery_init == 'auto' else ai_ops_recovery_init }}
+  tags: [always]
+
+- name: Require a supported service manager
+  ansible.builtin.assert:
+    that: __ai_ops_recovery_init in ['systemd', 'openrc']
+    fail_msg: "Recovery supports systemd and OpenRC hosts; detected {{ __ai_ops_recovery_init }}."
+  tags: [always]
+
 - name: Show bounded recovery deployment
   ansible.builtin.debug:
     msg: >-
-      Install a 30-second host timer; application probes only, 120-second grace, three failures,
+      Install a 30-second host recovery cycle ({{ 'systemd timer' if __ai_ops_recovery_init == 'systemd'
+      else 'OpenRC supervised loop' }}); application probes only, 120-second grace, three failures,
       10-minute cooldown, at most three restarts/hour/application. No database or netns restarts.
+  tags: [always]
+
+- name: Check OpenRC preconditions before writing files
+  ansible.builtin.include_tasks: openrc_preflight.yml
+  when: __ai_ops_recovery_init == 'openrc'
   tags: [always]
 
 - name: Ensure recovery script directory exists
@@ -40,34 +64,6 @@
   when: not ansible_check_mode
   tags: [verify]
 
-- name: Install recovery service and timer
-  ansible.builtin.copy:
-    content: "{{ lookup('file', ai_ops_scripts_dir + '/host/' + item) | replace('/root/AI-gateway', ai_ops_deploy_root) }}\n"
-    dest: "{{ ai_ops_recovery_unit_dir }}/{{ item }}"
-    mode: '0644'
-    backup: true
-  loop: [ai-gateway-recovery.service, ai-gateway-recovery.timer]
-  notify: [Reload systemd units, Restart recovery timer]
-  tags: [upload]
-
-- name: Apply unit changes before verifying them
-  ansible.builtin.meta: flush_handlers
+- name: Install the recovery guard for the host's service manager
+  ansible.builtin.include_tasks: "{{ __ai_ops_recovery_init }}.yml"
   tags: [always]
-
-- name: Validate recovery units
-  ansible.builtin.command:
-    argv:
-      - systemd-analyze
-      - verify
-      - "{{ ai_ops_recovery_unit_dir }}/ai-gateway-recovery.service"
-      - "{{ ai_ops_recovery_unit_dir }}/ai-gateway-recovery.timer"
-  changed_when: false
-  when: not ansible_check_mode
-  tags: [verify]
-
-- name: Enable bounded recovery timer
-  ansible.builtin.systemd_service:
-    name: ai-gateway-recovery.timer
-    enabled: true
-    state: started
-  tags: [activate]

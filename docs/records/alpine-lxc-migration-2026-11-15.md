@@ -101,8 +101,9 @@ both stacks are stopped.
 ## Follow-ups
 
 - Decommission the old VPS after an observation period. It is still a tailnet exit node.
-- The `ai_ops_recovery` role installs systemd units only. On OpenRC hosts, the
-  units in `ops/scripts/host/openrc/` are installed manually.
+- ~~The `ai_ops_recovery` role installs systemd units only.~~ Done on 2026-11-16
+  (`add-openrc-recovery-role`): `playbooks/recovery.yml` also manages the OpenRC
+  recovery service, loop and logrotate file.
 - Tracked history still contains the old host's private addresses: 11 occurrences
   in archived records, archived OpenSpec changes, and the one-off
   `ops/scripts/host/keeper-observe.py`.
