@@ -20,8 +20,8 @@
 ## 4. Publish and integrate without activating production
 
 - [x] 4.1 Publish the reviewed source through the existing maintenance-line workflow and its immutable-tag guard; verify exact-revision CI, full-SHA image availability, platform/digest identity, and OCI revision, without replacing any existing SHA tag or using `latest` as evidence.
-- [ ] 4.2 Update the AI-gateway proxy gitlink and immutable image reference to the published source/image pair, preserving Compose topology; verify `python3 ops/scripts/tests/test-standard-cache-topology.py`, the repository's applicable validation gate, `git diff --check`, and `openspec validate fix-responses-neutral-keepalive --strict` pass, with no unrelated pin or private-config changes.
-- [ ] 4.3 Record the source commit, image digest, baseline comparison, SDK/Go results, and pending live checks in a sanitized release record; verify publication is not labeled deployment or end-to-end acceptance and no private address, hostname, credential, or application payload is committed.
+- [x] 4.2 Update the AI-gateway proxy gitlink and immutable image reference to the published source/image pair, preserving Compose topology; verify `python3 ops/scripts/tests/test-standard-cache-topology.py`, the repository's applicable validation gate, `git diff --check`, and `openspec validate fix-responses-neutral-keepalive --strict` pass, with no unrelated pin or private-config changes.
+- [x] 4.3 Record the source commit, image digest, baseline comparison, SDK/Go results, and pending live checks in a sanitized release record; verify publication is not labeled deployment or end-to-end acceptance and no private address, hostname, credential, or application payload is committed.
 
 ## 5. Deploy and accept only after separate production approval
 
