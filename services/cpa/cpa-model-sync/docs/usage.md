@@ -49,7 +49,7 @@ cat config.example.json | CPA_MANAGEMENT_KEY=... \
   `/app/config.json` (read-only) and runs the default daemon command with that path.
   Override `CPA_MODEL_SYNC_CONFIG` with a private policy file; override
   `CPA_MODEL_SYNC_IMAGE` to pin a built versioned image (compose default tag:
-  `cpa-model-sync:v0.1.3`).
+  `cpa-model-sync:v0.1.4`).
 - Joins only the dedicated internal two-member network `model-sync-cpa`
   (172.30.44.0/29), with `extra_hosts: cli-proxy-api:172.30.44.2`. It therefore
   reaches CPA directly at 172.30.44.2:8317, not APISIX or a relay.

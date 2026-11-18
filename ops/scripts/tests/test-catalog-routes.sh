@@ -15,7 +15,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 source "$root/ops/scripts/container-runtime.sh"
 RUNTIME=("$AI_GATEWAY_RUNTIME")
 
-apisix_image=${1:-docker.io/apache/apisix:3.19.0-debian}
+apisix_image=${1:-docker.io/apache/apisix:3.20.0-debian}
 python_image=docker.io/library/python:3.13.15-alpine3.24
 plane=ai-catalog-routes-$$
 work=$(mktemp -d /var/tmp/ai-catalog-routes.XXXXXX)

@@ -893,7 +893,7 @@ if '      "aisix:3000": 1' not in text or re.findall(r'(?m)^      "([^"]+)": 1$'
 PY
 
 apisix_image=$(value_from_env APISIX_IMAGE)
-[ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.19.0-debian
+[ -n "$apisix_image" ] || apisix_image=docker.io/apache/apisix:3.20.0-debian
 "${RUNTIME[@]}" run --rm --sysctl net.ipv4.ip_nonlocal_bind=1 --network none \
   -e APISIX_STAND_ALONE=true \
   -v "$root/services/routing/apisix-models/config.yaml:/usr/local/apisix/conf/config.yaml:ro" \
