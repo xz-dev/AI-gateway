@@ -131,7 +131,7 @@ services:
         ipv4_address: 172.30.63.2
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cliproxyapi@sha256:4835aa6c189f2db5d4a2558e4533e9b7eb185ece17b20b4f3b10ea2134bf2b6a}
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api@sha256:c938d0b716db235c0b182104758d45a046bcf592339c31eafc1a9f1b1c7484fd}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -299,7 +299,7 @@ services:
         ipv4_address: 172.30.60.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api@sha256:56557012dc75e96feb22e26fdb36fce057ab1e660cba8f907bf4b3d85472472a}
+    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api@sha256:8e329cb79d9c4c1bd46074e399d0037f10dc506962fb3ce6b9f2997aeaf6ac5d}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
@@ -945,7 +945,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/aisix@sha256:b9d01af4a8d9baa736767b3995ed76fb0c0450816daa40f84bf4b1c39271e9c6}
+    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/aisix@sha256:9721ff105e2e568bcaa31c5e5ae4231ecce1c74df822619fd51f4e087e3c6108}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped

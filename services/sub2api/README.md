@@ -13,12 +13,18 @@
 
 ## Current release and carried patches
 
-The runtime default is the compatibility-lock image `56557012dc75…`, reviewed
-source [`02918ea957f0`](https://github.com/xz-dev/sub2api/commit/02918ea957f0639db932b23e7e5d00a6f2298308),
-based on upstream v0.2.19. It retains the reviewed rerank, affinity, structured-error
-and route/billing patches, adds body-spool/accounting and inner-capacity-error
-passthrough, and preserves named errors on converted Chat requests. The front
-bridge still owns WebSocket termination; account WS modes remain off.
+The runtime default is the compatibility-lock image `8e329cb79d9c…`, reviewed
+source [`2f0213fd2c57`](https://github.com/xz-dev/sub2api/commit/2f0213fd2c573ed2cae8d11b655a12d3a7ebc035)
+(branch `integrate/capacity-0.2.22-r2`), rebased onto the exact upstream tag v0.2.22.
+It retains the reviewed rerank, affinity, structured-error and route/billing patches,
+body-spool/accounting, inner-capacity-error passthrough and named errors on converted
+Chat requests. The WebSocket keepalive patch (PR #3172) was dropped, and the Codex
+passthrough "instructions required" 403 was removed along with upstream. The front
+bridge still owns WebSocket termination; account WS modes remain off. Rollout,
+migrations 246–251 and the image-only rollback rehearsal are in the
+[2026-11-18 record](../../docs/records/component-update-2026-11-18.md).
+
+The previous default `56557012dc75…` (source `02918ea957f0`) is the image-only rollback target.
 
 The earlier `60dbe85` / `fcf582…` v0.2.19 migration candidate was validated in an
 isolated fixture, not established as the final production deployment. Its

@@ -141,7 +141,13 @@ All three windows followed the same pattern:
 
 ## Follow-ups (not done this round)
 
-1. **Compatibility lock.** `ci/large-request/ci/compatibility-lock.json` (and the tracked Sub2API/AISIX/CPA defaults bound to it by `test-standard-cache-topology.py`) still name the previous capacity images. Production now runs Sub2API `8e329cb7…`, AISIX `9721ff10…` and CPA `c938d0b7…`. Run the large-request ladder against these and publish a new lock before changing the tracked defaults.
+1. **Compatibility lock: done the same day.**
+   - The lock was regenerated from a passing local ladder run (`20261118T115318Z-3515308`, 10/10 rungs, 0 restarts). The method was unchanged from the 2026-11-09 lock: the same no-swap wrapper and mock upstreams only.
+   - The run covered production's Sub2API `8e329cb7…`, AISIX `9721ff10…` and CPA `c938d0b7…`, plus Postgres 18.7, Redis 8.10.3 and alpine 3.24.4.
+   - The tracked Sub2API, AISIX and CPA defaults now follow that lock.
+   - Memory: Sub2API v0.2.22 peaks 25–40 MiB higher (94 MiB lock peak against its 320 MiB limit); AISIX and CPA peaks went down.
+   - `mock_base` records the index digest `3f4d6b32…` that the local `alpine:3.24.4` tag resolved to. It contains the same amd64 manifest as the production pin `f59abe65…`.
+   - The nightly lock (1 GiB rungs) was not refreshed.
 2. **`glm-5.2` fallback chain is thin.** `zcode/glm-5.2` is gone (accepted); `sensenova/glm-5.2` returns "no available model instance"; `commandcode` returns 401 "API key has expired". The aggregate still completes through a later target.
 3. **Redis has no `requirepass`.** `REDISCLI_AUTH` is set, but the server runs without a password, so `redis-cli` prints `AUTH failed`. Redis is on an isolated two-member network. This gap existed before this round.
 4. **CPA 120 s limit.** The forced 6000-word tool call fails at the `xl` relay's 120 s timeout. It is likely upstream behaviour but unproven.
