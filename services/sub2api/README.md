@@ -13,9 +13,10 @@
 
 ## Current release and carried patches
 
-The runtime default is the compatibility-lock image `8e329cb79d9c…`, reviewed
-source [`2f0213fd2c57`](https://github.com/xz-dev/sub2api/commit/2f0213fd2c573ed2cae8d11b655a12d3a7ebc035)
-(branch `integrate/capacity-0.2.22-r2`), rebased onto the exact upstream tag v0.2.22.
+The runtime default is the compatibility-lock image `e26d4b7dbef5…`, reviewed
+source [`f249326936c2`](https://github.com/xz-dev/sub2api/commit/f249326936c2d76e90e2e2fc67869c01564d62d6)
+(branch `integrate/capacity-0.2.22-r3`): the exact upstream tag v0.2.22 plus upstream's GPT-6.2
+Sol/Astra support (`6107cf1748`, cherry-picked).
 It retains the reviewed rerank, affinity, structured-error and route/billing patches,
 body-spool/accounting, inner-capacity-error passthrough and named errors on converted
 Chat requests. The WebSocket keepalive patch (PR #3172) was dropped, and the Codex
@@ -24,7 +25,8 @@ bridge still owns WebSocket termination; account WS modes remain off. Rollout,
 migrations 246–251 and the image-only rollback rehearsal are in the
 [2026-11-18 record](../../docs/records/component-update-2026-11-18.md).
 
-The previous default `56557012dc75…` (source `02918ea957f0`) is the image-only rollback target.
+Image-only rollback targets: `8e329cb79d9c…` (source `2f0213fd2c57`, no GPT-6.2 support), then `56557012dc75…`
+(source `02918ea957f0`, pre-v0.2.22 schema-compatible as rehearsed).
 
 The earlier `60dbe85` / `fcf582…` v0.2.19 migration candidate was validated in an
 isolated fixture, not established as the final production deployment. Its

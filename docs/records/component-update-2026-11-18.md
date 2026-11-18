@@ -139,6 +139,50 @@ All three windows followed the same pattern:
 - **Tunnel window false rollback** (above): two unnecessary recreates. Fixed in the window script (string comparison of IDs); the later windows used the fixed logic and a precheck mode.
 - An earlier Sub2API candidate (r1, `f5704b20`) still contained the keepalive patch and was never deployed.
 
+## Follow-up: GPT-6.2 Sol and Astra (operator request)
+
+**Gateway listing (12:53–12:55 UTC).** Before the change, the CPA native manifest already had `codex/`, `xl/` and `congee/` `gpt-6.2-sol` / `gpt-6.2-astra`, plus the bare IDs. They were missing from the public catalog.
+
+The change follows the [gpt-6.1-terra precedent](add-gpt-6-1-terra-2026-11-01.md):
+- **AISIX:** added aggregates `gpt-6.2-sol` and `gpt-6.2-astra` with ordered failover `codex/` → `xl/`, copying terra's routing policy (zero retries, one fallback, `retry_on_429`, fallback statuses 400–404). Added four direct declarations that copy terra's cooldown and provider keys.
+- **model-catalog:** added two static slugs with a 500k context, in the private profile and in the tracked example (`f59ed91`).
+
+The operator said "fallback 一样". This was read as terra's codex → xl. `gpt-6.1-sol` only uses codex, because `xl` does not serve 6.1-sol; both providers serve 6.2.
+
+Verification:
+- Both `deploy-config.yml --check --diff` previews were add-only: AISIX 73 → 79 models, catalog +2 slugs, 0 removals, no orphans. Both AISIX callers are `allowed_models: ['*']`.
+- Only the `aisix` and `model-catalog` containers changed.
+- Public `/v1/models` went from 358 to 360.
+- Both models completed through `codex/`, and the `gpt-6.1-sol` / `gpt-6.1-terra` regression probes completed.
+- model-catalog `npm test` and `test-ansible-model-catalog-config.sh` passed.
+
+**Sub2API GPT-6.2 support (operator decision: port and deploy).** Upstream `6107cf1748` ("support GPT-6.2 Sol and Astra") adds pricing, Ultrafast entitlement, reasoning handling and alias normalization. It was not in the v0.2.22 tag, so `cherry-pick -x` put it on the new fork branch `integrate/capacity-0.2.22-r3`. Commits:
+- `03197517cb`: the cherry-pick.
+- `cbe35e093b`: classifies the reintroduced bounded raw-body account read in `TestRawBodyPathAccountReadsAreClassified`.
+- `f249326936`: runs `TestPassthroughNormalizersAllocateLittleWhenUnchanged` in its own process, the same flake class and fix as `a01da92f4f`.
+
+Gates, all passed before the deploy:
+- Fork CI, ghcr-ci and Security Scan green on `90cee09934`.
+- Image `ghcr.io/xz-dev/sub2api@sha256:e26d4b7dbef57fb55ee4e635a7010edd319245ead53265d5b4563e2e31f68f39`; revision label = source. Compared with `8e329cb7`, only the labels differ. No migrations.
+- Independent delta review: APPROVE-WITH-NOTES. The cherry-pick has upstream's stable patch ID; capacity charges, request-scoped errors and passthrough/WS precedence are intact. 9,618 tests passed; lint 0 issues. Note: `billing_inflight_reservation_test.go:464` fails under host-default concurrency but passes alone and in the suite.
+- Ladder run `20261118T164720Z-605106`: 10/10 rungs, with the Sub2API peak at 80.6 MiB (93.7 MiB before).
+
+The lock was promoted together with the tracked `SUB2API_IMAGE` default.
+
+Guarded deploy at 17:23–17:25 UTC, first attempt:
+- Only `sub2api` changed; it is healthy with 0 restarts.
+- schema_migrations stayed at 304.
+- Controller `.env` = live `.env`.
+- gpt-6.2-sol/astra, gpt-6.1-sol, claude-opus-5-5 and zcode probes completed.
+
+Rollback: image-only, to `8e329cb7…`.
+
+**Zakk access (operator request).** User Zakk (id 5) has one key (27) in group 20, whose model allowlist is disabled. The group's only account is 10 "CPA - Zakk", whose `model_mapping` acts as the allowlist.
+
+The change went through the admin API. `PUT /accounts/:id` replaces every non-sensitive credentials key with what is sent. So the full non-sensitive credentials from a fresh GET were sent back unchanged, except `model_mapping` +2 (`gpt-6.2-sol`, `gpt-6.2-astra`, each mapped to itself). A dry run came first; the read-back asserted the key set, every other value, groups `[20]`, WS mode `off` and status.
+
+The admin account test on account 10 succeeded for both new models and for `gpt-6.1-sol`. Zakk's path is Sub2API → CPA direct, using CPA's own routing for the bare IDs, not the AISIX aggregate.
+
 ## Follow-ups (not done this round)
 
 1. **Compatibility lock: done the same day.**
@@ -154,4 +198,5 @@ All three windows followed the same pattern:
 5. **cpa-model-sync** reports 5 failing channels (zakk, kimi-cn-api, senseaudio, anthropic-api, axis). No pre-change baseline was taken.
 6. **AISIX** warns that the heap-profile auto-dump directory is not writable (automatic heap dumps are off).
 7. **Deploy previews always show `config_diff: true` when `.env` changes**, because `.env` is part of the candidate hash set. Expected; worth a note in `docs/ansible-operations.md`.
+9. **Responses WebSocket 1006 on long agent sessions.** Two subagent workers whose model traffic uses this gateway's Responses WebSocket path died with `Responses WebSocket closed (1006)` (about 13:2x and 16:3x UTC). Probes and readbacks before and after were healthy. Correlate with front/bridge logs.
 8. **Manual-window scripts** for the tunnel pair, Postgres/Redis and the netns guards were round scratch. Consider tracking a generic version with a precheck mode.
