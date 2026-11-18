@@ -72,6 +72,10 @@ channels:
 static_models:
   - slug: gpt-6.1-terra
     overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: gpt-6.2-sol
+    overrides: {context_window: 500000, max_context_window: 500000}
+  - slug: gpt-6.2-astra
+    overrides: {context_window: 500000, max_context_window: 500000}
   - slug: gpt-5.6-terra
     overrides: {context_window: 500000, max_context_window: 500000}
   - slug: gpt-5.6-luna
