@@ -113,7 +113,16 @@ All three windows followed the same pattern:
   - (a) a throwaway 3.24.4 container with the exact guard command and caps reached `sleep` as `nobody` with no default route;
   - (b) a precheck against the untouched stack passed.
 
-  Two probes needed one retry each. After the sub2api-host unit, a ZCode turn returned HTTP 200 with an empty stream. After the apisix-host unit, a `gpt-6.1-sol` read timed out. Both passed on retry, and no unit failed. cloudflared logged origin-unreachable errors only while the APISIX front was recreated (~10:19).
+  Two probes needed one retry each. After the sub2api-host unit, a ZCode turn returned HTTP 200 with an empty stream. After the apisix-host unit, a `gpt-6.1-sol` read timed out. Both passed on retry, and no unit failed. cloudflared ERR lines, 10:00–10:30:
+
+  | Minute | Count | Type | Coincides with |
+  | --- | --- | --- | --- |
+  | 10:06 | 2 | client-canceled | host-relay units |
+  | 10:10 | 2 | client-canceled | host-relay units |
+  | 10:19 | 12 | origin-unreachable | APISIX front recreate |
+  | 10:21 | 2 | client-canceled | after the window |
+
+  The 10:06 and 10:10 lines coincide with the host-relay units and the two probe retries. So even the "least critical" units caused brief client-visible stalls. Whether every canceled request was a window probe or real traffic was not established.
 
 ## Backup and rollback boundaries
 
