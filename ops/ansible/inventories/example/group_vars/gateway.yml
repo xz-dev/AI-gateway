@@ -64,7 +64,7 @@
 
 # --- ai_ops_squid: deploy-config.yml -e component=egress-proxy --------------
 # Pinned image used for the offline `squid -k parse` validation.
-# ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u3-r1
+# ai_ops_squid_image: ai-gateway-squid:6.13-2-deb13u4-r1
 # Only resynchronize data/egress-proxy/policy.json, without render or activation.
 # ai_ops_squid_source_only: false
 

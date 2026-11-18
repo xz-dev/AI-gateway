@@ -154,7 +154,7 @@ or `host_vars/<host>.yml` (per-host); inventory always wins over role defaults.
 | `ai_ops_component_command_timeout` | `600` | seconds per async Docker pull/recreate; controller timeout must be at least 1800 seconds |
 | `ai_ops_lock_transaction` / `ai_ops_lock_min_age_seconds` | `""` / `900` | exact owned transaction and minimum age for guarded stale-lock recovery; age cannot be below 900 |
 | `ai_ops_min_mem_mb` / `ai_ops_min_disk_mb` | `200` / `1024` | capacity gate thresholds |
-| `ai_ops_squid_image` | `ai-gateway-squid:6.13-2-deb13u3-r1` | pinned image for offline parse validation |
+| `ai_ops_squid_image` | `ai-gateway-squid:6.13-2-deb13u4-r1` | pinned image for offline parse validation |
 | `ai_ops_squid_source_only` | `false` | only resynchronize `data/egress-proxy/policy.json` |
 | `ai_ops_model_sync_approved_digest` | `""` | exact digest printed by the reviewed model-sync preview; required when the policy changes |
 | `ai_ops_model_sync_verify_retries` / `ai_ops_model_sync_verify_delay_seconds` | `30` / `2` | bounded wait for the recreated sidecar's immediate round |

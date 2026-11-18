@@ -1,6 +1,6 @@
 FROM docker.io/library/debian:13.7
 
-ARG SQUID_OPENSSL_VERSION=6.13-2+deb13u3
+ARG SQUID_OPENSSL_VERSION=6.13-2+deb13u4
 ARG UNBOUND_VERSION=1.26.2-0+deb13u1
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
