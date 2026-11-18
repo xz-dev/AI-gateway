@@ -198,5 +198,5 @@ The admin account test on account 10 succeeded for both new models and for `gpt-
 5. **cpa-model-sync** reports 5 failing channels (zakk, kimi-cn-api, senseaudio, anthropic-api, axis). No pre-change baseline was taken.
 6. **AISIX** warns that the heap-profile auto-dump directory is not writable (automatic heap dumps are off).
 7. **Deploy previews always show `config_diff: true` when `.env` changes**, because `.env` is part of the candidate hash set. Expected; worth a note in `docs/ansible-operations.md`.
-9. **Responses WebSocket 1006 on long agent sessions.** Two subagent workers whose model traffic uses this gateway's Responses WebSocket path died with `Responses WebSocket closed (1006)` (about 13:2x and 16:3x UTC). Probes and readbacks before and after were healthy. Correlate with front/bridge logs.
 8. **Manual-window scripts** for the tunnel pair, Postgres/Redis and the netns guards were round scratch. Consider tracking a generic version with a precheck mode.
+9. **Responses WebSocket 1006 on long agent sessions.** Two subagent workers whose model traffic uses this gateway's Responses WebSocket path died with `Responses WebSocket closed (1006)` (about 13:2x and 16:3x UTC). Probes and readbacks before and after were healthy. Correlate with front/bridge logs.
