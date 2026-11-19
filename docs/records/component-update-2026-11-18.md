@@ -183,6 +183,52 @@ The change went through the admin API. `PUT /accounts/:id` replaces every non-se
 
 The admin account test on account 10 succeeded for both new models and for `gpt-6.1-sol`. Zakk's path is Sub2API → CPA direct, using CPA's own routing for the bare IDs, not the AISIX aggregate.
 
+## Follow-up: Grok 4.7 access for Zakk (2026-11-19)
+
+The operator requested `grok-4.7` as the last fallback for the bot using Zakk's
+Sub2API group. The gateway-side change was limited to account 10 "CPA - Zakk":
+add `{"grok-4.7": "grok-4.7"}` to `credentials.model_mapping`.
+
+**Registration.** Before the write, CPA's native `/v1/models?client_version=1`
+and plain `/v1/models` both returned HTTP 200 and listed `grok-4.7` and
+`supergrok/grok-4.7`. Catalog presence was checked separately from inference.
+
+**Method and read-back (05:17 UTC).** Reused a copy of the earlier Zakk grant
+script, changing its additions to this one identity mapping. The dry run found
+9 existing entries and exactly one addition. Apply performed another fresh GET,
+required the reviewed mapping baseline, and sent the complete non-sensitive
+credentials through `PUT /api/v1/admin/accounts/10`. The single PUT succeeded;
+its GET read-back passed all assertions. Existing entries, the credentials key
+set and every other credentials value, all `extra` fields, groups `[20]`, WS
+mode `off`, status `active` and `schedulable` were unchanged. The script skips
+PUT if the requested mapping is already present.
+
+The read-back contained exactly 10 mappings:
+
+```json
+{
+  "devin/swe-2": "devin/swe-2",
+  "glm-5.3": "glm-5.3",
+  "glm-5.3-flash": "glm-5.3-flash",
+  "gpt-6-astra": "gpt-6-astra",
+  "gpt-6-luna": "gpt-6-luna",
+  "gpt-6.1-sol": "gpt-6.1-sol",
+  "gpt-6.1-terra": "gpt-6.1-terra",
+  "gpt-6.2-astra": "gpt-6.2-astra",
+  "gpt-6.2-sol": "gpt-6.2-sol",
+  "grok-4.7": "grok-4.7"
+}
+```
+
+**Acceptance (05:17 UTC).** One admin-authenticated
+`POST /api/v1/admin/accounts/10/test` for `model_id: "grok-4.7"`, with the prompt
+"Reply with the single word OK.", returned HTTP 200. Its SSE events were
+`test_start`, `content` and `test_complete`; the parsed `test_complete` event
+had `success: true`. This verifies the bare ID through Sub2API → CPA, not just
+its catalog registration; it does not exercise the bot's fallback order. No
+temporary API key was created. No other account, group, routing, CPA configuration
+or deployment was changed.
+
 ## Follow-ups (not done this round)
 
 1. **Compatibility lock: done the same day.**
