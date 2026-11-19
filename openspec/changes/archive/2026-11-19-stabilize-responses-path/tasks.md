@@ -3,6 +3,12 @@
 > is tracked separately. Do not execute or sync old topology tasks.
 > See [SUPERSEDED.md](SUPERSEDED.md).
 
+> **Administrative archive — 2026-11-19.** Superseded; owner 2026-11-19
+> approved archiving with `--skip-specs`. This does not complete the three
+> unchecked historical acceptance tasks. The inner `/rk` keeper, keeper-side
+> routing and last-known-good topology are retired; their deltas must not be
+> synchronized into the current main specs or redeployed.
+
 ## 0. Preconditions
 
 - [x] 0.1 Confirm the keeper streaming-memory core (PLAN/keeper-oom.md) is accepted and deployed, and record its keeper commit and image digest as this change's base. Verify that `docker inspect` of production keeper shows that digest and that the named cache volume is mounted.

@@ -5,6 +5,13 @@
 > Tasks 5.1–6.2 remain unchecked: the old candidate was not verified as the
 > final deployed release; later v0.2.19-based capacity releases do not prove those steps.
 
+> **Administrative archive — 2026-11-19.** Superseded; owner 2026-11-19
+> approved archiving with `--skip-specs`. The five unchecked rollout/closeout
+> tasks remain unverified for this historical candidate. Later capacity-fork
+> releases, including the 2026-11-18 v0.2.22 deployment, replaced its desired
+> runtime; they do not retroactively complete its acceptance or authorize an
+> old-candidate rollout.
+
 ## 1. Baseline and authorization
 
 - [x] 1.1 Pin upstream v0.2.19 to `dece26153621959ccd7635814f4b2d08304e681a` and inspect the complete migration tree; verify the old migration blobs are unchanged and the only new SQL files are 246/247/248.
