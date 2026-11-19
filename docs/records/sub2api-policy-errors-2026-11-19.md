@@ -2,9 +2,10 @@
 
 ## Status
 
-Candidate source, publication identity and the local compatibility ladder are verified.
-Gateway integration review and the guarded production rollout are pending. This
-record does not yet claim production activation or policy end-to-end acceptance.
+The reviewed policy image is deployed and healthy. Guarded activation completed
+on 2026-11-19 at 19:24:57 UTC; final read-only preview at 19:36:04 UTC reported
+zero drift and no activation required. Local mock policy acceptance and production
+zero-token observations remain separate; no real-policy production request was made.
 
 The owner approved this repair on 2026-11-19. Scope: preserve a finite known
 content-policy classification across Responses and Chat before account retry,
@@ -126,15 +127,78 @@ egresstest's copied Unbound configuration unreadable to its non-root process.
 The unchanged fixture passed under its normal umask 022; no product source,
 permission policy or acceptance assertion was changed. Both logs are retained.
 
+Gateway integration `2bdaa7f3a0658fd1210151dd714207e1ae37d0fa` received independent
+APPROVE-WITH-NOTES with no blockers. Its exact-SHA
+[Validate run 44586027740](https://github.com/xz-dev/AI-gateway/actions/runs/44586027740)
+passed model-sync, model-catalog, template and ansible on the first attempt, without
+a waiver. The reviewed commits were fast-forwarded and pushed to main before
+private rollout preparation.
+
 ## Guarded rollout, acceptance and rollback
 
-**Pending.** The intended window changes only the Sub2API image through the existing
-approved-digest component transaction. Business settings, APISIX opacity and all
-neighbouring service identities must remain unchanged. Readiness and zero-token
-observations are separate from local mock policy acceptance; no real policy content,
-new key or temporary production route is permitted.
+The fresh Sub2API-only preview passed (66 OK, 0 changed, 0 failed), with approval
+digest `e78ccf7427ef07a3606614f70883d79515b680db20aaaa7eeca4cc27460c97d1`.
+Its effective delta was only `e26d4b7d…` → `8f835a12…` for Sub2API: no environment
+changes, both Compose files byte-identical to live, 47 protected neighbours,
+healthy Docker readiness and no held writer lock. The controller's prior private
+environment was backed up with mode 0600; only `SUB2API_IMAGE` changed, with the
+previous pin retained as a rollback comment.
+
+Guarded apply ran 19:23:30–19:24:57 UTC (149 OK, 0 failed). The new Sub2API
+container started at `19:24:43.486364964Z`, runs the exact reviewed image and revision,
+is healthy and has restart count 0. Independent before/after snapshots confirm:
+
+- All 48 project containers remain running; only Sub2API's identity changed.
+- The other 47 containers' IDs, images, start times, state and health are unchanged.
+- Account 10's selected complete settings (credentials, extra, group IDs `[20]`,
+  status and schedulable) are identical, including its 10 model mappings and WS
+  mode `off`; all error-passthrough rules are unchanged.
+- The protected grouped snapshot is `.ai-ops-state/front-sub2api-nltyqaw1`, referenced
+  by `front-sub2api-last.json`. Existing guarded rollback requirements still apply;
+  the receipt is not permission to overwrite an intervening change.
+
+Before activation, three inbound-established-connection samples spaced 10 seconds
+apart each counted 1. The controller window was 87 seconds; it is **not** a measured
+outage duration. Actual user-visible interruption was not measured, and no
+zero-interruption claim is made. Only Sub2API was recreated; no dependency restarted.
+
+Production acceptance used an existing operator test credential and **GET only**:
+
+| UTC | Observation | Result |
+| --- | --- | --- |
+| 19:34:09 | Authorized `/v1/models` | HTTP 200, `application/json`, top-level `data/object`, 360 models |
+| 19:34:10 | Public `/healthz` | HTTP 404, no content type, empty/non-JSON shape, as required by unchanged public opacity |
+| 19:36:04 | Final guarded read-only preview | 66 OK, 0 changed/failed; `config_diff=false`, `activation_required=false`, healthy, released lock, all three controller/live hashes equal |
+
+No model-generation POST, real policy content, new production key or temporary
+route was used. The mock matrix proves policy behavior; the production observations
+prove image/readiness/configuration and bounded business-state invariants, not a
+real-provider policy end-to-end result. The deployment milestone was sent to the
+supervisor before closeout.
 
 Rollback target: `ghcr.io/xz-dev/sub2api@sha256:e26d4b7dbef57fb55ee4e635a7010edd319245ead53265d5b4563e2e31f68f39`
-(source `f249326936`). The source delta has no migrations; database rollback is
-not part of this image-only change. Actual activation time, interruption, protected
-snapshot, readback, zero-token outcomes and final drift remain to be recorded.
+(source `f249326936`). There are no source migration changes; database rollback is
+not part of this image-only change. The prior image and protected snapshot remain
+available. After any later intervention, a new reviewed guarded rollback plan and
+digest are required; do not blind-retry or overwrite unrelated state.
+
+## OpenSpec closeout
+
+Both added policy requirements and all seven scenarios were mapped to the reviewed
+implementation and retained mock/negative/protocol tests. The runtime image is the
+same reviewed revision. Production evidence remains deliberately limited to the
+GET-only and invariant checks above.
+
+The valid delta was synchronized normally into `client-visible-upstream-errors`:
+exactly two requirements added, with all previous main-spec content retained. The
+change was archived as `2026-11-20-preserve-sub2api-policy-errors` (the archive's
+local calendar date; the activation times above are UTC on November 19). No
+`--skip-specs` was used for this repair. All 21 remaining OpenSpec items validate
+strictly. The three unrelated open changes and the two earlier superseded archives
+are unchanged.
+
+The only unchecked item during archival was the administrative closeout task that
+includes archive/push itself. It is finalized in the archived ledger only after
+those commands have actually succeeded; no engineering acceptance was skipped to
+make the ledger green. Upstream submission is optional follow-up; no upstream PR
+was opened as part of this deployment.
