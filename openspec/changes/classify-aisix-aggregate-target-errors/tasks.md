@@ -8,10 +8,10 @@
 
 - [x] 2.1 Verify the fork push remote, submit the tested revision to its existing CI/publisher, and verify immutable image digest, platform and source revision at the registry.
 - [x] 2.2 Exercise the published image against the HTTP mocks and unchanged compatibility ladder. Generate the lock from the passing run; verify only the AISIX image selection changes and unrelated pins/limits are preserved.
-- [ ] 2.3 Obtain independent review of the exact source SHA, digest, lock and acceptance/mutant evidence. Record a passing gateway CI run before deployment.
+- [x] 2.3 Obtain independent review of the exact source SHA, digest, lock and acceptance/mutant evidence. Record a passing gateway CI run before deployment.
 
 ## 3. Deploy and close
 
-- [ ] 3.1 Capture the protected baseline and obtain a fresh AISIX-only guarded preview. Verify preserved routes/resources (`671fc1e6…`), old digest, 47 neighbours and rollback readiness before apply.
-- [ ] 3.2 Apply only that preview and verify image revision, readiness, zero-token status/readback, unchanged neighbours/configuration and clean follow-up preview. Record timing and failure/rollback disposition without private data.
+- [x] 3.1 Capture the protected baseline and obtain a fresh AISIX-only guarded preview. Verify preserved routes/resources (`671fc1e6…`), old digest, 47 neighbours and rollback readiness before apply.
+- [x] 3.2 Apply only that preview and verify image revision, readiness, zero-token status/readback, unchanged neighbours/configuration and clean follow-up preview. Record timing and failure/rollback disposition without private data.
 - [ ] 3.3 Validate strictly, archive the change after green CI, and verify the pushed archive and synced routing spec on the remote.

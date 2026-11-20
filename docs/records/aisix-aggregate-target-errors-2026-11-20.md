@@ -39,3 +39,17 @@ The unchanged local compatibility ladder at `5599333` passed all ten default run
 | Ladder manifest | `f6bf2877334441309d249a2e341c13f8239fc3ce5d77564d2dc12557d142b562` |
 | Ladder summary | `3019bd78301e6ab6fe21179373694f7a640733c0454b5b557583190a5efa552e` |
 | Generated compatibility lock | `a5c9fd242262109a5e1afd850256caf97b6d6967f1490f9b8dca6f3217d560ee` |
+
+## Review and guarded deployment
+
+Independent review approved gateway `c2ded795cedd9c9379d69edb285ca577085127aa` with the exact final source and digest above. The reviewer traced the nine shared-dispatch call sites, reran the focused source tests, and checked four additional published-image controls, including message-only errors staying 400. [Gateway Validate 44719035965](https://github.com/xz-dev/AI-gateway/actions/runs/44719035965) passed all four jobs at that revision. It was fast-forwarded to `main` without modifying the reviewed tree.
+
+The fresh guarded AISIX preview reported 66 OK, zero changed/failed, 47 protected neighbours, no held writer lock, and no effective environment changes. Only the selected image changed in the Compose render; only the `AISIX_IMAGE` line changed in the three private source files. The old image was present by digest. Three ten-second-spaced inbound samples counted 5, 4 and 4 established connections. These are not counts of active generations.
+
+- **Apply:** 11:14:54–11:16:30 UTC, 149 OK, 10 changed, zero failures. The replacement AISIX container started at 11:16:15 UTC. The 96-second controller duration is not measured downtime; the client interruption interval was not measured.
+- **Identity:** live AISIX runs the reviewed digest and full `b05be5f0…` revision, running with zero restarts and no OOM. Only AISIX changed identity: all 47 other services retained their container and image IDs, start times, state and health. Both Compose files and unmanaged AISIX configuration were byte-identical before and after.
+- **Zero-token acceptance:** `GET /status` returned 26 aggregates and 45 direct targets, with unchanged membership and target order. Live `resources.yaml` and its managed baseline both remained `671fc1e692350addbb1d865a32e5145f8a364be66f9825531c2708f98466947d`. No production generation request was made. The status-code regression was demonstrated against published images with mocks, not by breaking a live target.
+- **Final preview:** after adopting only `AISIX_IMAGE` into the controller's private `.env`, the 11:19:51 UTC preview reported 66 OK, zero changes/failures, ready, `config_diff=false`, `activation_required=false`, and the writer lock released.
+- **Rollback:** the previous `ghcr.io/xz-dev/aisix@sha256:9721ff105e2e568bcaa31c5e5ae4231ecce1c74df822619fd51f4e087e3c6108` and the guarded grouped snapshot remain available. Rollback requires a fresh AISIX rollback preview and its own approval digest. No rollback was needed.
+
+**Controller follow-up:** the normal private controller copy of `resources.yaml` still hashes to `acff6bf6…`, the exact pre-November-20 route set. The live file and its managed baseline were already correct. This image-only transaction did not read that stale copy as desired state or upload it. Reconcile the controller copy with approved live resources before any later managed **resources** rollout; the clean **component** preview covers the three Compose/environment files, not this separate managed file.
