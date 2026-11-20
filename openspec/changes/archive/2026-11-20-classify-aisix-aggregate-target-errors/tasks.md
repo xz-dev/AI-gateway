@@ -14,4 +14,4 @@
 
 - [x] 3.1 Capture the protected baseline and obtain a fresh AISIX-only guarded preview. Verify preserved routes/resources (`671fc1e6…`), old digest, 47 neighbours and rollback readiness before apply.
 - [x] 3.2 Apply only that preview and verify image revision, readiness, zero-token status/readback, unchanged neighbours/configuration and clean follow-up preview. Record timing and failure/rollback disposition without private data.
-- [ ] 3.3 Validate strictly, archive the change after green CI, and verify the pushed archive and synced routing spec on the remote.
+- [x] 3.3 Validate strictly, archive the change after green CI, and verify the pushed archive and synced routing spec on the remote. Verified archive `b47a3c8` on `origin/main`; all five scenarios synced and all 21 remaining OpenSpec items passed strict validation.
