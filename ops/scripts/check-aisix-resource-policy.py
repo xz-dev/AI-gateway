@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import io
+from http.client import HTTPConnection, HTTPException
 import json
 import sys
 import tempfile
@@ -84,6 +86,77 @@ def validate(resources):
     if stars != 1:
         raise PolicyError(f"AISIX resources must contain exactly one * fallback model, found {stars}")
     return routes
+
+
+def validate_fallback_capabilities(resources, native_ids):
+    models = {}
+    for model in resources["models"]:
+        name = model.get("display_name")
+        if not isinstance(name, str) or not name or name in models:
+            raise PolicyError("AISIX model names must be non-empty and unique")
+        models[name] = model
+    missing = []
+    for name, model in models.items():
+        if model.get("routing") is None:
+            continue
+        targets = model["routing"].get("targets")
+        if not isinstance(targets, list) or not targets:
+            raise PolicyError(f"routing model {name} must declare a non-empty targets list")
+        for target in targets[1:]:
+            target_name = target.get("model") if isinstance(target, dict) else None
+            if not isinstance(target_name, str) or not target_name:
+                raise PolicyError(f"routing model {name} has a malformed fallback target")
+            direct = models.get(target_name)
+            if not direct or "model_name" not in direct:
+                missing.append(f"{name} -> {target_name} (not a direct model)")
+            elif direct.get("provider_key") == "cpa-pool":
+                upstream = direct["model_name"]
+                if not isinstance(upstream, str) or upstream not in native_ids:
+                    missing.append(f"{name} -> {target_name} (missing native CPA model)")
+    if missing:
+        raise PolicyError("unverified fallback targets: " + "; ".join(missing))
+
+
+def load_native_ids(stream):
+    try:
+        document = json.load(stream)
+        # CPA serves the Codex shape when client_version is set.
+        if "models" in document:
+            rows, field = document["models"], "slug"
+        else:
+            rows, field = document["data"], "id"
+        if not isinstance(rows, list) or not rows:
+            raise ValueError
+        ids = {row[field] for row in rows}
+        if not all(isinstance(model_id, str) and model_id for model_id in ids):
+            raise ValueError
+        return ids
+    except (ValueError, AttributeError, KeyError, TypeError):
+        raise PolicyError("missing or invalid native CPA model inventory") from None
+
+
+def fetch_native_inventory(env_path):
+    # Use the native host binding, not AISIX or the supplemented catalog. Do not follow redirects.
+    try:
+        env = dict(
+            line.split("=", 1) for line in env_path.read_text().splitlines()
+            if "=" in line and not line.lstrip().startswith("#")
+        )
+        host = env.get("CPA_BIND_ADDRESS") or "127.0.0.1"
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
+        token = env.get("CPA_CLIENT_KEY") or env["CPA_API_KEY"]
+        conn = HTTPConnection(host, int(env.get("CPA_PORT") or "8317"), timeout=15)
+        try:
+            conn.request("GET", "/v1/models?client_version=1", headers={"Authorization": "Bearer " + token})
+            with conn.getresponse() as response:
+                if response.status != 200:
+                    raise PolicyError(f"native CPA inventory request returned HTTP {response.status}")
+                return {"data": [{"id": model_id} for model_id in sorted(load_native_ids(response))]}
+        finally:
+            conn.close()
+    except (OSError, HTTPException, ValueError, KeyError):
+        raise PolicyError("native CPA inventory request failed") from None
 
 
 def load_compose_json(path):
@@ -236,6 +309,26 @@ def self_test():
         else:
             raise PolicyError(f"invalid policy self-test was accepted: {statuses}")
 
+    candidate = json.loads(json.dumps(valid))
+    candidate["models"][0]["routing"]["targets"] = [{"model": "primary"}, {"model": "direct"}]
+    candidate["models"][1].update(model_name="provider/registered", provider_key="cpa-pool")
+    validate_fallback_capabilities(candidate, {"provider/registered"})
+    try:
+        validate_fallback_capabilities(candidate, {"direct"})
+    except PolicyError as error:
+        if "route -> direct" not in str(error):
+            raise
+    else:
+        raise PolicyError("model display name incorrectly passed native validation")
+    if load_native_ids(io.StringIO('{"models":[{"slug":"provider/registered"}]}')) != {"provider/registered"}:
+        raise PolicyError("native Codex model inventory was not recognized")
+    for payload in ("", "{}", '{"data":[]}', '{"data":[{"id":null}]}'):
+        try:
+            load_native_ids(io.StringIO(payload))
+        except PolicyError:
+            continue
+        raise PolicyError("invalid native inventory passed validation")
+
     reordered = json.loads(json.dumps(valid))
     reordered["models"][0]["routing"]["fallback_on_statuses"] = [404, 403, 402, 401, 400]
     validate(reordered)
@@ -290,14 +383,21 @@ def main():
     group.add_argument("--compose-json", type=Path)
     group.add_argument("--yaml", type=Path)
     group.add_argument("--self-test", action="store_true")
+    group.add_argument("--native-cpa-env", type=Path)
+    parser.add_argument("--cpa-models-stdin", action="store_true")
     args = parser.parse_args()
     try:
+        if args.native_cpa_env:
+            print(json.dumps(fetch_native_inventory(args.native_cpa_env)))
+            return
         if args.self_test:
             self_test()
             print("aisix_resource_policy_self_test=passed")
             return
         resources = load_compose_json(args.compose_json) if args.compose_json else load_yaml(args.yaml)
         routes = validate(resources)
+        if args.cpa_models_stdin:
+            validate_fallback_capabilities(resources, load_native_ids(sys.stdin))
         print(
             "aisix_resource_policy=valid "
             f"routes={routes} statuses={','.join(map(str, REQUIRED_FALLBACK_STATUSES))}"

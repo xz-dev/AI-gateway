@@ -18,6 +18,20 @@
   check_mode: false
   tags: [always]
 
+- name: Read native CPA fallback capabilities (GET only)
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "-"
+      - --native-cpa-env
+      - "{{ ai_ops_deploy_root }}/.env"
+    stdin: "{{ lookup('ansible.builtin.file', ai_ops_scripts_dir + '/check-aisix-resource-policy.py') }}"
+  register: __ai_ops_aisix_native
+  changed_when: false
+  check_mode: false
+  no_log: true
+  tags: [always]
+
 - name: Validate fallback-status contract
   ansible.builtin.command:
     argv:
@@ -25,9 +39,23 @@
       - "{{ ai_ops_scripts_dir }}/check-aisix-resource-policy.py"
       - --yaml
       - "{{ ai_ops_config_dir }}/services/routing/aisix/resources.yaml"
+      - --cpa-models-stdin
+    stdin: "{{ __ai_ops_aisix_native.stdout }}"
   delegate_to: localhost
+  register: __ai_ops_aisix_policy
   changed_when: false
+  failed_when: false
   check_mode: false
+  no_log: true
+  tags: [always]
+
+- name: Require verified AISIX fallback capabilities
+  ansible.builtin.assert:
+    that: __ai_ops_aisix_policy.rc | default(1) == 0
+    fail_msg: >-
+      {{ (__ai_ops_aisix_policy.stderr_lines | default([]) |
+          select('match', '^AISIX resource policy validation failed: ') | list | first)
+         | default('AISIX fallback validation did not complete') }}
   tags: [always]
 
 - name: Reject unverified literal retries=-1
