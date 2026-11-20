@@ -6,6 +6,7 @@ On November 20, 2026, Codex overload made AISIX select `xl/gpt-6.2-sol`. CPA did
 
 - Audit every AISIX fallback against CPA's native model inventory and corroborate missing entries against registration configuration where needed.
 - Remove unsupported fallback references, including all references to `xl/gpt-6.2-sol`, and delete that direct declaration. Use an exact registered Congee target only if the same AISIX configuration already uses Congee as a sibling-model fallback. Otherwise preserve remaining targets and normalize their fallback budget.
+- Apply the owner's November 20, 2026 decision: remove all XL GPT and Grok declarations, including Luna. Rename AISIX's Fable 5.1 direct model, public aggregate, and target reference to Fable 5.2 after checking CPA registration and recent usage. Do not add CPA registrations or re-enable invalid fallbacks.
 - Extend the AISIX deployment validator to check every CPA-backed fallback against a fresh native capability snapshot before deployment. Test primary overload and cooling with the old invalid fallback present only in the mock upstream.
 
 ## Capabilities

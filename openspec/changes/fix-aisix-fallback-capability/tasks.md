@@ -1,7 +1,7 @@
 ## 1. Audit and configuration
 
 - [x] 1.1 Audit complete: 26 aggregates (not 25), 573 native IDs, eight missing secondary targets and two out-of-scope primary targets. No Congee sibling fallback precedent.
-- [ ] 1.2 Remove unsupported fallback references and the `xl/gpt-6.2-sol` declaration; preserve other declarations and normalize fallback budgets.
+- [ ] 1.2 Remove unsupported fallback references and all non-Claude XL direct declarations, including Luna. Migrate both Fable 5.1 declarations and their reference to 5.2 per the owner's 2026-11-20 decision. Preserve other declarations and normalize fallback budgets.
 
 ## 2. Validation and local acceptance
 
@@ -12,6 +12,6 @@
 ## 3. Deployment and closeout
 
 - [ ] 3.1 Review the guarded private diff and rollback snapshot; activate only AISIX resources and notify the supervisor.
-- [ ] 3.2 Verify effective resources, unaffected neighbours and zero drift with zero-token readbacks.
+- [ ] 3.2 Verify effective resources, only Claude in the explicit XL inventory, Fable 5.2 routing, native registration for all secondary targets, unaffected neighbours and zero drift with zero-token readbacks.
 - [ ] 3.3 Record the separate status-classification proposal for owner decision without implementing it.
 - [ ] 3.4 Synchronize, archive, validate all OpenSpec items strictly, push scoped commits and report completion.

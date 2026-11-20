@@ -4,7 +4,7 @@ AISIX has a private `resources.yaml`. Each aggregate names direct model entries 
 
 ## Goals / Non-Goals
 
-- Delete unsupported alternate references and the `xl/gpt-6.2-sol` direct entry. Preserve primary targets, remaining alternate order, unrelated declarations and routing policies.
+- Delete unsupported alternate references and the non-Claude XL direct entries. Migrate the Fable aggregate and its only target to 5.2. Preserve other primary targets, remaining alternate order, unrelated declarations and routing policies.
 - Reuse the deployment-time policy validator. No change to gateway error classification, CPA registrations, provider credentials, model catalog or AISIX runtime code.
 
 ## Decisions
@@ -17,5 +17,7 @@ AISIX has a private `resources.yaml`. Each aggregate names direct model entries 
 ## Risks / Trade-offs
 
 - A native list can omit a registered but temporarily unavailable model. A failed capability gate blocks an activation but does not modify live routes.
-- The operator explicitly requested deleting the direct `xl/gpt-6.2-sol` declaration, not just its fallback references. An explicit request for that ID loses the exact AISIX match and may receive an unknown-model 404 where catalog admission applies. The existing `*` route may instead forward it to CPA, so this change does not promise a uniform end-to-end status for the removed ID.
+- Owner decision (2026-11-20): delete `xl/gpt-6-luna` along with the other non-Claude XL declarations; rename `xl/claude-fable-5-1` and the bare `claude-fable-5-1` aggregate to 5.2. The direct row's display and upstream names and the aggregate's sole target are the only affected fields. CPA registers `xl/claude-fable-5-2`.
+- From November 13 at 04:04 UTC to November 20 at 04:04 UTC, Sub2API reported zero usage rows for each old ID. AISIX retained access logs also show zero requests for either ID since November 18 at 12:54 UTC; earlier non-Sub2API HTTP access is not covered.
+- Clients pinned to 5.1 lose the exact AISIX route and may fail or take a different path. CPA still registers 5.1 via other channels; neither its inventory nor AISIX's wildcard changes. A supplemented catalog or the wildcard can still expose or forward CPA-native 5.1, so the change does not promise a universal 404.
 - A single-target aggregate deliberately has no internal failover. The bot can fail over on 502 or 503. The deployed AISIX can still try its only candidate while it is cooling. If a correctly registered fallback later changes capability, the runtime can still surface a 400 until the separate classification problem is addressed.

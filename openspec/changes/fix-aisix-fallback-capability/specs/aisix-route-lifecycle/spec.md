@@ -8,9 +8,13 @@ An AISIX resource rollout MUST check every explicit secondary CPA-backed target 
 - **WHEN** a candidate declares a CPA-backed secondary target absent from the native inventory
 - **THEN** validation rejects the candidate and identifies the aggregate and missing target
 
-#### Scenario: Invalid XL target is removed
+#### Scenario: XL inventory is limited to Claude
 - **WHEN** AISIX loads the corrected resources
-- **THEN** neither a direct declaration nor a fallback reference names `xl/gpt-6.2-sol`, and the public `gpt-6.2-sol` retains its Codex primary
+- **THEN** its only explicit XL declarations are Claude models, neither XL GPT nor XL Grok remains a route target, and the public `gpt-6.2-sol` retains its Codex primary
+
+#### Scenario: Fable 5.2 replaces the explicit AISIX 5.1 route
+- **WHEN** an operator reads back the effective AISIX inventory and routing
+- **THEN** bare `claude-fable-5-2` targets the registered `xl/claude-fable-5-2` and no explicit Fable 5.1 declaration or target remains in AISIX
 
 #### Scenario: Silent fallback removal does not mask overload
 - **WHEN** the Codex primary returns 503 or is already cooling, and the corrected aggregate has no alternate

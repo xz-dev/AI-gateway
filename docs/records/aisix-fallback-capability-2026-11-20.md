@@ -17,7 +17,9 @@ Compared 26 AISIX aggregates (correcting the preliminary count of 25) with 573 I
 | `gpt-image-2.5-flare` | `xl/gpt-image-2.5-flare` |
 | `gpt-image-2.5-sunburst` | `xl/gpt-image-2.5-sunburst` |
 
-The operator explicitly requested removing the `xl/gpt-6.2-sol` direct declaration as well. The wildcard remains unchanged; losing an exact declaration does not guarantee that all callers get 404. No sibling used Congee as a fallback, so no Congee entry was added. Two missing primary targets (`zcode/glm-5.2` and `xl/claude-fable-5-1`) are findings only. No other declaration was altered.
+The owner's November 20 decision removes eight non-Claude XL direct declarations: `xl/gpt-6.2-sol`, `xl/gpt-6-luna`, `xl/gpt-6.1-sol`, `xl/gpt-6.1-terra`, `xl/gpt-6.2-astra`, `xl/gpt-image-2.5-flare`, `xl/gpt-image-2.5-sunburst`, and `xl/grok-4.7`. The bare Luna aggregate keeps its Codex primary. No Congee entry was added because no sibling uses Congee as a fallback. The missing primary `zcode/glm-5.2` remains a finding only.
+
+The same decision migrates `xl/claude-fable-5-1` and its sole caller, the bare `claude-fable-5-1` aggregate, to 5.2. Native CPA listed `xl/claude-fable-5-2` but not XL Fable 5.1. The seven-day Sub2API usage audit found zero counts for both old IDs, as did AISIX's retained logs since November 18 at 12:54 UTC. This does not cover older direct access outside Sub2API. Requests pinned to the old name may fail or take a different route; the unchanged CPA native catalog still includes 5.1 from other channels.
 
 ## Local acceptance
 
