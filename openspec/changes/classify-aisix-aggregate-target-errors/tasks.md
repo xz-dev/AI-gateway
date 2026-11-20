@@ -6,8 +6,8 @@
 
 ## 2. Publish and admit the image
 
-- [ ] 2.1 Verify the fork push remote, submit the tested revision to its existing CI/publisher, and verify immutable image digest, platform and source revision at the registry.
-- [ ] 2.2 Exercise the published image against the HTTP mocks and unchanged compatibility ladder. Generate the lock from the passing run; verify only the AISIX image selection changes and unrelated pins/limits are preserved.
+- [x] 2.1 Verify the fork push remote, submit the tested revision to its existing CI/publisher, and verify immutable image digest, platform and source revision at the registry.
+- [x] 2.2 Exercise the published image against the HTTP mocks and unchanged compatibility ladder. Generate the lock from the passing run; verify only the AISIX image selection changes and unrelated pins/limits are preserved.
 - [ ] 2.3 Obtain independent review of the exact source SHA, digest, lock and acceptance/mutant evidence. Record a passing gateway CI run before deployment.
 
 ## 3. Deploy and close

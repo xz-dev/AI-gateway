@@ -1,8 +1,8 @@
 {
   "schema": "ai-gateway/compatibility-lock/v1",
-  "generated": "2026-11-19T17:33:49Z",
+  "generated": "2026-11-20T10:05:31Z",
   "source": {
-    "run_id": "20261119T173020Z-2408968",
+    "run_id": "20261120T100145Z-2594413",
     "verdict": "pass",
     "rungs": [
       "http-image-1m",
@@ -17,24 +17,24 @@
       "http-tiny-16m"
     ],
     "nightly": false,
-    "manifest_sha256": "d089f32b2d5c89bd626bdece2bc89960cad82bc39e7b4b790a705d693575601d",
-    "summary_sha256": "29afcf72de4a20edc580809b655327e1c078ea2bd7e8c68836861b0303637f89",
-    "harness_git": "0b5b5d3ce10776e903c7e0596d35afd39a728252",
-    "method": "Local isolated unchanged ladder (clean clone at harness_git), project-scoped no-swap runtime wrapper reused byte-identical from 2026-11-18; images = tracked lock with only Sub2API changed to policy-error candidate ede9e5ff (registry-verified linux/amd64, version ci-ede9e5ff12); candidate only, not promoted",
+    "manifest_sha256": "f6bf2877334441309d249a2e341c13f8239fc3ce5d77564d2dc12557d142b562",
+    "summary_sha256": "3019bd78301e6ab6fe21179373694f7a640733c0454b5b557583190a5efa552e",
+    "harness_git": "559933386f5bee064d7daa46827aa678a8c63cfc",
+    "method": "Local isolated unchanged ladder (clean clone at harness_git), project-scoped no-swap runtime wrapper reused byte-identical from 2026-11-18; images = tracked lock with only AISIX changed to aggregate-target-error candidate b05be5f0 (registry-verified linux/amd64, version ci-b05be5f044); candidate only, not promoted",
     "runtime_wrapper_sha256": "c06422093799a87cc0e37193bf62439addadc78c3c7a56172d1e9f212eaab19f"
   },
   "images": {
     "keeper": "ghcr.io/xz-dev/openai-api-cache-keeper@sha256:ef4dc093e218bed00b5deabff6951e7781f6ce5a57f0c34ee021844ed2d6798b",
     "bridge": "ghcr.io/xz-dev/responses-ws-sse-bridge@sha256:dede337bbe10fc3c79f0c7a7e23d0bbf6f4adf28ba22610fbe0fdefa75ccd411",
     "sub2api": "ghcr.io/xz-dev/sub2api@sha256:8f835a12151d4af9d88db206b8a5b84f0c7aa6a6c582f54bd16d8bcf2cba11d3",
-    "aisix": "ghcr.io/xz-dev/aisix@sha256:9721ff105e2e568bcaa31c5e5ae4231ecce1c74df822619fd51f4e087e3c6108",
+    "aisix": "ghcr.io/xz-dev/aisix@sha256:f064f7a8b7bfd756c0379765cda3f6a88c7e6f9f86b0b0d098498b1634e309ce",
     "cpa": "ghcr.io/xz-dev/cli-proxy-api@sha256:c938d0b716db235c0b182104758d45a046bcf592339c31eafc1a9f1b1c7484fd",
     "postgres": "docker.io/library/postgres@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015",
     "redis": "docker.io/library/redis@sha256:7958cfbb9d152f87dadfbc89f1b0b15938f0b81ff8982feb327476f4911935c3",
     "mock_base": "docker.io/library/alpine@sha256:3f4d6b32e26703c6082839234f43769d5046b3ac7c910033911d1e71d8cd630a"
   },
   "config_sha256": {
-    "prod:compose.yaml": "ebd7fca944c62d7f02ecd735de7c8d5c6f7f04d249df488d2d82694649eba67e",
+    "prod:compose.yaml": "e5d20d1cccb2629e8fa8896642443cec8312ff59a9ddd7bb5dd7fc3d1a4c2b5c",
     "prod:firewall/config.yaml": "fc2f0c1cc4b833b628855767f426e8d1b33b75506e3240933f4731c2bf52fe82",
     "prod:firewall/apisix.yaml": "564e63e84f8355ac390cbf8caf7e4c843d27bdc0b375626fef06cd0ddcf6c59e",
     "prod:egress/policy.example.json": "96a1d36d946fd9d2b8a168d0f9446e503294297e8aa17e4ceb82ebabb349a0cc",
@@ -71,11 +71,11 @@
   },
   "cap_bytes": 268435456,
   "peaks_bytes": {
-    "keeper": 402653184,
-    "bridge": 21848064,
-    "sub2api": 98242560,
-    "aisix": 435953664,
-    "cpa": 402071552
+    "keeper": 324968448,
+    "bridge": 22855680,
+    "sub2api": 91332608,
+    "aisix": 412733440,
+    "cpa": 405544960
   },
   "mem_limits_bytes": {
     "keeper": 402653184,

@@ -945,7 +945,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/aisix@sha256:9721ff105e2e568bcaa31c5e5ae4231ecce1c74df822619fd51f4e087e3c6108}
+    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/aisix@sha256:f064f7a8b7bfd756c0379765cda3f6a88c7e6f9f86b0b0d098498b1634e309ce}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped

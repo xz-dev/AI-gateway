@@ -24,4 +24,18 @@ The [first publish run](https://github.com/xz-dev/aisix/actions/runs/44705128706
 
 [Final source `b05be5f0`](https://github.com/xz-dev/aisix/commit/b05be5f044fffccacf36226c328d824a695da436) applies the same aggregate-only classifier at both exits, after attempt accounting. The completions tests assert 502 after exhaustion and 502 with **no** backup call when failover is disallowed. All 16 focused tests passed; the full proxy suite passed 1,725 library and 25 integration tests. These are source-level checks.
 
-On 2026-11-20 the owner authorized unsigned commits for this change in the operator pane. The final source and [publisher commit](https://github.com/xz-dev/aisix/commit/c6cc9e489181909cd498b5618f7fa5d4f47c8289) used per-command `--no-gpg-sign`; signing configuration was not changed. The publisher tree differs from the final source only in `.github/workflows/ghcr-ci.yml`. [Final image CI](https://github.com/xz-dev/aisix/actions/runs/44712584914) was triggered. The first image's digest and acceptance results are not evidence for this final candidate.
+On 2026-11-20 the owner authorized unsigned commits for this change in the operator pane. The final source and [publisher commit](https://github.com/xz-dev/aisix/commit/c6cc9e489181909cd498b5618f7fa5d4f47c8289) used per-command `--no-gpg-sign`; signing configuration was not changed. The publisher tree differs from the final source only in `.github/workflows/ghcr-ci.yml`. [Final image CI](https://github.com/xz-dev/aisix/actions/runs/44712584914) passed. The first image's digest and acceptance results are not evidence for this final candidate.
+
+## Final image acceptance and compatibility lock
+
+`ghcr.io/xz-dev/aisix@sha256:f064f7a8b7bfd756c0379765cda3f6a88c7e6f9f86b0b0d098498b1634e309ce` is the single linux/amd64 OCI manifest reported by the publisher, the registry tag `ci-b05be5f044` and the manifest byte hash. Its OCI revision is `b05be5f044fffccacf36226c328d824a695da436`; the binary reports `dev+sha-b05be5f`.
+
+Local mock requests addressed this image by digest. The two Responses fallback cases returned 502; the cooling primary was not called. Both old images returned 400 on the `/v1/completions` exhaustion case; the final image returned 502 without naming the internal model. All three made exactly two calls in order. Public lookup, wildcard, direct-model, policy 400/403, ordinary 400 and healthy fallback controls retained their status and error fields or success. Native all-unavailable 503 and its retry hint were tested at source level, not re-created in the image harness. No production inference or end-to-end Sub2API failure was exercised.
+
+The unchanged local compatibility ladder at `5599333` passed all ten default rungs in run `20261120T100145Z-2594413`. All eight fixture containers had zero restarts; every rung had `offlist=0`. The seven bounded services had zero cgroup swap before tests, using the previously verified project-scoped wrapper. The generated lock changes only AISIX among eight image pins and preserves the existing caps, resource limits and allocation factors. Its manifest records the harness-time Compose hash, not a hash of the later pin promotion. The fixture was removed; the nightly lock was not changed.
+
+| Artifact | SHA-256 |
+|---|---|
+| Ladder manifest | `f6bf2877334441309d249a2e341c13f8239fc3ce5d77564d2dc12557d142b562` |
+| Ladder summary | `3019bd78301e6ab6fe21179373694f7a640733c0454b5b557583190a5efa552e` |
+| Generated compatibility lock | `a5c9fd242262109a5e1afd850256caf97b6d6967f1490f9b8dca6f3217d560ee` |
