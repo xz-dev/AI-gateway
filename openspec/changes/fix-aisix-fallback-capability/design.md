@@ -17,4 +17,5 @@ AISIX has a private `resources.yaml`. Each aggregate names direct model entries 
 ## Risks / Trade-offs
 
 - A native list can omit a registered but temporarily unavailable model. A failed capability gate blocks an activation but does not modify live routes.
+- The operator explicitly requested deleting the direct `xl/gpt-6.2-sol` declaration, not just its fallback references. An explicit request for that ID loses the exact AISIX match and may receive an unknown-model 404 where catalog admission applies. The existing `*` route may instead forward it to CPA, so this change does not promise a uniform end-to-end status for the removed ID.
 - A single-target aggregate deliberately has no internal failover. The bot can fail over on 503. If a correctly registered fallback later changes capability, the runtime can still surface a 400 until the separate classification problem is addressed.
