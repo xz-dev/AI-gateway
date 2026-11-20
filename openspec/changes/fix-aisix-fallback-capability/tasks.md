@@ -1,12 +1,12 @@
 ## 1. Audit and configuration
 
-- [ ] 1.1 Compare all explicit fallback targets with native CPA capability and corroborate missing IDs. List all mismatches and record the removal decisions.
+- [x] 1.1 Audit complete: 26 aggregates (not 25), 573 native IDs, eight missing secondary targets and two out-of-scope primary targets. No Congee sibling fallback precedent.
 - [ ] 1.2 Remove unsupported fallback references and the `xl/gpt-6.2-sol` declaration; preserve other declarations and normalize fallback budgets.
 
 ## 2. Validation and local acceptance
 
 - [ ] 2.1 Gate preview and apply on fresh native fallback capability evidence through the existing AISIX validator. Test missing and valid targets and unavailable evidence.
-- [ ] 2.2 Replay primary 503 and primary cooling against an isolated mock that returns 400 for the retired fallback. Verify the corrected config returns 503 without calling XL.
+- [ ] 2.2 Replay primary 503 and primary cooling against an isolated mock that returns 400 for the retired fallback. Verify the corrected config returns a failover-eligible 502 or 503, never 400, without calling XL; verify Sub2API still returns 5xx to the client.
 - [ ] 2.3 Complete independent review and required CI.
 
 ## 3. Deployment and closeout

@@ -14,4 +14,4 @@ An AISIX resource rollout MUST check every explicit secondary CPA-backed target 
 
 #### Scenario: Silent fallback removal does not mask overload
 - **WHEN** the Codex primary returns 503 or is already cooling, and the corrected aggregate has no alternate
-- **THEN** the request ends in 503 and never reaches the removed target, even if the mock upstream would return `model_not_found` with HTTP 400 for it
+- **THEN** the client receives a failover-eligible 5xx (502 or 503), never 400, and AISIX does not call the removed target even if the mock upstream would return `model_not_found` with HTTP 400 for it
