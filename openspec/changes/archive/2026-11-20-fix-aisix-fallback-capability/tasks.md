@@ -14,4 +14,4 @@
 - [x] 3.1 Review the guarded private diff and rollback snapshot; activate only AISIX resources and notify the supervisor.
 - [x] 3.2 Verify effective resources, only Claude in the explicit XL inventory, Fable 5.2 routing, native registration for all secondary targets, unaffected neighbours and zero drift with zero-token readbacks.
 - [x] 3.3 Record the separate status-classification proposal for owner decision without implementing it.
-- [ ] 3.4 Synchronize, archive, validate all OpenSpec items strictly, push scoped commits and report completion.
+- [x] 3.4 Synchronize, archive, validate all OpenSpec items strictly, push scoped commits and report completion. Archive `e86bb5e` was verified on `origin/main` after all 21 remaining items passed strict validation.
