@@ -761,6 +761,8 @@ fi
 python3 ops/scripts/tests/test-standard-cache-topology.py
 python3 ops/scripts/tests/test-component-deploy.py
 python3 ops/scripts/tests/test-keeper-observe.py
+python3 ops/scripts/tests/test-catalog-transfer-observer.py
+python3 ops/scripts/tests/test-catalog-transfer-window.py
 python3 ops/scripts/tests/test-migrate-services-layout.py
 
 # Build local components and parse their native configuration. These are syntax

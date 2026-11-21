@@ -1,0 +1,22 @@
+# Temporary front catalog transfer observation
+
+This procedure is for [the Codex catalog transfer incident](codex-catalog-transfer-2026-11-20.md). It is not a fix. Do not send probes, change `send_timeout`, raise the ordinary log level or collect raw logs. Do not use the window for arbitrary routes.
+
+## Preflight
+
+- Require green CI and review of the exact commit. Reserve the existing front-component transaction lock for the window; keep one writer across scheduling, activation and cleanup. Do not begin if another deployment or cron editor is active.
+- Use a protected, uniquely named host directory under the deployment’s `.ai-ops-state/` and an independent protected controller copy. Copy `catalog-transfer-window.py` and `catalog-transfer-observer.py` from the reviewed commit. Use the host's supported `python3` and active root crond; do not substitute a detached SSH process.
+- Snapshot all Compose container IDs, images and start times. Record APISIX health from the existing Docker healthcheck, log rotation and free space. Pin the running front and tunnel IDs. Record container restart behaviour and how to reach the host if the controller goes away.
+- Run `python3 catalog-transfer-window.py "$state" preview "$front_id" "$tunnel_id" 172800`. Copy the saved `baseline` to protected controller storage without printing it. Review the baseline/candidate difference privately: only two `error_log` declarations added in `http {}`, retaining regular `warn` and adding one private Unix socket. `send_timeout 10s`, Compose YAML, mounted files and adjacent components must not change. Expire the preview after 15 minutes; regenerate before arming if necessary.
+
+## Arm and verify
+
+1. Run `python3 catalog-transfer-window.py "$state" cron-line` on the host. Save a protected backup of the existing root crontab; privately compare a fresh copy to the backup and install a candidate with exactly this one extra line. Read back and compare all other lines. Do not overwrite unrelated changes. Let one scheduled invocation run **before** creating the `arm` marker; confirm the job reached the prepared state by the host-owned `tick.lock` file. If the callback did not run, do not arm.
+2. Create `"$state/arm"` and observe status. Verify the exact two destinations, `send_timeout 10s`, the fresh nginx worker and existing health status. Check that only expected nginx workers changed; container IDs, images and start times must match the preflight. No restart is part of this operation. Record the UTC start and hard deadline from the receipt. The deadline is armed before the reload so the observation cannot overrun 48 hours from activation.
+3. `python3 catalog-transfer-window.py "$state" status` reports progress without printing configuration. The job checks for an existing catalog origin EOF independently of the native timeout sink. A timeout counts against a specific front request only when its request ID matches the front 200 catalog access record; a tunnel match by path/time alone remains inconclusive. A busy or restarted log stream may miss a signal. Do not treat a quiet window as proof.
+
+## Stop and verify
+
+- To close on a confirmed natural client failure or operator stop, create `"$state/stop"`. The supervisor also closes on a matching front timeout, a natural catalog origin EOF, receiver failure or the deadline. After a supervisor loss, the next cron tick restores rather than starting again. A draining worker is not a completed rollback.
+- Verify `phase=closed`, `scheduler_cleanup=verified`, baseline config SHA, the original warning log and `10s` timeout, no additional socket or old observation workers, and the existing APISIX health plus unchanged unrelated container identities. An ordinary host/container restart is accepted only when the regenerated config matches the saved baseline. On `recovery-required`, unknown state or failed readback, keep the writer lock, escalate and do not overwrite a third configuration or improvise a restart.
+- Record only bounded, sanitized findings and elapsed time; retain protected rollback artifacts according to the change record. Verify the cron entry was removed and neighbors are unchanged before releasing the operator lock. Close the OpenSpec change only after restoration is verified and the outcome is recorded. Any subsequent timeout mitigation needs its own scoped change.
