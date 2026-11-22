@@ -6,7 +6,7 @@ Two public Codex catalog responses ended after HTTP 200. Existing front and tunn
 
 - Observe natural requests for at most 48 hours. Route front nginx HTTP diagnostics to a temporary private Unix datagram receiver. Keep the ordinary Docker log at `warn`.
 - Save only a timestamp, a fixed catalog event class, and a validated front request ID. Use existing access and tunnel records to investigate failures independently of the receiver.
-- Prepare automatic rollback before activation; stop at the first confirmed failed catalog transfer or the deadline. Report an inconclusive result if the available evidence cannot identify the closer.
+- Prepare automatic rollback before activation. Stop recording and restore normal logging at the first confirmed failed transfer or deadline. If a retiring worker is still serving an existing connection, keep a discard-only endpoint until it exits naturally; report incomplete teardown after 15 minutes without interrupting connections.
 
 ## Capabilities
 

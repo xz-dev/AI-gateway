@@ -18,4 +18,12 @@ A temporary observation of versioned catalog transfers SHALL preserve the normal
 
 #### Scenario: Failure, deadline or observer fault closes the window
 - **WHEN** the first confirmed natural failure occurs, 48 hours from verified activation elapse, or safe collection cannot continue
-- **THEN** the host restores and verifies the baseline, removes the extra destination and receiver, and records coverage gaps and unrelated-component identities without requiring a live controller session.
+- **THEN** the host stops persisting observations, restores and verifies the baseline for new workers, and records coverage gaps and unrelated-component identities without requiring a live controller session.
+
+#### Scenario: An old worker still serves a connection after rollback reload
+- **WHEN** an instrumented worker has not exited after normal settings are restored
+- **THEN** the sink discards all messages and stays available until natural exit, without interrupting a connection; after 15 minutes the host reports incomplete teardown, and marks cleanup complete only after verifying the worker and receiver have exited and removing the temporary endpoint and scheduler.
+
+#### Scenario: The supervisor is interrupted while starting a receiver
+- **WHEN** supervisor startup fails before recording durable ownership of the receiver
+- **THEN** the receiver cannot bind or persist observations and exits; cleanup never treats socket deletion alone as proof that the receiver exited.
