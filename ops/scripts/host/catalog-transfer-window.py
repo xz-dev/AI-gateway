@@ -8,10 +8,12 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import signal
 import stat
 import subprocess
 import sys
+import syslog
 import tempfile
 import time
 
@@ -20,6 +22,7 @@ CONFIG = PREFIX + 'conf/nginx.conf'
 RECEIVER = Path(__file__).with_name('catalog-transfer-observer.py')
 MAX_WINDOW = 48 * 60 * 60
 OBSERVE_INTERVAL = 10
+DRAIN_OVERDUE = 15 * 60
 NGINX = ['nginx', '-p', PREFIX]
 HTTP = b'\nhttp {\n'
 BASE_LOG = b'error_log logs/error.log warn;'
@@ -97,7 +100,18 @@ def digest(body):
     return hashlib.sha256(body).hexdigest()
 
 
+def require_pidfd():
+    if not (hasattr(os, 'pidfd_open') and hasattr(signal, 'pidfd_send_signal')):
+        raise RuntimeError('safe receiver process handles are unavailable')
+    fd = os.pidfd_open(os.getpid())
+    try:
+        signal.pidfd_send_signal(fd, 0)
+    finally:
+        os.close(fd)
+
+
 def preview(state, cid, tunnel, seconds):
+    require_pidfd()
     if not (ID.fullmatch(cid) and ID.fullmatch(tunnel) and 1 <= seconds <= MAX_WINDOW):
         raise ValueError('invalid front, tunnel or observation limit')
     front = identity(cid)
@@ -196,7 +210,7 @@ def recover(state, info, reason):
             stage(state, info, 'closed', outcome='restored', reason=reason)
             return
         time.sleep(0.25)
-    stage(state, info, 'draining', reason=reason, old_workers=sorted(instrumented))
+    stage(state, info, 'draining', reason=reason, old_workers=sorted(instrumented), drain_started=time.time())
 
 
 def docker_logs(cid, since):
@@ -233,17 +247,48 @@ def process_start(pid):
     return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
 
 
+def receiver_pidfd(info):
+    if not info.get('receiver'):
+        return None
+    pid, born = info['receiver']
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return None
+    try:
+        command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+        if process_start(pid) == born:
+            monitor = select.poll()
+            monitor.register(fd, select.POLLIN)
+            if monitor.poll(0):
+                os.close(fd)
+                return None
+            if os.fsencode(RECEIVER) in command and os.fsencode(socket_directory(info)) in command:
+                return fd
+            raise RuntimeError('recorded receiver process no longer has expected arguments')
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+    except BaseException:
+        os.close(fd)
+        raise
+    os.close(fd)
+    return None
+
+
 def retire_orphan(info):
-    receiver = info.get('receiver')
-    if receiver:
-        pid, born = receiver
+    fd = receiver_pidfd(info)
+    if fd is not None:
         try:
-            command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-            if (process_start(pid) == born and os.fsencode(RECEIVER) in command
-                    and os.fsencode(socket_directory(info)) in command):
-                os.kill(pid, signal.SIGTERM)
-        except (FileNotFoundError, ProcessLookupError):
-            pass
+            try:
+                signal.pidfd_send_signal(fd, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            monitor = select.poll()
+            monitor.register(fd, select.POLLIN)
+            if not monitor.poll(3000):
+                raise RuntimeError('receiver process did not exit')
+        finally:
+            os.close(fd)
     directory = socket_directory(info)
     if not directory.exists():
         return
@@ -270,30 +315,64 @@ def retire_orphan(info):
     directory.rmdir()
 
 
+def launch_receiver(state, info, discard=False):
+    endpoint = socket_directory(info)
+    gid = config_path(info['front']).stat().st_gid
+    output = state / 'events.jsonl'
+    gate, release = os.pipe()
+    try:
+        args = [sys.executable, RECEIVER, endpoint, output, str(gid), str(info['deadline']),
+                '--startup-fd', str(gate), '--stop-recording', state / 'stop-recording']
+        if discard:
+            args.append('--discard')
+        receiver = subprocess.Popen(args, pass_fds=(gate,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # The child cannot bind before the verified identity is durable. If
+        # this process dies earlier, pipe EOF causes the child to exit.
+        stage(state, info, info['phase'], receiver=[receiver.pid, process_start(receiver.pid)])
+        os.write(release, b'1')
+    finally:
+        os.close(release)
+        os.close(gate)
+    for _ in range(40):
+        if receiver.poll() is not None:
+            break
+        if (discard or output.exists()) and (endpoint / 'events.sock').is_socket():
+            return receiver
+        time.sleep(.1)
+    raise RuntimeError('receiver not ready')
+
+
+def ensure_discard_sink(state, info):
+    fd = receiver_pidfd(info)
+    if fd is not None:
+        os.close(fd)
+        if (socket_directory(info) / 'events.sock').is_socket():
+            return
+    retire_orphan(info)
+    launch_receiver(state, info, discard=True)
+
+
+def stop_observation(state, info, reason):
+    atomic(state / 'stop-recording', b'\n')
+    recover(state, info, reason)
+    if info['phase'] == 'draining':
+        ensure_discard_sink(state, info)
+
+
 def supervise(state, info):
     front = info['front']
     before, after = verify_state(state, info)
+    require_pidfd()
     if time.time() - info['prepared'] > 900 or identity(front['cid']) != front:
         stage(state, info, 'closed', outcome='stale-preview')
         return
     end = time.time() + info['seconds']
-    endpoint = socket_directory(info)
-    gid = config_path(front).stat().st_gid
     output = state / 'events.jsonl'
     stage(state, info, 'arming', deadline=end)
     reason = 'activation-fault'
-    receiver = subprocess.Popen([sys.executable, RECEIVER, endpoint, output, str(gid), str(end)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    receiver = None
     try:
-        stage(state, info, 'arming', receiver=[receiver.pid, process_start(receiver.pid)])
-        for _ in range(40):
-            if receiver.poll() is not None:
-                raise RuntimeError('receiver exited before activation')
-            if output.exists() and (endpoint / 'events.sock').is_socket():
-                break
-            time.sleep(.1)
-        else:
-            raise RuntimeError('receiver not ready')
+        receiver = launch_receiver(state, info)
         configure(front, before, after)
         started = time.time()
         stage(state, info, 'active', started=started)
@@ -302,6 +381,9 @@ def supervise(state, info):
         while time.time() < end:
             if (state / 'stop').exists():
                 reason = 'operator-stop'
+                break
+            if (state / 'event-cap-hit').exists():
+                reason = 'event-capacity'
                 break
             if receiver.poll() is not None or identity(front['cid']) != front:
                 reason = 'observer-or-front-changed'
@@ -318,17 +400,11 @@ def supervise(state, info):
         else:
             reason = 'deadline'
     finally:
-        try:
-            recover(state, info, reason)
-        finally:
-            if receiver.poll() is None:
-                receiver.terminate()
-                try:
-                    receiver.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    receiver.kill()
-                    receiver.wait(timeout=3)
+        stop_observation(state, info, reason)
+        if info['phase'] == 'closed':
             clean_receiver(state, info)
+    if receiver is not None and info['phase'] == 'closed':
+        receiver.wait(timeout=3)
 
 
 def clean_receiver(state, info):
@@ -349,8 +425,16 @@ def tick(state):
         except BlockingIOError:
             return
         info = data(state)
-        if info['phase'] == 'prepared' and (state / 'arm').is_file():
-            if (state / 'stop').exists():
+        if info['phase'] == 'prepared':
+            if not (state / 'arm').is_file():
+                before, _ = verify_state(state, info)
+                front = identity(info['front']['cid'])
+                if front != info['front'] or config_path(front).read_bytes() != before:
+                    raise RuntimeError('prepared configuration drift')
+                stage(state, info, 'prepared', scheduler_checked=time.time())
+            elif not info.get('scheduler_checked'):
+                raise RuntimeError('no prepared receipt from scheduler')
+            elif (state / 'stop').exists():
                 stage(state, info, 'closed', outcome='stopped-before-activation')
             else:
                 supervise(state, info)
@@ -361,11 +445,13 @@ def tick(state):
                 stage(state, info, 'recovery-required', outcome='configuration-drift')
             elif front != info['front'] or not workers(front).intersection(info['old_workers']):
                 stage(state, info, 'closed', outcome='restored')
+            else:
+                if time.time() - info['drain_started'] >= DRAIN_OVERDUE and not info.get('drain_overdue'):
+                    stage(state, info, 'draining', drain_overdue=True)
+                    syslog.syslog(syslog.LOG_WARNING, 'catalog observation: old front workers still draining; discard only')
+                ensure_discard_sink(state, info)
         elif info['phase'] in ('arming', 'active'):
-            try:
-                recover(state, info, 'supervisor-lost')
-            finally:
-                clean_receiver(state, info)
+            stop_observation(state, info, 'supervisor-lost')
         if (state / 'arm').is_file() and info['phase'] == 'closed':
             if 'deadline' in info and not (state / 'receiver-removed').exists():
                 clean_receiver(state, info)

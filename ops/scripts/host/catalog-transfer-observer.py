@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Allowlisted native nginx catalog diagnostics. Never persist datagrams."""
 import argparse
+from contextlib import nullcontext
 import datetime as dt
 import json
 import os
@@ -36,7 +37,7 @@ def parse(packet):
     return None
 
 
-def collect(directory, output, writer_gid, expires):
+def collect(directory, output, writer_gid, expires, stop_recording=None):
     # The directory is new, directly under the intended container's logs dir.
     # Its random name is only disclosed to that container. No stale endpoint
     # is overwritten, including after an observer crash.
@@ -51,20 +52,25 @@ def collect(directory, output, writer_gid, expires):
             os.chown(directory, -1, writer_gid)
             os.chmod(directory, 0o710)
             receiver.settimeout(0.5)
-            with output.open('x', encoding='ascii', buffering=1) as events:
+            sink_only = output is None
+            with (nullcontext() if sink_only else output.open('x', encoding='ascii', buffering=1)) as events:
                 seen = set()
-                while time.time() < expires:
+                while stop_recording is not None or time.time() < expires:
                     try:
                         packet, _, flags, _ = receiver.recvmsg(4096)
                     except socket.timeout:
                         continue
-                    if time.time() >= expires:
-                        break
+                    if sink_only or time.time() >= expires or (stop_recording is not None and stop_recording.exists()):
+                        continue
                     request_id = None if flags & socket.MSG_TRUNC else parse(packet)
                     if request_id is None or request_id in seen:
                         continue
                     if len(seen) == MAX_EVENTS:
-                        return 3  # The owner must stop the window on coverage loss.
+                        if stop_recording is None:
+                            return 3
+                        (stop_recording.parent / 'event-cap-hit').touch()
+                        sink_only = True
+                        continue
                     seen.add(request_id)
                     events.write(json.dumps({
                         'utc': dt.datetime.now(dt.timezone.utc).isoformat(timespec='milliseconds'),
@@ -83,11 +89,19 @@ if __name__ == '__main__':
     cli.add_argument('output', type=Path)
     cli.add_argument('writer_gid', type=int)
     cli.add_argument('expires', type=float)
+    cli.add_argument('--stop-recording', type=Path)
+    cli.add_argument('--discard', action='store_true')
+    cli.add_argument('--startup-fd', type=int)
     args = cli.parse_args()
+    if args.startup_fd is not None:
+        with os.fdopen(args.startup_fd, 'rb') as gate:
+            if gate.read(1) != b'1':
+                raise SystemExit(2)  # Early parent loss: never bind or create a file.
     # SIGTERM is used by the window owner on early closure. Leave no socket
     # behind and use a distinct status from ordinary expiry.
     def stop(*_):
         raise SystemExit(2)
 
     signal.signal(signal.SIGTERM, stop)
-    raise SystemExit(collect(args.directory, args.output, args.writer_gid, args.expires))
+    raise SystemExit(collect(args.directory, None if args.discard else args.output,
+                             args.writer_gid, args.expires, args.stop_recording))

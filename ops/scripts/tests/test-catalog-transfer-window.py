@@ -4,6 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -34,7 +35,7 @@ class Window(unittest.TestCase):
 
     def activate(self):
         self.live.write_bytes(self.pending)
-        w.stage(self.state, self.info, 'active')
+        w.stage(self.state, self.info, 'active', deadline=time.time() + 60)
 
     def test_preview_does_not_modify_live_and_keeps_timeout(self):
         self.assertEqual(self.live.read_bytes(), BASE)
@@ -43,6 +44,13 @@ class Window(unittest.TestCase):
         self.assertEqual(self.pending.count(b'error_log logs/error.log warn;'), 2)
         with self.assertRaises(RuntimeError):
             w.candidate(BASE.replace(b'10s', b'60s'), self.info['tag'])
+
+    def test_missing_process_handle_fails_before_preview_writes(self):
+        with patch.object(w.os, 'pidfd_open', side_effect=OSError):
+            no_state = Path(self.tmp) / 'blocked'
+            with self.assertRaises(OSError):
+                w.preview(no_state, FRONT['cid'], 'b' * 64, 60)
+            self.assertFalse(no_state.exists())
 
     def test_lost_controller_reverts_and_does_not_rearm(self):
         self.activate()
@@ -100,17 +108,68 @@ class Window(unittest.TestCase):
                 self.assertEqual(final['reason'], 'deadline' if mode == 'deadline' else 'observer-or-front-changed')
                 self.assertFalse(endpoint.exists())
 
-    def test_draining_is_not_closed_until_old_workers_disappear(self):
-        self.activate()
+    def test_full_shutdown_preserves_discard_socket_until_old_worker_exits(self):
+        endpoint = Path(self.tmp) / 'sink'
         self.workers.return_value = {'10:100'}
-        with patch.object(w.time, 'sleep'):
-            w.recover(self.state, self.info, 'deadline')
-            self.assertEqual(w.data(self.state)['phase'], 'draining')
+        (self.state / 'arm').touch()
+        message = (b'<190>Nov  9 03:10:32 front catalogdiag: 2026/11/09 03:10:32 [info] 25#25: *38 '
+                   b'client timed out (110: Connection timed out), client: 127.0.0.1, server: _, '
+                   b'request: "GET /v1/models?client_version=1 HTTP/1.1", host: "mock", '
+                   b'request_id: "11111111111111111111111111111111"')
+        spawned = []
+        real_launch = w.launch_receiver
+
+        def hold_child(*args, **kwargs):
+            receiver = real_launch(*args, **kwargs)
+            spawned.append(receiver)
+            self.addCleanup(receiver.wait, 3)
+            self.addCleanup(lambda: receiver.terminate() if receiver.poll() is None else None)
+            return receiver
+
+        with patch.object(w, 'launch_receiver', side_effect=hold_child), \
+                patch.object(w, 'socket_directory', return_value=endpoint), \
+                patch.object(w, 'tunnel_failure', return_value=True), \
+                patch.object(w, 'unschedule') as schedule, \
+                patch.object(w, 'DRAIN_OVERDUE', 0), patch.object(w.syslog, 'syslog') as notify:
+            w.supervise(self.state, self.info)
+            status = w.data(self.state)
+            self.assertEqual(status['phase'], 'draining')
+            self.assertEqual(self.live.read_bytes(), BASE)
+            self.assertTrue((endpoint / 'events.sock').is_socket())
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sender:
+                sender.sendto(message, str(endpoint / 'events.sock'))
+            time.sleep(.1)
+            self.assertEqual((self.state / 'events.jsonl').read_bytes(), b'')
             w.tick(self.state)
-            self.assertEqual(w.data(self.state)['phase'], 'draining')
+            w.tick(self.state)
+            notify.assert_called_once()
+            schedule.assert_not_called()
             self.workers.return_value = {'11:101'}
             w.tick(self.state)
             self.assertEqual(w.data(self.state)['phase'], 'closed')
+            self.assertFalse(endpoint.exists())
+            self.assertIsNone(w.receiver_pidfd(status))
+            self.assertEqual(spawned[0].wait(3), 2)
+            schedule.assert_called_once()
+
+    def test_startup_interrupted_before_ownership_commit_does_not_bind(self):
+        endpoint = Path(self.tmp) / 'never-bound'
+        child = []
+        spawn = subprocess.Popen
+
+        def tracked_spawn(*args, **kwargs):
+            proc = spawn(*args, **kwargs)
+            child.append(proc)
+            return proc
+
+        self.info['deadline'] = time.time() + 60
+        with patch.object(w, 'socket_directory', return_value=endpoint), \
+                patch.object(w.subprocess, 'Popen', side_effect=tracked_spawn), \
+                patch.object(w, 'stage', side_effect=OSError), self.assertRaises(OSError):
+            w.launch_receiver(self.state, self.info)
+        self.assertEqual(child[0].wait(timeout=3), 2)
+        self.assertFalse(endpoint.exists())
+        self.assertFalse((self.state / 'events.jsonl').exists())
 
     def test_scheduler_retires_exact_entry_and_leaves_neighbors(self):
         entry = w.cron_entry(self.state)

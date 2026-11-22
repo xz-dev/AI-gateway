@@ -2,7 +2,7 @@
 
 - [x] 1.1 Implement the temporary local receiver with private permissions, a strict event schema, bounded storage and explicit coverage/fault reporting. Do not persist datagrams or forward them to the host journal.
 - [x] 1.2 Rehearse against the pinned front image: intact and truncated identity/gzip responses; matching access IDs; unrelated, malformed and sensitive inputs dropped; ordinary log stays at `warn`.
-- [ ] 1.3 Rehearse early rollback, expiry, receiver failure, controller loss, interrupted receiver startup, an enduring old worker, and intervening configuration drift. Verify discard-only drain, restoration, and complete process and endpoint removal without overwriting unrelated work.
+- [x] 1.3 Rehearse early rollback, expiry, receiver failure, controller loss, interrupted receiver startup, an enduring old worker, and intervening configuration drift. Verify discard-only drain, restoration, and complete process and endpoint removal without overwriting unrelated work.
 
 ## 2. Open the window
 
