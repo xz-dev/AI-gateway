@@ -278,6 +278,88 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(row["action"], "skip_not_running")
         self.assertEqual(report["startup_unit"]["state"], "failed")
 
+    def test_cloudflared_restarts_only_after_three_consecutive_503_responses(self):
+        started = "1970-01-01T00:00:01+00:00"
+        containers = [{"Id": service, "Name": f"/ai-gateway-{service}-1", "Config": {
+            "Labels": {"com.docker.compose.project": "ai-gateway", "com.docker.compose.service": service},
+            "Env": ["CPA_CLIENT_KEY=fixture"]}, "State": {"Running": True, "Pid": 123, "StartedAt": started}}
+            for service in dict.fromkeys([*recovery.CHECKS, "cloudflared"])]
+        tunnel = containers[-1]
+        probes, restarts = [], []
+        status = 503
+        sub2api_ok = True
+
+        def probe(pid, request):
+            if request["port"] == 8080 and request["path"] == "/health":
+                return {"ok": sub2api_ok}
+            if request["port"] != 20241:
+                return {"ok": True}
+            probes.append((request["path"], request["expected"]))
+            if status is None:
+                raise OSError("namespace unavailable")
+            return {"ok": status == 200, "status": status}
+
+        def api(method, path, timeout=10):
+            if method == "POST":
+                restarts.append(path)
+                return None
+            return [{"Names": [tunnel["Name"]], "Id": tunnel["Id"]}] if tunnel in containers else []
+
+        def inspect(names):
+            matches = [c for c in containers if c["Id"] in names or c["Name"][1:] in names]
+            if len(matches) < len(names):
+                raise FileNotFoundError("docker_object_not_found")
+            return matches
+
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as directory, \
+                mock.patch.object(recovery, "STATE_DIR", Path(directory)), \
+                mock.patch.object(recovery, "inspect", side_effect=inspect), \
+                mock.patch.object(recovery, "namespace_probe", side_effect=probe), \
+                mock.patch.object(recovery, "docker_api", side_effect=api), \
+                mock.patch.object(recovery, "startup_unit_health", return_value={}), \
+                mock.patch.object(recovery.time, "time", return_value=1000), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            for sample in (503, 503, 200, 503, 503, 502, 503, 503, None, 503, 503):
+                status = sample
+                recovery.run(True)
+                self.assertEqual(restarts, [])
+            recovery.run(False)
+            report = json.loads(output.getvalue().splitlines()[-1])
+            row = next(row for row in report["checks"] if row["service"] == "cloudflared")
+            self.assertEqual(row["action"], "would_restart")
+            self.assertEqual(restarts, [])
+            self.assertEqual(report["coverage"]["checks"][0]["status"], 503)
+            self.assertEqual(probes, [("/ready", 200)] * 12)
+            recovery.run(True)
+            self.assertEqual(restarts, ["/containers/cloudflared/restart?t=10"])
+            for _ in range(3):
+                recovery.run(True)
+            tunnel["State"]["Paused"] = True
+            recovery.run(True)
+            report = json.loads(output.getvalue().splitlines()[-1])
+            self.assertEqual(report["checks"][-1]["action"], "skip_not_running")
+            containers.remove(tunnel)
+            recovery.run(True)
+            report = json.loads(output.getvalue().splitlines()[-1])
+            self.assertEqual(report["checks"][-1]["action"], "skip_missing")
+            self.assertTrue(report["checks"][0]["ok"])
+            self.assertEqual(restarts, ["/containers/cloudflared/restart?t=10"])
+
+            # A different service can use the restart slot before the connector is checked.
+            (Path(directory) / "state.json").unlink()
+            tunnel["State"]["Paused"] = False
+            containers.append(tunnel)
+            restarts.clear()
+            sub2api_ok = False
+            for status in (503, 503, 200):
+                recovery.run(True)
+            report = json.loads(output.getvalue().splitlines()[-1])
+            self.assertNotIn("cloudflared", [row["service"] for row in report["checks"]])
+            self.assertEqual(report["coverage"]["checks"][0]["status"], 200)
+            status = 503
+            recovery.run(True)
+        self.assertEqual(restarts, ["/containers/sub2api/restart?t=10"])
+
     def test_pprof_capture_streams_bounded_files_and_keeps_recent(self):
         Handler.body = b"heap profile\n"
         with tempfile.TemporaryDirectory(dir="/var/tmp") as directory, \

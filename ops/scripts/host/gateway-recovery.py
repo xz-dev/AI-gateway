@@ -17,6 +17,13 @@ from urllib.parse import quote
 from gateway_health import native_health, role_health, worker_health
 
 PROJECT = "ai-gateway"
+# These probes also provide readiness to component deployment, independent of recovery policy.
+OBSERVE_HTTP = {
+    "cloudflared": ("127.0.0.1", 20241, "/ready", 200),
+    "aisix-status": ("127.0.0.1", 8080, "/", 404),
+    "aisix": ("172.30.68.2", 9090, "/metrics", 200),
+    "egress-proxy": ("172.30.18.2", 3128, "*", 400),
+}
 # APISIX checks are local routes, not checks of their upstream dependencies.
 CHECKS = {
     "cli-proxy-api": (8317, "/v1/models", 200),
@@ -27,13 +34,7 @@ CHECKS = {
     "ai-sse-keepalive-proxy": (8080, "/healthz", 200),
     "apisix": (9080, "/healthz", 404),
     "apisix-models": (9080, "/healthz", 200),
-}
-# Observations only: never expand the application restart allowlist above.
-OBSERVE_HTTP = {
-    "cloudflared": ("127.0.0.1", 20241, "/ready", 200),
-    "aisix-status": ("127.0.0.1", 8080, "/", 404),
-    "aisix": ("172.30.68.2", 9090, "/metrics", 200),
-    "egress-proxy": ("172.30.18.2", 3128, "*", 400),
+    "cloudflared": OBSERVE_HTTP["cloudflared"][1:],
 }
 GRACE = 120
 FAILURES = 3
@@ -113,6 +114,8 @@ def docker_api(method, path, timeout=10):
         connection.request(method, path)
         response = connection.getresponse()
         body = response.read(4 * 1024 * 1024 + 1)
+        if method == "GET" and response.status == 404:
+            raise FileNotFoundError("docker_object_not_found")
         if response.status >= 400 or len(body) > 4 * 1024 * 1024:
             raise RuntimeError("docker_api_failed")
         return json.loads(body) if body else None
@@ -213,7 +216,10 @@ def coverage(containers, report):
             proc = Path("/proc") / str(state["Pid"])
             if not state.get("Running") or state.get("Paused") or state.get("Restarting"):
                 kind, result = "transition", {"ok": None, "reason": "not_running_or_operator_paused"}
-            elif service in CHECKS:
+            elif service == "cloudflared" and "ok" in applications.get(service, {}):
+                kind = "tunnel_readiness"
+                result = {k: v for k, v in applications[service].items() if k in ("ok", "status", "reason")}
+            elif service in CHECKS and service != "cloudflared":
                 entry = applications.get(service, {})
                 kind, result = "application", {"ok": entry.get("ok"), "reason": entry.get("reason", entry.get("action", "cycle_deferred"))}
             elif service.endswith("-relay"):
@@ -277,14 +283,18 @@ def startup_unit_health():
 
 
 def run(apply):
-    names = [f"{PROJECT}-{service}-1" for service in CHECKS]
-    containers = inspect(names)
+    required = [service for service in CHECKS if service != "cloudflared"]
+    try:
+        containers = inspect([f"{PROJECT}-{service}-1" for service in CHECKS])
+    except FileNotFoundError:
+        # The optional ingress connector must not block other recovery checks.
+        containers = inspect([f"{PROJECT}-{service}-1" for service in required])
     by_service = {}
     for container in containers:
         service = (container.get("Config", {}).get("Labels") or {}).get("com.docker.compose.service")
         if service in CHECKS and owned(container, service):
             by_service[service] = container
-    if len(by_service) != len(CHECKS):
+    if any(service not in by_service for service in required):
         raise RuntimeError("application ownership mismatch")
     # Existing service key stays in this process's memory, never argv or logs.
     # model-catalog is the only checked service holding the CPA client key.
@@ -294,10 +304,17 @@ def run(apply):
     state = json.loads(filename.read_text()) if filename.exists() else {}
     now = time.time()
     report = []
-    for service, container in by_service.items():
+    for service in CHECKS:
+        container = by_service.get(service)
+        if container is None:
+            state.get(service, {}).pop("failures", None)
+            report.append({"service": service, "action": "skip_missing"})
+            continue
         current = container["State"]
         if not current.get("Running") or current.get("Paused") or current.get("Restarting"):
             # Docker handles exits. Do not undo an operator's explicit stop/pause.
+            if service == "cloudflared":
+                state.get(service, {}).pop("failures", None)
             report.append({"service": service, "action": "skip_not_running"})
             continue
         instance = container["Id"] + ":" + current["StartedAt"]
@@ -315,20 +332,29 @@ def run(apply):
             result = namespace_probe(current["Pid"], request)
         except OSError:
             result = {"ok": None, "reason": "namespace_unavailable"}
-        entry, restart = decision(state.get(service, {}), instance, result["ok"], now, started)
+        # Only the connector's explicit no-edge-connections response authorizes recovery.
+        ok = result["ok"]
+        if service == "cloudflared" and result.get("status") != 503:
+            ok = None
+        entry, restart = decision(state.get(service, {}), instance, ok, now, started)
         state[service] = entry
         row = {"service": service, **result, "failures": entry["failures"], "action": "observe"}
         if restart:
             row["action"] = "would_restart"
             if apply:
                 fresh = inspect([container["Id"]])[0]
-                if (not owned(fresh, service) or fresh["State"]["StartedAt"] != current["StartedAt"]
-                        or not fresh["State"].get("Running") or fresh["State"].get("Paused")):
+                if (fresh["Id"] != container["Id"] or not owned(fresh, service)
+                        or fresh["State"]["StartedAt"] != current["StartedAt"]
+                        or not fresh["State"].get("Running") or fresh["State"].get("Paused")
+                        or fresh["State"].get("Restarting")):
                     row["action"] = "skip_changed_instance"
                 else:
                     # Consume before issuing a possibly timing-out mutation. Never retry blindly.
                     entry["restarts"].append(now)
                     entry["failures"] = 0
+                    if service != "cloudflared":
+                        # An observation-only cycle cannot extend the connector's decision streak.
+                        state.get("cloudflared", {}).pop("failures", None)
                     save(state, filename)
                     if service == "cli-proxy-api":
                         try:
