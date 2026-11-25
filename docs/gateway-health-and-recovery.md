@@ -20,14 +20,15 @@ Health has three separate meanings:
 | ai-sse-keepalive-proxy | `GET /healthz`, HTTP 200 | Keepalive proxy local liveness |
 | apisix | Local `GET /healthz`, expected HTTP 404 | APISIX's unmatched-route rejection responds; no upstream request |
 | apisix-models | Local `GET /healthz`, HTTP 200 | `fault-injection` abort answers locally; no upstream request |
+| cloudflared | Loopback `GET :20241/ready`, HTTP 200 | Connector readiness; only an explicit HTTP 503 counts toward a restart |
 
 The CPA key comes from the `model-catalog` container's `CPA_CLIENT_KEY`; neither the front keeper nor `apisix-models` holds one. It remains in process memory, not arguments or logs. A missing key or HTTP 401/403 is **unknown**, not a restart decision. An inaccessible namespace is also unknown. Deployment refuses unknown or failed probes.
 
 Recovery policy:
 
-- 120-second startup grace; three consecutive failed checks.
-- Ten-minute cooldown; at most three attempts per application per hour.
-- At most one application restart per invocation; no database, cache, namespace owner, relay, or provider-sidecar restart.
+- 120-second startup grace; three consecutive failed checks. For `cloudflared`, all three must be HTTP 503 from the same running connector; another status, a probe error, or a cycle deferred because another service restarted resets the streak. A missing connector does not block other checks.
+- Ten-minute cooldown; at most three attempts per service per hour.
+- At most one allowlisted container restart per invocation; no database, cache, namespace owner, relay, or provider-sidecar restart.
 - Recheck Compose ownership, exact container ID, start time, and running/unpaused state immediately before mutation.
 - Preserve cooldown/history across container recreation. Write the attempt to an atomic, mode-0600 state file **before** asking Docker to restart. An unknown restart outcome consumes its budget and is not retried immediately.
 - Respect stopped, paused, or restarting containers. Docker's restart policy handles ordinary process exits.
@@ -167,14 +168,13 @@ On 2026-10-20 the initial subprocess-heavy guard reached its 64 MiB limit. Repla
 
 ## Full-stack host observations
 
-The deployed host guard observes every running container, including the standalone relay. Its historical automatic allowlist has seven applications; the updated source adds only the bridge as the eighth, effective after guard deployment. Additional roles only produce observations; they cannot enter the restart decision path.
+The deployed host guard observes every running container, including the standalone relay. The allowlist in [Application recovery](#application-recovery) controls automatic restarts. The additional roles below only produce observations and cannot enter the restart decision path.
 
 | Role | Deployed observation | Meaning / limit |
 | --- | --- | --- |
 | 25 TCP relays | Exact configured IPv4 address/port, listening socket inode owned by the relay; the existing six-port shell supervisor checks its actual direct children and every port | Local listener, not upstream readiness. Another process in the shared namespace cannot make this green |
 | 12 namespace owners | Interfaces and connected routes match attached IPv4 networks; no usable IPv4/IPv6 default route | Checks the current deny-default topology, not a sleeping PID |
 | provider-sidecar-tunnel | Actual tun2proxy process, its owned `/dev/net/tun` handle, associated interface, and its active main-table default route | Current deployed routing was inspected first; do not reuse this route contract for a policy/split-routing deployment without adapting it |
-| cloudflared | Local `:20241/ready`, strict HTTP 200 | Tunnel readiness; Cloudflare dependency failure does not authorize restart |
 | aisix-status | Local `:8080/`, strict expected 404 | Local handler's rejection route, not AISIX readiness |
 | AISIX | Its actual `172.30.68.2:9090/metrics`, strict HTTP 200 | Existing metrics listener, not an assumed loopback binding or an inference request |
 | Redis | Direct local RESP PING, exact `+PONG` | Error replies are not success; an authentication error is unknown, not proof the process died |
@@ -185,7 +185,7 @@ The deployed host guard observes every running container, including the standalo
 
 The former `model-catalog-sidecar` observation was removed with the sidecar; model-catalog is covered by its application check above. HTTP addresses above match the current static topology. Update them deliberately when that topology changes. Missing evidence, unsupported roles, inaccessible process files, and stale native health results are unknown, never fixed-success fallbacks. New containers with unknown roles do not silently become green.
 
-The updated source emits `checks` for eight application recovery decisions, read-only `startup_unit`, `coverage.running`, `coverage.observed`, and per-container `coverage.checks`. Compare running/observed counts and inspect **both** `ok` and any `ready` field. A successful unit result is not an all-dependencies-green signal.
+The source emits `checks` for the allowlisted recovery decisions, read-only `startup_unit`, `coverage.running`, `coverage.observed`, and per-container `coverage.checks`. Compare running/observed counts and inspect **both** `ok` and any `ready` field. A successful unit result is not an all-dependencies-green signal.
 
 Production verification on 2026-10-20 at 14:56 UTC recorded 54 running / 54 observed, all 54 role/liveness checks passing, no unknown observations, unchanged running container IDs, and zero guard restart attempts. The model-sync worker still reported four failed dependencies (`ok=true, ready=false`); this is an open readiness issue, not suppressed as green. Counts are point-in-time, not a deployment contract.
 
