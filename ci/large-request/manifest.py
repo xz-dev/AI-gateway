@@ -60,6 +60,7 @@ bins = {"keeper": os.environ.get("KEEPER_BIN", T + "/bin/keeper"), "cpa": os.env
         "wsclient": T + "/bin/wsclient", "thpoff": T + "/bin/thpoff"}
 if os.environ.get("EMB") == "1":  # delta 7.5 group emb: the embeddings / rerank provider behind AISIX
     bins["mock-emb"] = T + "/bin/mock-emb"
+aisix_resources = os.environ.get("AISIX_RES", T + "/cfg/aisix-resources.yaml")
 m = {"written": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "run": RUN,
      "flags": {k: os.environ.get(k) for k in FLAGS},
      "host": {"kernel": platform.release(), "nproc": os.cpu_count(), "load": rd("/proc/loadavg"),
@@ -74,8 +75,7 @@ m = {"written": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "run": RUN,
      "aisix": {"path": T + "/bin/aisix", "sha256": sha(T + "/bin/aisix"),
                "source_head": None},
      "s2a_resources": os.environ.get("S2A_RES"),
-     "aisix_resources": {"path": os.environ.get("AISIX_RES", T + "/cfg/aisix-resources.yaml"),
-                         "sha256": sha(os.environ.get("AISIX_RES", T + "/cfg/aisix-resources.yaml"))},
+     "aisix_resources": {"path": aisix_resources, "sha256": sha(aisix_resources)},
      "mock_source_sha256": sha(T + "/mock/main.go")}
 
 files = {"prod:compose.yaml": PROD + "/compose.yaml",
@@ -91,7 +91,7 @@ files = {"prod:compose.yaml": PROD + "/compose.yaml",
          "run:squid/policy.json": RUN + "/squid/policy.json", "run:squid/squid.conf": RUN + "/squid/generated/squid.conf",
          "run:squid/unbound.conf": RUN + "/squid/unbound.conf", "run:cpa-config.yaml": RUN + "/cpa-config.yaml",
          "cfg/cpa-config.yaml": T + "/cfg/cpa-config.yaml", "cfg/aisix-config.yaml": T + "/cfg/aisix-config.yaml",
-         "cfg/aisix-resources.yaml": T + "/cfg/aisix-resources.yaml"}
+         "cfg/aisix-resources.yaml": aisix_resources}
 for f in ("stack.sh", "rungs.py", "hlib.py", "meminfo.sh", "milog.py", "fullchain.py", "s2a_setup.py", "gen.py",
           "wsclient/main.go", "mock/main.go", "gate75.sh", "ci/ladder.sh", "ci/compose.yaml", "ci/compose.full-stack.yaml", "ci/verdict.py",
           "ci/lock_from_manifest.py", "ci/render_hops.py", "ci/test_render_hops.py", "cfg/squid.conf",

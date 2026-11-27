@@ -299,7 +299,7 @@ services:
         ipv4_address: 172.30.60.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api@sha256:2c4366f24660d5f4da7c66dd2820bc0447f6b087fc30c5bd196fef38df3e8344}
+    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api@sha256:f72ac8544f0be1ed32401a5f34a8d5aeb176c0897e117c733b11eb8812a5d88a}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
