@@ -131,7 +131,7 @@ services:
         ipv4_address: 172.30.63.2
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api@sha256:c938d0b716db235c0b182104758d45a046bcf592339c31eafc1a9f1b1c7484fd}
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/xz-dev/cli-proxy-api@sha256:33c31121224d9102e6c11fdf0feeb82647350afa9df297e958775be523833170}
     network_mode: service:cpa-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -191,7 +191,7 @@ services:
         ipv4_address: 172.30.18.3
 
   postgres:
-    image: ${POSTGRES_IMAGE:-docker.io/library/postgres:18.7-alpine3.24}
+    image: ${POSTGRES_IMAGE:-docker.io/library/postgres:18.7-alpine3.24@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71}
     command: [postgres, -c, max_connections=50, -c, shared_buffers=64MB]
     restart: unless-stopped
     pids_limit: 128
@@ -223,7 +223,7 @@ services:
       start_period: 10s
 
   redis:
-    image: ${REDIS_IMAGE:-docker.io/library/redis:8.10.3-alpine3.23}
+    image: ${REDIS_IMAGE:-docker.io/library/redis:8.12.0-alpine3.23@sha256:5af80107c1eeecb484a2269b80a26d12bfa6521787da4663bd9f19f60a163483}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 80m
@@ -299,7 +299,7 @@ services:
         ipv4_address: 172.30.60.2
 
   sub2api:
-    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api@sha256:8f835a12151d4af9d88db206b8a5b84f0c7aa6a6c582f54bd16d8bcf2cba11d3}
+    image: ${SUB2API_IMAGE:-ghcr.io/xz-dev/sub2api@sha256:2c4366f24660d5f4da7c66dd2820bc0447f6b087fc30c5bd196fef38df3e8344}
     network_mode: service:sub2api-netns
     entrypoint: [/bin/sh, -ec]
     command:
@@ -475,7 +475,7 @@ services:
         ipv4_address: 172.30.46.2
 
   apisix:
-    image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.20.0-debian}
+    image: ${APISIX_IMAGE:-docker.io/apache/apisix:3.21.0-debian@sha256:1741a8e1186e5c39ea10e6b4fb3e682534d1705efb8328195de5b41ad0657380}
     network_mode: service:apisix-netns
     entrypoint: [/bin/bash, -ec]
     command:
@@ -631,7 +631,7 @@ services:
         ipv4_address: 172.30.70.2
 
   apisix-models:
-    image: ${APISIX_MODELS_IMAGE:-${APISIX_IMAGE:-docker.io/apache/apisix:3.20.0-debian}}
+    image: ${APISIX_MODELS_IMAGE:-${APISIX_IMAGE:-docker.io/apache/apisix:3.21.0-debian@sha256:1741a8e1186e5c39ea10e6b4fb3e682534d1705efb8328195de5b41ad0657380}}
     network_mode: service:apisix-models-netns
     entrypoint: [/usr/local/bin/start-apisix-models]
     command: []
@@ -945,7 +945,7 @@ services:
       aisix-status: {condition: service_started}
 
   aisix:
-    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/aisix@sha256:f064f7a8b7bfd756c0379765cda3f6a88c7e6f9f86b0b0d098498b1634e309ce}
+    image: ${AISIX_IMAGE:-ghcr.io/xz-dev/aisix@sha256:9e68a3b200e45565d851f135b264eefc8e6870f932553feb5381b968bb6a1fad}
     network_mode: service:aisix-netns
     command: ["--config", "/etc/aisix/config.yaml"]
     restart: unless-stopped
@@ -972,7 +972,7 @@ services:
       - ./services/routing/aisix/resources.yaml:/etc/aisix/resources.yaml:ro,Z
 
   cloudflared:
-    image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared:2026.11.1@sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d}
+    image: ${CLOUDFLARED_IMAGE:-docker.io/cloudflare/cloudflared:2026.11.2@sha256:55c7e3e8d89d5e8d20b75a82f3602cbf98e06db406e73e282073cfdc5a9a3af6}
     restart: unless-stopped
     pids_limit: 64
     mem_limit: 96m

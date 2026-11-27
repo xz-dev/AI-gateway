@@ -14,7 +14,7 @@ Read this before you change `services/routing/apisix-models/`, the AISIX `*` row
 | a narrower AISIX glob row (longest literal wins) | that glob row | `devin/*` |
 | nothing else | the single `*` row → CPA, ID unchanged | a CPA-only bare or slash ID |
 
-- AISIX implements the precedence itself (`resolve_model`: exact names first, then the most specific wildcard). `ops/scripts/check-aisix-resource-policy.py` requires exactly one `*` direct row (`model_name: "*"`, `provider_key: cpa-pool`, shared cooldown) and rejects any route that targets it.
+- AISIX implements the precedence itself (`resolve_model`: exact names first, then the most specific wildcard). `ops/scripts/check-aisix-resource-policy.py` requires exactly one `*` direct row (`model_name: "*"`, CPA pool reference, shared cooldown) and rejects any route that targets it.
 - No catalog lookup, membership snapshot or cache sits on the request path. Unknown IDs are forwarded, and the backend returns the error.
 - `apisix-models` has no CPA upstream, credential or network path; `validate.sh` walks its networks and relays and fails if CPA is reachable.
 

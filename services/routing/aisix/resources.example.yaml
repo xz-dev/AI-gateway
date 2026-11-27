@@ -1,7 +1,8 @@
-_format_version: "1"
+_format_version: "2"
 
 provider_keys:
   - display_name: cpa-pool
+    id: 7ae8ddac-b66f-5f6e-ae9c-7e71958780c9
     provider: openai
     api_base: http://cpa:8317/v1
     api_key: replace-with-cpa-client-key
@@ -18,9 +19,10 @@ models:
   # are added so a dead target is skipped for the cooldown window instead of re-tried.
   # AISIX rejects unknown top-level keys, so the block is repeated, not anchored.
   - display_name: provider/concrete-model
+    id: d5fa4178-0ff3-5258-847f-2d548e10db05
     provider: openai
     model_name: provider/concrete-model
-    provider_key: cpa-pool
+    provider_key_id: 7ae8ddac-b66f-5f6e-ae9c-7e71958780c9
     cooldown:
       enabled: true
       default_seconds: 60
@@ -29,9 +31,10 @@ models:
       trigger_statuses: [400, 401, 402, 403, 404, 408, 429, 500, 502, 503, 504]
 
   - display_name: provider/peer-model
+    id: 2c1dc369-9c9c-592d-8c53-9fd4969565e3
     provider: openai
     model_name: provider/peer-model
-    provider_key: cpa-pool
+    provider_key_id: 7ae8ddac-b66f-5f6e-ae9c-7e71958780c9
     cooldown:
       enabled: true
       default_seconds: 60
@@ -42,9 +45,10 @@ models:
   # The single priority fallback: an ID with no exact row, route or narrower glob goes to
   # CPA unchanged. The policy check requires exactly this row and forbids routes targeting it.
   - display_name: "*"
+    id: 4c2649f1-fb93-5a4d-bfef-4146e769bedd
     provider: openai
     model_name: "*"
-    provider_key: cpa-pool
+    provider_key_id: 7ae8ddac-b66f-5f6e-ae9c-7e71958780c9
     cooldown:
       enabled: true
       default_seconds: 60
@@ -65,6 +69,7 @@ models:
   # Use consistent hashing only when the approved production route dynamically
   # balances multiple targets inside one active priority tier.
   - display_name: dynamic-logical-model
+    id: 92cf71fb-7245-5555-a8bb-4041bdbea62a
     routing:
       strategy: consistent_hash
       hash_on:
@@ -84,6 +89,7 @@ models:
   # Ordered routes keep failover semantics: a healthy backup is not used merely
   # to distribute sessions.
   - display_name: ordered-logical-model
+    id: 4583ceb2-d3e3-5ee9-a53c-1d84e01087c8
     routing:
       strategy: failover
       retries: 0
@@ -97,8 +103,10 @@ models:
 
 api_keys:
   - display_name: sub2api
+    id: f6717465-e4f9-5f00-9c1e-fc0c16c51ee6
     key_hash: replace-with-sha256-of-sub2api-caller-key
     allowed_models: ["*"]
   - display_name: model-catalog
+    id: c3b7003b-7ae8-508d-88b2-001b05439993
     key_hash: replace-with-sha256-of-catalog-caller-key
     allowed_models: ["*"]

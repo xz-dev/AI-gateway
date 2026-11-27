@@ -11,6 +11,7 @@ export LRC_HOME=$H REPO_ROOT PFX=${PFX:-lrcchain8-ci}
 export EXTRA="" ENTRY_URL=http://127.0.0.1:18085 S2A_UPSTREAM_URL=http://aisix:3000
 LOCK=${LOCK:-$H/ci/compatibility-lock.json}
 COMPOSE_FILES=(-f "$H/ci/compose.yaml")
+export AISIX_RES=${AISIX_RES:-$H/cfg/aisix-resources.yaml}
 read -ra COMPOSE_CMD <<< "${COMPOSE:-podman compose}"
 RUNGS=("$@")
 export CAP_BYTES=268435456
@@ -18,6 +19,8 @@ if [ "${NIGHTLY:-0}" = 1 ]; then
   export CAP_BYTES=1073741824 EXTRA="firewall apisix-models squid"
   export ENTRY_URL=http://127.0.0.1:${FW_PORT:-18080} S2A_UPSTREAM_URL=http://apisix-models:9080
   LOCK=${NIGHTLY_LOCK:-$H/ci/nightly-compatibility-lock.json}
+  # The independently verified nightly lock still uses the v1 AISIX file loader.
+  export AISIX_RES=${NIGHTLY_AISIX_RES:-$H/cfg/aisix-resources.v1.yaml}
   COMPOSE_FILES+=(-f "$H/ci/compose.full-stack.yaml")
   DEFAULT_RUNGS+=" http-image-1g ws-image-1g"
 fi

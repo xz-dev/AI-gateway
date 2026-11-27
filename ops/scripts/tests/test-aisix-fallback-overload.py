@@ -65,13 +65,15 @@ def replay(image, source, old):
                                        "admin": {"addr": f"127.0.0.1:{admin_port}", "admin_keys": [KEY]},
                                        "observability": {"metrics": {"prometheus": {"enabled": False}}},
                                        "resources_file": "/etc/aisix/resources.yaml"}))
-        res.write_text(yaml.safe_dump({
-            "_format_version": resources["_format_version"], "models": models,
-            "provider_keys": [{"display_name": "cpa-pool", "provider": "openai", "api_key": KEY,
-                               "api_base": f"http://127.0.0.1:{server.server_port}/v1"}],
-            "api_keys": [{"display_name": KEY, "key_hash": hashlib.sha256(KEY.encode()).hexdigest(),
-                          "allowed_models": ["*"]}],
-        }))
+        provider = {"display_name": "cpa-pool", "provider": "openai", "api_key": KEY,
+                    "api_base": f"http://127.0.0.1:{server.server_port}/v1"}
+        caller = {"display_name": KEY, "key_hash": hashlib.sha256(KEY.encode()).hexdigest(),
+                  "allowed_models": ["*"]}
+        if resources["_format_version"] == "2":
+            provider["id"] = next(p["id"] for p in resources["provider_keys"] if p["display_name"] == "cpa-pool")
+            caller["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"aisix-overload-fixture/{KEY}"))
+        res.write_text(yaml.safe_dump({"_format_version": resources["_format_version"], "models": models,
+                                       "provider_keys": [provider], "api_keys": [caller]}))
         cfg.chmod(0o444)
         res.chmod(0o444)
         name = f"aisix-overload-{uuid.uuid4().hex[:12]}"

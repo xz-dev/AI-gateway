@@ -1,0 +1,24 @@
+_format_version: "1"
+provider_keys:
+  - display_name: cpa-pool
+    provider: openai
+    api_base: http://cli-proxy-api:8317/v1
+    api_key: cap-cpa-local-key
+    request:
+      forward_client_headers: [session_id]
+models:
+  - display_name: gpt-5.1-codex
+    provider: openai
+    model_name: gpt-5.1-codex
+    provider_key: cpa-pool
+    # same cooldown block as production resources.example.yaml direct models
+    cooldown:
+      enabled: true
+      default_seconds: 60
+      max_seconds: 300
+      honor_retry_after: true
+      trigger_statuses: [400, 401, 402, 403, 404, 408, 429, 500, 502, 503, 504]
+api_keys:
+  - display_name: sub2api
+    key_hash: 0a400d1996a24d5d38646a4b260d0f6732334e0de4e2f938a736d3c223c8f164
+    allowed_models: ["*"]

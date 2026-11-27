@@ -74,7 +74,7 @@ services:
       AISIX_PROXY__REQUEST_BODY_LIMIT_BYTES: ${CAP_BYTES:-268435456}
     volumes:
       - ${LRC_HOME}/cfg/aisix-config.yaml:/etc/aisix/config.yaml:ro
-      - ${LRC_HOME}/cfg/aisix-resources.yaml:/etc/aisix/resources.yaml:ro
+      - ${AISIX_RES}:/etc/aisix/resources.yaml:ro
       - ${FS}/aisix-spool:/var/lib/aisix-spool
       - ${FS}/ledger:/run/capacity-ledger:ro
     tmpfs: ["/tmp:rw,size=16m"]

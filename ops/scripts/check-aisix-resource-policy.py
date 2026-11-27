@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from uuid import UUID
 
 REQUIRED_FALLBACK_STATUSES = [400, 401, 402, 403, 404]
 # Every routing group shares one retry contract; only strategy/hash_on/targets differ.
@@ -23,11 +24,30 @@ REQUIRED_COOLDOWN = {
 FORBIDDEN_DIRECT_KEYS = ("retries", "timeout", "stream_timeout")
 # The single priority fallback: AISIX resolves exact names, then longer globs, then this row.
 STAR = "*"
-STAR_ROW = {"provider": "openai", "model_name": STAR, "provider_key": "cpa-pool"}
+STAR_ROW = {"provider": "openai", "model_name": STAR}
 
 
 class PolicyError(Exception):
     pass
+
+
+def cpa_pool_reference(resources):
+    version = resources.get("_format_version", "1")
+    if version == "1":
+        return "provider_key", "cpa-pool"
+    if version != "2":
+        raise PolicyError("unsupported AISIX resource format")
+    providers = resources.get("provider_keys")
+    if not isinstance(providers, list):
+        raise PolicyError("AISIX v2 resources must contain provider keys")
+    matching = [p.get("id") for p in providers if isinstance(p, dict) and p.get("display_name") == "cpa-pool"]
+    if len(matching) == 1 and isinstance(matching[0], str):
+        try:
+            if str(UUID(matching[0])) == matching[0]:
+                return "provider_key_id", matching[0]
+        except ValueError:
+            pass
+    raise PolicyError("AISIX v2 resources must declare one cpa-pool with a canonical UUID")
 
 
 def validate(resources):
@@ -36,6 +56,8 @@ def validate(resources):
     models = resources.get("models")
     if not isinstance(models, list):
         raise PolicyError("AISIX resources must contain a models list")
+    ref_field, ref_value = cpa_pool_reference(resources)
+    star_row = STAR_ROW | {ref_field: ref_value}
     routes = 0
     stars = 0
     for model in models:
@@ -48,7 +70,7 @@ def validate(resources):
         if routing is None:
             if name == STAR:
                 stars += 1
-                for key, value in STAR_ROW.items():
+                for key, value in star_row.items():
                     if model.get(key) != value:
                         raise PolicyError(f"fallback model * must declare {key}: {value}")
             if model.get("cooldown") != REQUIRED_COOLDOWN:
@@ -89,6 +111,7 @@ def validate(resources):
 
 
 def validate_fallback_capabilities(resources, native_ids):
+    ref_field, ref_value = cpa_pool_reference(resources)
     models = {}
     for model in resources["models"]:
         name = model.get("display_name")
@@ -109,7 +132,7 @@ def validate_fallback_capabilities(resources, native_ids):
             direct = models.get(target_name)
             if not direct or "model_name" not in direct:
                 missing.append(f"{name} -> {target_name} (not a direct model)")
-            elif direct.get("provider_key") == "cpa-pool":
+            elif direct.get(ref_field) == ref_value:
                 upstream = direct["model_name"]
                 if not isinstance(upstream, str) or upstream not in native_ids:
                     missing.append(f"{name} -> {target_name} (missing native CPA model)")
@@ -213,6 +236,7 @@ def self_test():
             {
                 "display_name": STAR,
                 **STAR_ROW,
+                "provider_key": "cpa-pool",
                 "cooldown": json.loads(json.dumps(REQUIRED_COOLDOWN)),
             },
         ]
@@ -226,6 +250,26 @@ def self_test():
         except PolicyError:
             return
         raise PolicyError(f"invalid policy self-test was accepted: {label}")
+
+    v2 = json.loads(json.dumps(valid))
+    cpa_id = "7ae8ddac-b66f-5f6e-ae9c-7e71958780c9"
+    v2["_format_version"] = "2"
+    v2["provider_keys"] = [{"display_name": "cpa-pool", "id": cpa_id}]
+    v2["models"][2].pop("provider_key")
+    v2["models"][2]["provider_key_id"] = cpa_id
+    v2["models"][1].update(model_name="direct", provider_key_id=cpa_id)
+    v2["models"][0]["routing"]["targets"] = [{"model": "direct"}, {"model": "direct"}]
+    if validate(v2) != 1:
+        raise PolicyError("valid v2 policy self-test failed")
+    validate_fallback_capabilities(v2, {"direct"})
+    try:
+        validate_fallback_capabilities(v2, set())
+    except PolicyError:
+        pass
+    else:
+        raise PolicyError("v2 fallback inventory self-test accepted an absent CPA model")
+    v2["models"][2]["provider_key_id"] = "cpa-pool"
+    rejected(v2, "v2 fallback with a name where a UUID reference is required")
 
     star = valid["models"][2]
     candidate = json.loads(json.dumps(valid))

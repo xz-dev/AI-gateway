@@ -70,7 +70,7 @@ curl -X POST .../v1/responses -d '{"model":"aihub/<model>","input":"hi"}'       
 
 **文件权限坑**（本次踩过）：AISIX 容器跑 uid 10001(`aisix`)，aisix-status 跑 65532(nobody)。bind-mount 文件须 `chown 10001:10001` 目录(755)，`resources.yaml` 600（仅 aisix 读），`config.yaml` 444（status 页要读 token 调 admin API）。否则容器 `Permission denied` 重启崩环、`/status` 页 unavailable。
 
-**直连目标**：每个 `prefix/model` 一个 direct model，`display_name`/`model_name` 与 CPA 名逐字节一致，`provider_key: cpa-pool`。
+**直连目标**：每个 `prefix/model` 一个 direct model，`display_name`/`model_name` 与 CPA 名逐字节一致。保留已有 `id`，新建资源时为 `id` 分配一个 UUID；`provider_key_id` 引用 `cpa-pool` 的 `id`。v2 不接受 v1 的 `provider_key: cpa-pool` 名称引用。
 
 **逻辑模型 failover 链**（如 `gpt-5.6-terra`）：`strategy: failover`，`targets` 有序候选。`max_fallbacks` 不写 — `deploy-aisix` preflight 会自动跑 `ops/scripts/host/normalize-aisix-resources.py` 把它改成 `len(targets)-1`，你只改 targets 列表即可。注意 `retries: N` 会放大上游调用：最多 `(N+1) × (max_fallbacks+1)` 次，需有界。
 
