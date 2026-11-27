@@ -3,7 +3,7 @@
 - [x] Inspect main and production; account for every image group and note unchanged groups.
 - [x] Verify the exact APISIX, cloudflared, ZCode, PostgreSQL, and Redis candidates, including rollback and persistence gates where applicable.
 - [x] Port CPA, Sub2API, and AISIX; publish verified candidate images without pushing AI-gateway main.
-- [ ] Run the combined compatibility ladder; promote only its generated, passing lock. Validate tracked template configuration and private scoped previews.
+- [x] Run the combined compatibility ladder; promote only its generated, passing lock. Validate tracked template configuration and private scoped previews.
 
 ## 2. Promotion and rollout
 

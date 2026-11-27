@@ -20,6 +20,7 @@ No compatible newer image was identified in this round for Alpine namespace guar
 - Standard ladder `20261127T015913Z-450380`: 10/10 passed through 256 MiB. The proposed standard lock is generated from this run's manifest and verdict. The Podman wrapper verified `memory.swap.max=0` before tests for all seven bounded containers. The input and runtime-reported mock base digests resolve to the same amd64 image ID; the lock records the runtime-reported digest.
 - Full topology `20261127T020504Z-514022`: 12/12 passed, including 1 GiB HTTP and WebSocket cases through both APISIX planes, with the new AISIX v2 fixture and exact candidate digests. No production upstreams were used.
 - Legacy nightly lock, unchanged: `20261127T021031Z-700270` passed both HTTP and WebSocket smoke rungs with the original v1 resources. The manifest hashes the selected resource fixture in both modes.
+- Tracked template validation passed from a clean checkout with pinned submodules, no private override and Git-default public file permissions. Both APISIX planes passed syntax and route checks.
 
 ## Promotion boundary
 
