@@ -1,0 +1,21 @@
+# Production component rollout — 2026-11-27 UTC
+
+**Rollout complete for the revised, operator-approved scope.** The complete candidate set was promoted once to `main` (`477c91765e5c9b64ffbd0e7859e596d55ba56f81`), and validation CI passed. The original serial rollout stopped at ZCode. The operator then approved retaining 4.9.0, tracking the 429 separately, and completing the remaining three services. Eight selected services passed production acceptance.
+
+| Order | Component | Final production state | Verification |
+| --- | --- | --- | --- |
+| 1 | PostgreSQL | 18.7-alpine3.24, refreshed build (`0115267ab5a5…`) | Fresh custom-format backup verified with `pg_restore --list`; new exact image healthy, Sub2API ready, short Responses completed |
+| 2 | Redis | 8.12.0-alpine3.23 (`5af80107c1ee…`) | Stopped old Redis, retained its pre-switch cache, started the new image with empty cache; Redis healthy, Sub2API ready, short Responses completed |
+| 3 | CLIProxyAPI | 8.1.7 capacity/SSE fork (`33c31121224d…`) | Guarded activation and exact image, readiness, namespace, neighbors, and Responses verification |
+| 4 | AISIX | 1.12.0 capacity fork (`9e68a3b200e4…`) plus v2 resources | Image and format-only migration activated together. 71-model production v1 approved baseline preserved semantically. Resources match the new managed baseline; `glm-5.2` Responses completed. |
+| 5 | Sub2API | 0.2.25 capacity fork r3 (`f72ac8544f0b…`) | New verified database backup before apply; exact image healthy; migration count 304 → 305; short Responses completed |
+| 6 | ZCode provider sidecar | 4.9.0, restored | 4.9.1 activation passed guarded runtime readiness. `zcode/glm-5.3-flash` production Responses returned HTTP 429. A fresh guarded rollback restored the original image; the same model still returned 429. |
+| 7 | APISIX model plane | 3.21.0-debian | Fresh guarded preview; exact image, local readiness, 47 protected neighbors, and Responses passed |
+| 8 | APISIX front | 3.21.0-debian | Fresh guarded preview; exact image, local readiness, 47 protected neighbors, and Responses passed |
+| 9 | cloudflared | 2026.11.2 | Fresh guarded preview; exact preloaded image, connector readiness, 47 protected neighbors, and public Responses passed |
+
+The production checks used the operator's existing Pi client credential; no new key was created. The ordinary model list returned HTTP 200 after rollback, and a separate short `gpt-6.2-astra` SSE turn returned HTTP 200 with nonempty output and `response.completed`. Sub2API logs show upstream HTTP 429 on the affected ZCode path. Passive correlation found the same 429 in AISIX in both attempt windows; the live AISIX direct model sends that traffic to CPA, not directly to the sidecar. CPA's bounded retained log check did not tie the specific requests to a provider error code, quota, or Retry-After value. The limiting layer is therefore CPA or downstream of CPA, not established to be ZCode's own quota. The same failure after rollback does not establish a regression in 4.9.1. The catalog count changed from 355 to 363 at the Sub2API step; the counts do not prove a per-model membership diff.
+
+The second approved window sampled established listener connections three times, then verified the original ZCode image, the non-ZCode baseline, and each of the three new activations. After each step the model list returned 200 and `gpt-6.2-astra` Responses delivered nonempty output and `response.completed`. ZCode inference was not retried. Final readback: 48 services running, 13 healthy and 35 without a healthcheck. Relative to the post-rollback baseline, only the three newly selected services changed container identity. Across the complete rollout the 39 untargeted services kept their original IDs and images. The original ZCode image is healthy; this does not imply inference readiness for the failing model. Private controller inputs match the verified live state, the writer lock is released, and host recovery is active. Interruption duration was not measured. The daemon mirror, upstream configuration, accounts, and routing policy were unchanged in these deployment windows.
+
+Keep the ZCode 429 separate from the eight-service update. No second push was made for the remaining activations or this local record.
